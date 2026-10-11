@@ -4,6 +4,7 @@ import type { MediaItem } from "../lib/types";
 import { useIsPhoneView } from "../hooks/useIsPhoneView";
 import { HeroBackButtonPlaceholder } from "./mobile/HeroBackButton";
 import { PhoneTitleHeroSkeleton } from "./mobile/PhoneTitleHeroSkeleton";
+import { PhoneHomeHeroSkeleton } from "./mobile/phoneHomeHeroFrame";
 import { isOfflineSupported } from "../lib/offline/offlineLibrary";
 import { AnimatedText } from "./AnimatedText";
 import { AnimatedWidth } from "./AnimatedWidth";
@@ -250,6 +251,53 @@ export function HomeSkeleton() {
         <MediaRowSkeleton title={t("home.latestAddedMovies")} />
         <ShowRowSkeleton title={t("home.latestAddedShows")} />
         <BookRowSkeleton title={t("home.latestAddedBooks")} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The page while it has no data: the hero's own skeleton, built from the
+ * hero's own frame, so nothing moves when the hero mounts over it, and the
+ * rows' placeholders under it.
+ */
+export function MobileHomeSkeleton({ isPhone }: { isPhone: boolean }) {
+  return (
+    <div className="layout-no-offset min-h-screen pb-[calc(5.75rem+env(safe-area-inset-bottom))]">
+      {isPhone ? (
+        <PhoneHomeHeroSkeleton />
+      ) : (
+        <div className="full-bleed">
+          <HomeHeroSkeleton fit="mobile" />
+        </div>
+      )}
+
+      <div className="mx-auto w-full px-4 pt-5">
+        <div className="mb-8">
+          <div className="shimmer mb-4 h-5 w-40 rounded-full" />
+          <div className="flex gap-4 overflow-hidden">
+            {Array.from({ length: 3 }, (_, index) => (
+              <div key={index} className="w-56 shrink-0 sm:w-64">
+                <div className="shimmer aspect-video w-full rounded-xl" />
+                <div className="mt-3 space-y-2">
+                  <div className="shimmer h-4 w-3/4 rounded-full" />
+                  <div className="shimmer h-3 w-1/2 rounded-full" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="mb-8">
+          <div className="shimmer mb-4 h-5 w-32 rounded-full" />
+          <div className="flex gap-4 overflow-hidden">
+            {Array.from({ length: 4 }, (_, index) => (
+              <div key={index} className="w-32 shrink-0 sm:w-40">
+                <div className="shimmer aspect-[2/3] w-full rounded-xl" />
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
