@@ -136,6 +136,20 @@ Administrator-only.
 verdict, score and reasons, plus the winner — or `null`, rather than an
 invented one.
 
+**The title is resolved before it is searched.** Indexers match words, and
+releases carry original or English names: NZBgeek finds nothing for
+"Kara Şövalye" or for "Joker: Folie à Deux", and a hundred releases for
+"The Dark Knight" and "Joker Folie a Deux". So the typed title is looked up on
+TMDB in Turkish and in English at once (`titleIdentity.ts`), or taken from an
+optional `tmdbId` when the linking page already knows it. A film is then
+searched by its IMDb id; failing that, or for a series, by its English, then
+original, then typed name, folded to plain letters with punctuation removed.
+Every name the title goes by is accepted when a release is matched to it. The
+response says what happened — `resolved` (or `null`, searched as typed),
+`alternatives` (other titles the same words could mean, offered rather than
+chosen) and `searchedFor`. Without TMDB, or when TMDB fails, the folded typed
+title is searched as before.
+
 It is called **evaluate**, not grab. There is no route here that fetches an NZB
 or hands one to a download client; releases reach a client only through a
 conversion with no field for the credential-bearing download URL.

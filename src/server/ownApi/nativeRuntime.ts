@@ -1620,6 +1620,7 @@ export async function createNativeRuntime({
       search: indexerSearch,
       policies: releasePolicies,
       blocklist: releaseBlocklist,
+      ...(tmdb ? { tmdb } : {}),
     }),
     ...createMonitoringRoutes(createMonitoringRepository(pool)),
     ...createWantedRoutes(pool, tmdb),

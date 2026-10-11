@@ -281,3 +281,91 @@ describe("the size limit", () => {
     expect(api.setProfileMaxSize).not.toHaveBeenCalled();
   });
 });
+
+describe("which title a search means", () => {
+  const darkKnight = {
+    tmdbId: "155",
+    title: "Kara Şövalye",
+    englishTitle: "The Dark Knight",
+    year: 2008,
+    imdbId: "tt0468569",
+  };
+
+  it("says what the words were matched to, and how it was searched", async () => {
+    api.evaluateReleases.mockResolvedValue({
+      candidates: [release()],
+      winner: release(),
+      profile: { id: "p1", name: "HD-2160p" },
+      resolved: darkKnight,
+      alternatives: [],
+      searchedFor: { imdbId: "tt0468569" },
+    });
+    renderPage();
+    await searchFor("kara sovalye");
+    expect(
+      await screen.findByText(/admin\.decisions\.searchedById tt0468569/),
+    ).toBeTruthy();
+    expect(screen.getByText("Kara Şövalye (2008)")).toBeTruthy();
+  });
+
+  it("searches again for an alternative the operator chooses", async () => {
+    api.evaluateReleases.mockResolvedValueOnce({
+      candidates: [release()],
+      winner: release(),
+      profile: { id: "p1", name: "HD-2160p" },
+      resolved: darkKnight,
+      alternatives: [
+        {
+          tmdbId: "11469",
+          title: "Kara Şövalye",
+          originalTitle: "Black Knight",
+          year: 2001,
+        },
+      ],
+      searchedFor: { imdbId: "tt0468569" },
+    });
+    api.evaluateReleases.mockResolvedValueOnce({
+      candidates: [release({ guid: "b", title: "Black.Knight.2001.1080p" })],
+      winner: null,
+      profile: { id: "p1", name: "HD-2160p" },
+      resolved: {
+        ...darkKnight,
+        tmdbId: "11469",
+        englishTitle: "Black Knight",
+      },
+      alternatives: [],
+      searchedFor: { imdbId: "tt0265087" },
+    });
+    renderPage();
+    await searchFor("Kara Şövalye");
+    fireEvent.click(
+      await screen.findByText("Kara Şövalye (2001) · Black Knight"),
+    );
+    // The new results stay on screen: choosing is not editing the query.
+    expect(await screen.findByText("Black.Knight.2001.1080p")).toBeTruthy();
+    expect(api.evaluateReleases).toHaveBeenLastCalledWith(
+      expect.objectContaining({ title: "Kara Şövalye", tmdbId: "11469" }),
+    );
+  });
+
+  it("passes on the title a linking page already identified, until the words change", async () => {
+    render(
+      <MemoryRouter
+        initialEntries={[
+          "/admin/decisions?title=Kara+%C5%9E%C3%B6valye&kind=movie&tmdbId=155",
+        ]}
+      >
+        <ReleaseDecisionsPage />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByText("admin.decisions.search"));
+    await waitFor(() =>
+      expect(api.evaluateReleases).toHaveBeenLastCalledWith(
+        expect.objectContaining({ tmdbId: "155" }),
+      ),
+    );
+    await searchFor("Batman Begins");
+    await waitFor(() => expect(api.evaluateReleases).toHaveBeenCalledTimes(2));
+    expect(api.evaluateReleases.mock.calls[1]![0]).not.toHaveProperty("tmdbId");
+  });
+});

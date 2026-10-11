@@ -6,7 +6,11 @@ import { HEVC_PREFERENCE } from "./preferences";
 import type { PolicyRepository } from "./policyRepository";
 import type { BlocklistRepository } from "./blocklistRepository";
 import type { RouteContext, RouteDefinition } from "../api/router";
-import type { IndexerRelease } from "../indexers/indexerTypes";
+import type {
+  IndexerRelease,
+  IndexerSearchQuery,
+} from "../indexers/indexerTypes";
+import type { TmdbClient } from "../metadata/tmdbClient";
 import type { IndexerSearchService } from "../indexers/searchService";
 
 const SECRET = "0123456789abcdef0123456789abcdef";
@@ -359,5 +363,142 @@ describe("the blocklist and the size limit", () => {
         maxSizeBytes: 1,
       }),
     ).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
+describe("searching for the title the words mean", () => {
+  const darkKnight = [
+    release("The.Dark.Knight.2008.1080p.BluRay.x264-Q"),
+    release("The.Dark.Knight.Rises.2012.1080p.BluRay.x264-Q"),
+  ];
+
+  function routesWith(
+    answer: (query: IndexerSearchQuery) => readonly IndexerRelease[],
+    tmdb?: TmdbClient,
+  ) {
+    const search = vi.fn(async (query: IndexerSearchQuery) => {
+      const releases = answer(query);
+      return {
+        releases,
+        outcomes: [
+          {
+            indexerId: "nzbgeek",
+            indexerName: "NZBgeek",
+            ok: true,
+            returned: releases.length,
+          },
+        ],
+        partial: false,
+      };
+    });
+    const blocklist = {
+      matcherFor: async () => () => false,
+    } as unknown as BlocklistRepository;
+    const route = createReleaseRoutes({
+      search: { search },
+      policies,
+      blocklist,
+      ...(tmdb ? { tmdb } : {}),
+    }).find((entry) => entry.path === "/releases/evaluate")!;
+    return { route, search };
+  }
+
+  const tmdb = {
+    searchMovies: vi.fn(
+      async (_title: string, _year?: number, language?: string) =>
+        language === "tr-TR"
+          ? [
+              {
+                providerId: "155",
+                title: "Kara Şövalye",
+                originalTitle: "The Dark Knight",
+                year: 2008,
+                popularity: 57,
+              },
+            ]
+          : [],
+    ),
+    getMovie: vi.fn(async () => ({
+      providerId: "155",
+      title: "The Dark Knight",
+      releaseDate: "2008-07-16",
+      imdbId: "tt0468569",
+      genres: [],
+      people: [],
+      backdropPaths: [],
+    })),
+  } as unknown as TmdbClient;
+
+  it("asks the indexer by IMDb id and accepts the English release name", async () => {
+    const { route, search } = routesWith(
+      (query) => (query.imdbId === "tt0468569" ? darkKnight : []),
+      tmdb,
+    );
+    const { payload } = await invoke(route, {
+      kind: "movie",
+      title: "kara sovalye",
+      profileId: "p1",
+    });
+    const data = (payload as { data: Record<string, unknown> }).data as {
+      resolved: { title: string; imdbId: string };
+      searchedFor: unknown;
+      winner: { title: string } | null;
+      candidates: Array<{ rejection?: string }>;
+    };
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(data.searchedFor).toEqual({ imdbId: "tt0468569" });
+    expect(data.resolved).toMatchObject({
+      title: "Kara Şövalye",
+      imdbId: "tt0468569",
+    });
+    expect(data.winner?.title).toBe("The.Dark.Knight.2008.1080p.BluRay.x264-Q");
+    expect(data.candidates.map((c) => c.rejection)).toContain("title-mismatch");
+  });
+
+  it("falls back to the English name when the id finds nothing", async () => {
+    const { route, search } = routesWith(
+      (query) => (query.term === "The Dark Knight" ? darkKnight : []),
+      tmdb,
+    );
+    const { payload } = await invoke(route, {
+      kind: "movie",
+      title: "kara sovalye",
+      profileId: "p1",
+    });
+    expect(
+      search.mock.calls.map(([query]) => query.imdbId ?? query.term),
+    ).toEqual(["tt0468569", "The Dark Knight"]);
+    expect(
+      (payload as { data: { searchedFor: unknown } }).data.searchedFor,
+    ).toEqual({ term: "The Dark Knight" });
+  });
+
+  it("folds the typed words when there is no TMDB to ask", async () => {
+    const { route, search } = routesWith(() => []);
+    await invoke(route, {
+      kind: "movie",
+      title: "Joker: Folie à Deux",
+      year: 2024,
+      profileId: "p1",
+    });
+    expect(search.mock.calls[0]![0].term).toBe("Joker Folie a Deux");
+  });
+
+  it("still searches the typed words when TMDB is down", async () => {
+    const down = {
+      searchMovies: vi.fn(async () => {
+        throw new Error("unavailable");
+      }),
+    } as unknown as TmdbClient;
+    const { route, search } = routesWith(() => [], down);
+    const { payload } = await invoke(route, {
+      kind: "movie",
+      title: "Kara Şövalye",
+      profileId: "p1",
+    });
+    expect(search.mock.calls[0]![0].term).toBe("Kara Sovalye");
+    expect(
+      (payload as { data: { resolved: unknown } }).data.resolved,
+    ).toBeNull();
   });
 });

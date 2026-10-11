@@ -2244,6 +2244,12 @@ export const en = {
   "admin.decisions.search": "Search",
   "admin.decisions.counts": "Allowed by this profile",
   "admin.decisions.noResults": "No releases were found for that title.",
+  "admin.decisions.matched": "TMDB match",
+  "admin.decisions.unmatched":
+    "TMDB has no title close to this; it was searched as typed.",
+  "admin.decisions.searchedById": "Searched by IMDb id",
+  "admin.decisions.searchedByTerm": "Searched for",
+  "admin.decisions.alternatives": "A different title?",
   "admin.decisions.searchFailed": "The search could not be completed.",
   "admin.decisions.profilesFailed": "The quality profiles could not be loaded.",
   "admin.decisions.recommended": "Recommended",
@@ -2393,7 +2399,7 @@ export const en = {
   "titleDock.close": "Close",
   "titleDock.hiddenTitle": "Admin tools hidden",
   "titleDock.hiddenDescription":
-    "Turn them back on with the \"Admin tools on title pages\" switch in Administration (DevTools).",
+    'Turn them back on with the "Admin tools on title pages" switch in Administration (DevTools).',
   "titleDock.setting.label": "Admin tools on title pages",
   "titleDock.setting.description":
     "The dock on movie and show pages. Off on this device, you see the pages as everyone else does.",

@@ -15,11 +15,17 @@ import {
   evaluateReleases,
   listProfiles,
   setProfileMaxSize,
+  type EvaluateResult,
   type QualityProfile,
+  type TitleChoice,
 } from "../../lib/releaseDecisionsApi";
 
 /** Sizes are said in decimal gigabytes, the unit the limit is set in. */
 const GB = 1_000_000_000;
+
+function choiceText(choice: TitleChoice): string {
+  return choice.year ? `${choice.title} (${choice.year})` : choice.title;
+}
 
 function limitText(profile: QualityProfile | undefined): string {
   if (!profile || typeof profile.maxSizeBytes !== "number") return "";
@@ -45,6 +51,14 @@ export function ReleaseDecisionsPage() {
   const [title, setTitle] = useState(params.get("title") ?? "");
   const [year, setYear] = useState(params.get("year") ?? "");
   const [season, setSeason] = useState("1");
+  // Which title the words mean, once something has said so: the page that
+  // linked here, or the operator choosing an alternative. Editing the words
+  // forgets it, since they may now mean something else.
+  const [tmdbId, setTmdbId] = useState(params.get("tmdbId") ?? "");
+  const [searched, setSearched] = useState<Pick<
+    EvaluateResult,
+    "resolved" | "alternatives" | "searchedFor"
+  > | null>(null);
   const [candidates, setCandidates] = useState<JudgedRelease[] | null>(null);
   const [winnerGuid, setWinnerGuid] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
@@ -127,31 +141,48 @@ export function ReleaseDecisionsPage() {
     }
   }, [profileId, sizeLimit]);
 
-  const search = useCallback(async () => {
-    const version = ++searchVersion.current;
-    setIsSearching(true);
-    setFailure(null);
-    try {
-      const result = await evaluateReleases({
-        kind: kind === "tv" ? "season" : "movie",
-        ...(kind === "tv" ? { season: Number(season) } : {}),
-        title: title.trim(),
-        ...(year.trim() ? { year: Number(year) } : {}),
-        ...(profileId ? { profileId } : {}),
-      });
-      if (version !== searchVersion.current) return;
-      setResultQuery(queryKey);
-      setAsked([]);
-      setCandidates(result.candidates);
-      setWinnerGuid(result.winner?.guid ?? null);
-    } catch {
-      // Never the thrown message: it can carry the indexer request URL.
-      setFailure("admin.decisions.searchFailed");
-      setCandidates(null);
-    } finally {
-      setIsSearching(false);
-    }
-  }, [kind, profileId, title, year, season, queryKey]);
+  const search = useCallback(
+    async (chosen: string = tmdbId) => {
+      const version = ++searchVersion.current;
+      setIsSearching(true);
+      setFailure(null);
+      try {
+        const result = await evaluateReleases({
+          kind: kind === "tv" ? "season" : "movie",
+          ...(kind === "tv" ? { season: Number(season) } : {}),
+          title: title.trim(),
+          ...(year.trim() ? { year: Number(year) } : {}),
+          ...(profileId ? { profileId } : {}),
+          ...(chosen ? { tmdbId: chosen } : {}),
+        });
+        if (version !== searchVersion.current) return;
+        setResultQuery(queryKey);
+        setAsked([]);
+        setSearched({
+          resolved: result.resolved ?? null,
+          alternatives: result.alternatives ?? [],
+          searchedFor: result.searchedFor,
+        });
+        setCandidates(result.candidates);
+        setWinnerGuid(result.winner?.guid ?? null);
+      } catch {
+        // Never the thrown message: it can carry the indexer request URL.
+        setFailure("admin.decisions.searchFailed");
+        setCandidates(null);
+      } finally {
+        setIsSearching(false);
+      }
+    },
+    [kind, profileId, title, year, season, tmdbId, queryKey],
+  );
+
+  const choose = useCallback(
+    (choice: TitleChoice) => {
+      setTmdbId(choice.tmdbId);
+      void search(choice.tmdbId);
+    },
+    [search],
+  );
 
   const ask = useCallback(
     async (candidate: JudgedRelease) => {
@@ -221,7 +252,10 @@ export function ReleaseDecisionsPage() {
           </span>
           <input
             value={title}
-            onChange={(event) => setTitle(event.target.value)}
+            onChange={(event) => {
+              setTitle(event.target.value);
+              setTmdbId("");
+            }}
             required
             className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
           />
@@ -233,7 +267,10 @@ export function ReleaseDecisionsPage() {
           </span>
           <input
             value={year}
-            onChange={(event) => setYear(event.target.value)}
+            onChange={(event) => {
+              setYear(event.target.value);
+              setTmdbId("");
+            }}
             inputMode="numeric"
             className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
           />
@@ -277,9 +314,10 @@ export function ReleaseDecisionsPage() {
           <select
             aria-label={t("admin.decisions.kindField")}
             value={kind}
-            onChange={(event) =>
-              setKind(event.target.value === "tv" ? "tv" : "movie")
-            }
+            onChange={(event) => {
+              setKind(event.target.value === "tv" ? "tv" : "movie");
+              setTmdbId("");
+            }}
             className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
           >
             <option value="movie">{t("admin.decisions.kind.movie")}</option>
@@ -360,6 +398,46 @@ export function ReleaseDecisionsPage() {
         >
           {t(failure as "admin.decisions.searchFailed")}
         </p>
+      ) : null}
+
+      {visibleCandidates && searched ? (
+        <div className="space-y-2 text-sm font-semibold text-white/50">
+          {searched.resolved ? (
+            <p>
+              {t("admin.decisions.matched")}:{" "}
+              <span className="text-white/85">
+                {choiceText(searched.resolved)}
+              </span>
+              {searched.resolved.englishTitle !== searched.resolved.title
+                ? ` · ${searched.resolved.englishTitle}`
+                : ""}
+              {" · "}
+              {"imdbId" in searched.searchedFor
+                ? `${t("admin.decisions.searchedById")} ${searched.searchedFor.imdbId}`
+                : `${t("admin.decisions.searchedByTerm")} “${searched.searchedFor.term}”`}
+            </p>
+          ) : (
+            <p>{t("admin.decisions.unmatched")}</p>
+          )}
+
+          {searched.alternatives.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <span>{t("admin.decisions.alternatives")}</span>
+              {searched.alternatives.map((choice) => (
+                <button
+                  key={choice.tmdbId}
+                  type="button"
+                  disabled={isSearching}
+                  onClick={() => choose(choice)}
+                  className="rounded-full border border-white/15 bg-white/[0.06] px-3 py-1 text-xs font-black text-white/75 transition hover:text-white disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                >
+                  {choiceText(choice)}
+                  {choice.originalTitle ? ` · ${choice.originalTitle}` : ""}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
       ) : null}
 
       {counts ? (

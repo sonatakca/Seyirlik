@@ -32,6 +32,15 @@ import { parseQualityId } from "./quality";
 import { qualityLabel } from "./quality";
 import type { PolicyRepository } from "./policyRepository";
 import type { BlocklistRepository } from "./blocklistRepository";
+import type { TmdbClient } from "../metadata/tmdbClient";
+import type { AggregatedSearch } from "../indexers/searchService";
+import {
+  identityNames,
+  indexerTerm,
+  resolveTitleIdentity,
+  type IdentityResolution,
+  type TitleIdentity,
+} from "./titleIdentity";
 
 /** Above this a limit is a typo, not a policy: no release is a terabyte. */
 const MAX_SIZE_LIMIT_BYTES = 1_000_000_000_000;
@@ -47,6 +56,7 @@ const BODY_KEYS = [
   "limit",
   "currentQualityId",
   "currentFormatScore",
+  "tmdbId",
 ] as const;
 
 /**
@@ -124,13 +134,19 @@ function parseTarget(body: Record<string, unknown>): MediaTarget {
   throw validationError("The kind must be movie, season or episode.");
 }
 
-/** The search that would find candidates for this target. */
+/**
+ * The search that would find candidates for this target.
+ *
+ * The term is folded to plain words: an indexer given "Joker: Folie à Deux"
+ * finds nothing that it finds for "Joker Folie a Deux". A title with no Latin
+ * letters at all is sent as written, since folding would leave nothing.
+ */
 export function searchFor(
   target: MediaTarget,
   limit: number | undefined,
 ): IndexerSearchQuery {
   const base = {
-    term: target.title,
+    term: indexerTerm(target.title) || target.title,
     ...(limit === undefined ? {} : { limit }),
   };
   if (target.kind === "movie") return { kind: "movie", ...base };
@@ -145,17 +161,116 @@ export function searchFor(
   };
 }
 
+/**
+ * The searches to try for a target, best first; the first that finds
+ * anything is the one judged.
+ *
+ * A film with an IMDb id is asked for by that id, which no spelling can
+ * miss. After it, each name the title goes by — English, then original, then
+ * as typed — because which of them a release group used is not knowable in
+ * advance, and most titles answer to the first.
+ */
+export function searchPlan(
+  target: MediaTarget,
+  identity: TitleIdentity | null,
+  limit: number | undefined,
+): IndexerSearchQuery[] {
+  const plan: IndexerSearchQuery[] = [];
+  if (target.kind === "movie" && identity?.imdbId) {
+    plan.push({
+      kind: "movie",
+      imdbId: identity.imdbId,
+      ...(limit === undefined ? {} : { limit }),
+    });
+  }
+  const names = identity
+    ? [identity.englishTitle, identity.originalTitle, target.title]
+    : [target.title];
+  const tried = new Set<string>();
+  for (const name of names) {
+    if (!name) continue;
+    const key = (indexerTerm(name) || name).toLowerCase();
+    if (tried.has(key)) continue;
+    tried.add(key);
+    plan.push(searchFor({ ...target, title: name }, limit));
+  }
+  return plan;
+}
+
+/** Where the identity came from never changes what the operator typed. */
+function withIdentity(
+  target: MediaTarget,
+  identity: TitleIdentity | null,
+): MediaTarget {
+  if (!identity) return target;
+  const aliases = identityNames(identity).filter(
+    (name) => name !== target.title,
+  );
+  if (target.kind === "movie") {
+    return {
+      ...target,
+      aliases,
+      // A remake shares its title; the year is what tells them apart.
+      ...(target.year === undefined && identity.year !== undefined
+        ? { year: identity.year }
+        : {}),
+    };
+  }
+  return { ...target, aliases };
+}
+
+function searchedForDto(query: IndexerSearchQuery) {
+  return query.imdbId ? { imdbId: query.imdbId } : { term: query.term ?? "" };
+}
+
 export interface CreateReleaseRoutesOptions {
   readonly search: IndexerSearchService;
   readonly policies: PolicyRepository;
   readonly blocklist: BlocklistRepository;
+  /** Without it titles are searched exactly as typed, only folded. */
+  readonly tmdb?: TmdbClient;
 }
 
 export function createReleaseRoutes({
   search,
   policies,
   blocklist,
+  tmdb,
 }: CreateReleaseRoutesOptions): RouteDefinition[] {
+  /*
+   * A TMDB outage must not take release search down with it: the words are
+   * then searched as typed, which is what happened before TMDB was asked.
+   * An explicit tmdbId is different — the operator chose that title, and a
+   * search for something else would answer a question they did not ask.
+   */
+  async function resolve(
+    target: MediaTarget,
+    tmdbId: string | undefined,
+  ): Promise<IdentityResolution> {
+    const none = { identity: null, alternatives: [] };
+    if (!tmdb) return none;
+    const query = {
+      kind: target.kind === "movie" ? ("movie" as const) : ("tv" as const),
+      title: target.title,
+      ...(target.kind === "movie" && target.year !== undefined
+        ? { year: target.year }
+        : {}),
+      ...(tmdbId ? { tmdbId } : {}),
+    };
+    try {
+      return await resolveTitleIdentity(tmdb, query);
+    } catch {
+      if (tmdbId) {
+        throw new OwnApiError(
+          "TITLE_NOT_RESOLVED",
+          "TMDB could not describe the chosen title.",
+          502,
+        );
+      }
+      return none;
+    }
+  }
+
   return [
     {
       method: "GET",
@@ -250,7 +365,11 @@ export function createReleaseRoutes({
       handle: async (context) => {
         context.requirePrincipal();
         const body = asObjectBody(await context.readJson(), BODY_KEYS);
-        const target = parseTarget(body);
+        const typed = parseTarget(body);
+        const tmdbId = optionalBodyString(body, "tmdbId", { maxLength: 16 });
+        if (tmdbId !== undefined && !/^\d{1,12}$/.test(tmdbId)) {
+          throw validationError("The tmdbId is not a TMDB identifier.");
+        }
         const profileId = requireBodyString(body, "profileId", {
           maxLength: 64,
         });
@@ -282,10 +401,20 @@ export function createReleaseRoutes({
         context.request.once("aborted", abort);
         context.request.once("close", abort);
         try {
-          const found = await search.search(searchFor(target, limit), {
-            ...(indexerIds?.length ? { indexerIds } : {}),
-            signal: controller.signal,
-          });
+          const resolution = await resolve(typed, tmdbId);
+          const target = withIdentity(typed, resolution.identity);
+          const plan = searchPlan(target, resolution.identity, limit);
+          let found: AggregatedSearch | undefined;
+          let searchedFor = plan[0]!;
+          for (const query of plan) {
+            searchedFor = query;
+            found = await search.search(query, {
+              ...(indexerIds?.length ? { indexerIds } : {}),
+              signal: controller.signal,
+            });
+            if (found.releases.length > 0) break;
+          }
+          if (!found) throw new Error("A search plan is never empty.");
           const isBlocklisted = await blocklist.matcherFor(found.releases);
           const result = selectRelease(target, found.releases, {
             profile: policy.profile,
@@ -305,6 +434,9 @@ export function createReleaseRoutes({
 
           sendData(context.response, context.requestId, {
             target,
+            resolved: resolution.identity,
+            alternatives: resolution.alternatives,
+            searchedFor: searchedForDto(searchedFor),
             profile: { id: policy.profile.id, name: policy.profile.name },
             indexers: found.outcomes,
             partial: found.partial,

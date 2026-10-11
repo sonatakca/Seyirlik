@@ -22,12 +22,31 @@ export interface EvaluateQuery {
   readonly title: string;
   readonly year?: number;
   readonly profileId?: string;
+  /** Which title the words mean, when the page already knows. */
+  readonly tmdbId?: string;
+}
+
+/** A title the words could mean, as TMDB names it. */
+export interface TitleChoice {
+  readonly tmdbId: string;
+  readonly title: string;
+  readonly originalTitle?: string;
+  readonly year?: number;
+}
+
+export interface ResolvedTitle extends TitleChoice {
+  readonly englishTitle: string;
+  readonly imdbId?: string;
 }
 
 export interface EvaluateResult {
   readonly candidates: JudgedRelease[];
   readonly winner: JudgedRelease | null;
   readonly profile: { id: string; name: string };
+  /** Null when TMDB had nothing close, and the words were searched as typed. */
+  readonly resolved: ResolvedTitle | null;
+  readonly alternatives: TitleChoice[];
+  readonly searchedFor: { imdbId: string } | { term: string };
 }
 
 export async function listProfiles(): Promise<QualityProfile[]> {

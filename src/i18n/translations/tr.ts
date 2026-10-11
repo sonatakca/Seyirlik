@@ -2237,6 +2237,12 @@ export const tr = {
   "admin.decisions.search": "Ara",
   "admin.decisions.counts": "Bu profilin izin verdiği",
   "admin.decisions.noResults": "Bu başlık için sürüm bulunamadı.",
+  "admin.decisions.matched": "TMDB eşleşmesi",
+  "admin.decisions.unmatched":
+    "TMDB'de bu başlığa yakın bir yapım bulunamadı; yazıldığı gibi arandı.",
+  "admin.decisions.searchedById": "IMDb kimliğiyle arandı",
+  "admin.decisions.searchedByTerm": "Arandı",
+  "admin.decisions.alternatives": "Başka bir yapım mı?",
   "admin.decisions.searchFailed": "Arama tamamlanamadı.",
   "admin.decisions.profilesFailed": "Kalite profilleri yüklenemedi.",
   "admin.decisions.recommended": "Önerilen",
@@ -2382,7 +2388,7 @@ export const tr = {
   "titleDock.close": "Kapat",
   "titleDock.hiddenTitle": "Yönetici araçları gizlendi",
   "titleDock.hiddenDescription":
-    "Yönetim (DevTools) menüsündeki \"Yapım sayfalarında yönetici araçları\" anahtarıyla geri açabilirsiniz.",
+    'Yönetim (DevTools) menüsündeki "Yapım sayfalarında yönetici araçları" anahtarıyla geri açabilirsiniz.',
   "titleDock.setting.label": "Yapım sayfalarında yönetici araçları",
   "titleDock.setting.description":
     "Film ve dizi sayfalarındaki araç çubuğu. Bu cihazda kapalıyken sayfaları herkes gibi görürsünüz.",
