@@ -3833,16 +3833,25 @@ export function CustomVideoPlayer({
       }
 
       didRestore = true;
+      /*
+       * In a party the position, the rate and whether it plays are the
+       * group's: the party engine re-applies them when the source empties. A
+       * restore here used to seek back to where the old source was and pause
+       * it, aborting the engine's start — a joiner sat paused, behind.
+       */
+      const timelineIsTheParty = isInPartyRef.current;
 
       try {
         video.volume = pendingRestore.volume;
         video.muted = pendingRestore.muted;
-        video.playbackRate = pendingRestore.playbackRate;
+        if (!timelineIsTheParty) {
+          video.playbackRate = pendingRestore.playbackRate;
+        }
         setSelectedAudioStreamIndex(pendingRestore.selectedAudioStreamIndex);
         setSelectedSubtitleStreamIndex(
           pendingRestore.selectedSubtitleStreamIndex,
         );
-        if (pendingRestore.currentTime > 0) {
+        if (pendingRestore.currentTime > 0 && !timelineIsTheParty) {
           const maxTime =
             Number.isFinite(video.duration) && video.duration > 0
               ? Math.max(0, video.duration - 0.25)
@@ -3859,7 +3868,7 @@ export function CustomVideoPlayer({
 
       pendingSourceRestoreRef.current = null;
 
-      if (pendingRestore.wasPlaying) {
+      if (pendingRestore.wasPlaying && !timelineIsTheParty) {
         requestPlayWhenAudioTranscodeReady(
           "restore-playback-after-source-switch",
           true,
@@ -3868,7 +3877,7 @@ export function CustomVideoPlayer({
         pendingAudioTranscodePlayRef.current = null;
         clearAudioTranscodeReadinessTimer();
         setIsWaitingForAudioTranscodeReady(false);
-        video.pause();
+        if (!timelineIsTheParty) video.pause();
       }
 
       refreshProgress();

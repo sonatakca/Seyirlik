@@ -404,4 +404,41 @@ describe("watching together in a real browser", () => {
     await sleep(2_000);
     expect(spreadMs(everyone)).toBeLessThan(200);
   });
+
+  it("starts a joiner whose first start something else interrupted", async () => {
+    const server = new GroupServer();
+    servers.push(server);
+    const ada = await viewer(server, "ada");
+    await sleep(500);
+    act(() => ada.playback().togglePlay());
+    await waitFor(() => allPlaying([ada]));
+    await sleep(1_000);
+
+    // Something else pauses the element while the engine's start is still
+    // pending — as the player's own source restore once did on
+    // `loadedmetadata`. The element stays paused and the start is rejected.
+    const realPlay = HTMLMediaElement.prototype.play;
+    let interrupted = 0;
+    HTMLMediaElement.prototype.play = function play(this: HTMLMediaElement) {
+      if (interrupted > 0) return realPlay.call(this);
+      interrupted += 1;
+      return Promise.reject(
+        new DOMException(
+          "The play() request was interrupted by a call to pause().",
+          "AbortError",
+        ),
+      );
+    };
+    try {
+      const late = await viewer(server, "late", { latencyMs: 40 });
+      const everyone = [ada, late];
+      await waitFor(() => interrupted > 0, 10_000);
+      await waitFor(() => allPlaying(everyone), 10_000);
+      await sleep(1_000);
+      expect(late.playback().localState).toBe("in-sync");
+      expect(spreadMs(everyone)).toBeLessThan(200);
+    } finally {
+      HTMLMediaElement.prototype.play = realPlay;
+    }
+  });
 });
