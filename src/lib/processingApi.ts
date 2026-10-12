@@ -860,3 +860,17 @@ export function processSeries(
     { method: "POST" },
   );
 }
+
+export interface VolumeSpace {
+  role: "media" | "scratch";
+  /** Null when the server could not ask the volume — unknown, not full. */
+  freeBytes: number | null;
+  totalBytes: number | null;
+}
+
+/** Free space on the media and scratch volumes; one entry when they share a disk. */
+export function getVolumeSpace(options?: {
+  signal?: AbortSignal;
+}): Promise<{ volumes: VolumeSpace[] }> {
+  return ownApiClient.request("/processing/space", options);
+}

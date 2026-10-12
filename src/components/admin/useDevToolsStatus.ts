@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import { ownApiClient } from "../../api/ownApi/client";
 import { listAcquisitions } from "../../lib/acquisitionsApi";
 import { bucketOf } from "../../lib/acquisitionPresentation";
+import { getVolumeSpace, type VolumeSpace } from "../../lib/processingApi";
 
 /**
- * The two things the overview can say truthfully without going looking.
+ * The things the overview can say truthfully without going looking.
  *
- * Both are endpoints a tool on this page already calls, asked once. Nothing
+ * Each is an endpoint a tool on this page already calls, asked once. Nothing
  * here starts a scan, walks the library or counts anything the server does not
  * already have to hand — a dashboard that costs a disk pass to draw is a
  * dashboard nobody can afford to open.
@@ -19,6 +20,7 @@ export interface DevToolsStatus {
   readonly loading: boolean;
   readonly server: "ready" | "degraded" | "unreachable" | undefined;
   readonly downloads: { active: number; failed: number } | undefined;
+  readonly space: readonly VolumeSpace[] | undefined;
 }
 
 export function useDevToolsStatus(): DevToolsStatus {
@@ -26,6 +28,7 @@ export function useDevToolsStatus(): DevToolsStatus {
     loading: true,
     server: undefined,
     downloads: undefined,
+    space: undefined,
   });
 
   useEffect(() => {
@@ -59,10 +62,21 @@ export function useDevToolsStatus(): DevToolsStatus {
       }
     }
 
-    void Promise.all([readServer(), readDownloads()]).then(
-      ([server, downloads]) => {
+    async function readSpace(): Promise<DevToolsStatus["space"]> {
+      try {
+        const { volumes } = await getVolumeSpace({
+          signal: controller.signal,
+        });
+        return volumes;
+      } catch {
+        return undefined;
+      }
+    }
+
+    void Promise.all([readServer(), readDownloads(), readSpace()]).then(
+      ([server, downloads, space]) => {
         if (cancelled) return;
-        setStatus({ loading: false, server, downloads });
+        setStatus({ loading: false, server, downloads, space });
       },
     );
 

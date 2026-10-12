@@ -6,6 +6,7 @@ import { useLanguage } from "../i18n/LanguageContext";
 import { visibleGroups } from "../lib/adminSections";
 import { ADMIN_ICONS } from "../components/admin/adminIcons";
 import { useDevToolsStatus } from "../components/admin/useDevToolsStatus";
+import { formatFileSize } from "./admin/processingModel";
 
 /**
  * The administration index: what is happening, and everything you can open.
@@ -30,6 +31,9 @@ const SERVER_TONE: Record<string, string> = {
   degraded: "text-amber-300",
   unreachable: "text-rose-300",
 };
+
+/** Below a tenth of the volume free, the figure turns amber. */
+const LOW_SPACE_RATIO = 0.1;
 
 export function DevToolsPage() {
   const { t } = useLanguage();
@@ -72,7 +76,7 @@ export function DevToolsPage() {
           {t("admin.overview.status.heading")}
         </h2>
 
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           <Link
             to="/admin/health"
             className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-black/30 px-4 py-3 transition hover:border-[var(--accent)]/35 hover:bg-white/[0.06] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
@@ -118,6 +122,71 @@ export function DevToolsPage() {
             >
               {downloadsLabel()}
             </span>
+          </Link>
+
+          <Link
+            to="/dev/media-processing"
+            className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-black/30 px-4 py-3 transition hover:border-[var(--accent)]/35 hover:bg-white/[0.06] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] sm:col-span-2 xl:col-span-1"
+          >
+            <span className="shrink-0 whitespace-nowrap text-sm font-bold text-white/55">
+              {t("admin.overview.space.label")}
+            </span>
+            {status.loading || !status.space || status.space.length === 0 ? (
+              <span className="text-sm font-black text-white/45">
+                {t(
+                  status.loading
+                    ? "admin.overview.status.checking"
+                    : "admin.overview.status.unavailable",
+                )}
+              </span>
+            ) : (
+              <span className="flex flex-wrap justify-end gap-x-4 gap-y-0.5 text-sm font-black">
+                {status.space.map((volume) => {
+                  const known =
+                    volume.freeBytes !== null && volume.totalBytes !== null;
+                  const low =
+                    known &&
+                    volume.totalBytes! > 0 &&
+                    volume.freeBytes! / volume.totalBytes! < LOW_SPACE_RATIO;
+                  return (
+                    <span
+                      key={volume.role}
+                      title={
+                        known
+                          ? t("admin.overview.space.of")
+                              .replace(
+                                "{free}",
+                                formatFileSize(volume.freeBytes),
+                              )
+                              .replace(
+                                "{total}",
+                                formatFileSize(volume.totalBytes),
+                              )
+                          : undefined
+                      }
+                      className="whitespace-nowrap"
+                    >
+                      <span className="font-bold text-white/45">
+                        {t(`admin.overview.space.${volume.role}`)}
+                      </span>{" "}
+                      <span
+                        className={
+                          known
+                            ? low
+                              ? "text-amber-300"
+                              : "text-white/80"
+                            : "text-white/45"
+                        }
+                      >
+                        {known
+                          ? formatFileSize(volume.freeBytes)
+                          : t("admin.overview.status.unavailable")}
+                      </span>
+                    </span>
+                  );
+                })}
+              </span>
+            )}
           </Link>
         </div>
       </section>

@@ -40,6 +40,7 @@ import {
   type ProcessingCatalogueView,
 } from "./processingProjection";
 import { PROCESSING_STAGES } from "./stages";
+import { readVolumeSpace } from "./volumeSpace";
 import {
   createPermissiveStorageGuard,
   type StorageGuard,
@@ -573,6 +574,26 @@ export function createProcessingRoutes({
       handle: async (context) => {
         context.requirePrincipal();
         sendData(context.response, context.requestId, await hardware());
+      },
+    },
+
+    {
+      /** Free space on the media and scratch volumes, for the admin overview. */
+      method: "GET",
+      path: "/processing/space",
+      access: "admin",
+      handle: async (context) => {
+        context.requirePrincipal();
+        sendData(context.response, context.requestId, {
+          volumes: await readVolumeSpace([
+            {
+              role: "media",
+              root: resolvedMediaRoot,
+              skip: !storageAvailable(),
+            },
+            { role: "scratch", root: workRoot },
+          ]),
+        });
       },
     },
 
