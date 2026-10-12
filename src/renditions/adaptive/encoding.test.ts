@@ -4,6 +4,7 @@ import {
   adaptiveOutputDirectories,
   buildAdaptiveFilterComplex,
   buildAdaptivePackageFfmpegArgs,
+  buildAdaptiveSampleFfmpegArgs,
   buildVarStreamMap,
   canStreamCopyAudio,
   frameMacroblocks,
@@ -113,6 +114,73 @@ describe("QSV rate control", () => {
       }
     },
   );
+});
+
+describe("measured rung rates", () => {
+  it.each(["h264_qsv", "hevc_qsv"] as const)(
+    "gives %s a rung's measured rate in place of the table's",
+    (encoder) => {
+      const args = build({
+        encoder,
+        videoOutputs: [
+          { ...LADDER[2]!, bitrate: { target: 3_850_000, max: 7_000_000 } },
+          LADDER[1]!,
+        ],
+      });
+      expect(valueAfter(args, "-b:v:0")).toBe("3850000");
+      expect(valueAfter(args, "-maxrate:v:0")).toBe("7000000");
+      expect(valueAfter(args, "-bufsize:v:0")).toBe("14000000");
+      const family = encoder === "hevc_qsv" ? "hevc" : "h264";
+      expect(valueAfter(args, "-b:v:1")).toBe(
+        String(getEncodingPolicy(720, family).expectedVideoBitrate),
+      );
+    },
+  );
+
+  /*
+   * The probe is only worth what it measures, so a sample must be encoded
+   * with the arguments the ladder itself gets.
+   */
+  it("encodes a probe sample with the ladder's own encoder arguments", () => {
+    const outputs = [
+      { ...LADDER[2]!, bitrate: { target: 3_850_000, max: 7_000_000 } },
+      LADDER[1]!,
+    ];
+    const ladder = build({
+      encoder: "h264_qsv",
+      preset: "veryfast",
+      videoOutputs: outputs,
+    });
+    const sample = buildAdaptiveSampleFfmpegArgs({
+      inputPath: "/media/Movies/Example.mp4",
+      startSeconds: 600,
+      durationSeconds: 10,
+      outputPath: "/work/sample.mp4",
+      videoOutputs: outputs,
+      encoder: "h264_qsv",
+      preset: "veryfast",
+      frameRate: 23.976,
+    });
+    for (const index of outputs.keys()) {
+      for (const flag of [
+        "-c",
+        "-preset",
+        "-b",
+        "-maxrate",
+        "-bufsize",
+        "-profile",
+        "-level",
+        "-bf",
+        "-g",
+      ]) {
+        expect(valueAfter(sample, `${flag}:v:${index}`)).toBe(
+          valueAfter(ladder, `${flag}:v:${index}`),
+        );
+      }
+    }
+    expect(valueAfter(sample, "-filter_complex")).toContain("trim=start=0");
+    expect(sample.at(-1)).toBe("/work/sample.mp4");
+  });
 });
 
 describe("buildAdaptiveFilterComplex", () => {

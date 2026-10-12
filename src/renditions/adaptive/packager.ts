@@ -86,6 +86,7 @@ import {
   videoRenditionId,
 } from "./profile";
 import { frameRateForClass } from "./layout";
+import { probeTitleRates, readStoredRateProbe } from "./rateProbe";
 import { besideTitleRoot } from "./titleRoot";
 import {
   publishAdditionalRenditions,
@@ -118,6 +119,7 @@ import {
   audioStagePath,
   checkpointBytes,
   checkpointRoot,
+  listCompletedEpochIndexes,
   reconcilePlan,
 } from "./epochs/checkpoints";
 import type { ClassifiedFailure } from "./epochs/failure";
@@ -338,6 +340,11 @@ export interface AdaptivePackagerOptions {
   reserveBytes: number;
   segmentSeconds?: number;
   preset?: string;
+  /**
+   * Measure this title's rates before encoding (see `rateProbe.ts`). On by
+   * default; it only ever acts for rate-targeted encoders with `libvmaf`.
+   */
+  rateProbe?: boolean;
   /** Explicit software CPU budget; automatic topology detection is the default. */
   softwareThreads?: number;
   /**
@@ -815,6 +822,7 @@ export async function packageAdaptiveRendition(
     reserveBytes,
     segmentSeconds = SEGMENT_TARGET_SECONDS,
     preset,
+    rateProbe = true,
     softwareThreads = defaultSoftwareEncoderThreads(),
     allAudioTracks = false,
     audioStreamIndexes,
@@ -1414,7 +1422,7 @@ export async function packageAdaptiveRendition(
     const plannedRequirements = requirements.filter((requirement) =>
       work.videoQualityHeights.includes(requirement.qualityHeight),
     );
-    const videoOutputs: AdaptiveVideoOutput[] = plannedRequirements.map(
+    let videoOutputs: AdaptiveVideoOutput[] = plannedRequirements.map(
       (requirement) => {
         const rate = frameRateForClass(
           requirement.qualityHeight,
@@ -1541,6 +1549,74 @@ export async function packageAdaptiveRendition(
       timelinePolicyVersion: EPOCH_TIMELINE_POLICY_VERSION,
     };
 
+    const encodePreset =
+      preset ??
+      (encoder === "h264_qsv" || encoder === "hevc_qsv"
+        ? "veryfast"
+        : "medium");
+    const qsvFilterThreads =
+      encoder === "h264_qsv" || encoder === "hevc_qsv" ? 2 : undefined;
+
+    /*
+     * This title's rates. A resumed job reuses what its first attempt decided,
+     * so every epoch is encoded alike; one whose epochs predate the probe stays
+     * on the table rates they were made with. HDR is left on the table because
+     * VMAF is not calibrated for PQ, and an incremental run because the rungs
+     * it joins were not measured with it.
+     */
+    if (rateProbe && !preserveHdr && work.mode !== "incremental") {
+      const stored = await readStoredRateProbe(
+        checkpoints,
+        encoder,
+        encodePreset,
+      );
+      const probed =
+        stored ??
+        ((await listCompletedEpochIndexes(checkpoints)).length > 0
+          ? null
+          : await probeTitleRates({
+              ffmpegPath,
+              sourcePath: request.sourcePath,
+              durationSeconds: probe.durationSeconds,
+              outputs: videoOutputs,
+              encoder,
+              codecFamily,
+              preset: encodePreset,
+              ...(gopFrameRate === undefined
+                ? {}
+                : { frameRate: gopFrameRate }),
+              segmentSeconds,
+              ...(qsvFilterThreads === undefined
+                ? {}
+                : { filterComplexThreads: qsvFilterThreads }),
+              checkpointRoot: checkpoints,
+              ...(signal ? { signal } : {}),
+              waitWhilePaused: async () => {
+                while (pauseController?.pauseRequested && !signal?.aborted) {
+                  await new Promise((resolve) => setTimeout(resolve, 1_000));
+                }
+              },
+            }));
+      if (probed) {
+        videoOutputs = videoOutputs.map((output) => {
+          const rate = probed.rates[output.qualityHeight];
+          return rate ? { ...output, bitrate: rate } : output;
+        });
+        console.info(
+          `[seyirlik] ${request.relativePath}: ${stored ? "reusing " : ""}measured rates ${videoOutputs
+            .map(
+              (output) =>
+                `${output.qualityHeight}p ${
+                  output.bitrate
+                    ? `${(output.bitrate.target / 1e6).toFixed(2)} Mbps`
+                    : "table"
+                }`,
+            )
+            .join(", ")}`,
+        );
+      }
+    }
+
     let completedEpochBytes = 0;
     let currentEpochBytes = 0;
     const reportBytes = () =>
@@ -1592,11 +1668,7 @@ export async function packageAdaptiveRendition(
         hdrState: hdrStateFor(probe),
         ...(gopFrameRate === undefined ? {} : { frameRate: gopFrameRate }),
         segmentSeconds,
-        preset:
-          preset ??
-          (encoder === "h264_qsv" || encoder === "hevc_qsv"
-            ? "veryfast"
-            : "medium"),
+        preset: encodePreset,
         ...(encoder === "libx264" || encoder === "libx265"
           ? {
               softwareThreads,
