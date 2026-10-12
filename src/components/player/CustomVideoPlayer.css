@@ -907,3 +907,18 @@ body:has(.seyirlik-player-shell) {
       opacity 160ms linear;
   }
 }
+
+/* A seek preview's next thumbnail, fading in over the one it replaces. Linear
+   and 140ms: at 60 fps no frame moves more than an eighth of the way. */
+.seyirlik-seek-preview-tile--in {
+  animation: seyirlik-seek-preview-tile-in 140ms linear both;
+}
+
+@keyframes seyirlik-seek-preview-tile-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

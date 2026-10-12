@@ -83,6 +83,7 @@ interface PlayerControlsProps {
   onSubtitleDelayChange: (seconds: number) => void;
   onStartSubtitleEdit?: () => void;
   onSeekPreview?: (seconds: number) => void;
+  onSeekPreviewCancel?: () => void;
 }
 
 function formatTime(seconds: number): string {
@@ -154,6 +155,7 @@ export function PlayerControls({
   onSubtitleDelayChange,
   onStartSubtitleEdit,
   onSeekPreview,
+  onSeekPreviewCancel,
 }: PlayerControlsProps) {
   const { t } = useLanguage();
   const [showRemainingTime, setShowRemainingTime] = useState(false);
@@ -195,6 +197,7 @@ export function PlayerControls({
             previewAspectRatio={previewAspectRatio}
             onSeek={onSeek}
             onSeekPreview={onSeekPreview}
+            onSeekPreviewCancel={onSeekPreviewCancel}
             pointerAxis={seekPointerAxis}
             compactPreview={compactSeekPreview}
           />

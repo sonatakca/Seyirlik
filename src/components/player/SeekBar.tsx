@@ -18,6 +18,8 @@ interface SeekBarProps {
   previewAspectRatio?: number;
   onSeek: (seconds: number) => void;
   onSeekPreview?: (seconds: number) => void;
+  /** The scrub ended without a seek, so its preview should go. */
+  onSeekPreviewCancel?: () => void;
   pointerAxis?: SeekPointerAxis;
   compactPreview?: boolean;
 }
@@ -104,6 +106,7 @@ export function SeekBar({
   previewAspectRatio,
   onSeek,
   onSeekPreview,
+  onSeekPreviewCancel,
   pointerAxis = "horizontal",
   compactPreview = false,
 }: SeekBarProps) {
@@ -372,6 +375,7 @@ export function SeekBar({
     pointerStartRef.current = null;
     pointerDownSeekStateRef.current = null;
     setIsSeeking(false);
+    onSeekPreviewCancel?.();
   };
 
   const hideHoverPreview = () => {
