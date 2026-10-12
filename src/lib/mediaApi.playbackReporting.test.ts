@@ -22,6 +22,7 @@ vi.mock("../api/ownApi/client", () => ({
 
 const {
   reportPlaybackStopped,
+  reportPlaybackStoppedBeforeUnload,
   reportPlaybackProgress,
   stopActiveTranscodeSession,
   getActiveTranscodingReasons,
@@ -83,6 +84,47 @@ describe("reportPlaybackStopped", () => {
     await reportPlaybackProgress(source, 60_000_000, false);
 
     expect(methodsFor("/playback/sessions")).not.toContain("DELETE");
+  });
+});
+
+describe("reportPlaybackStoppedBeforeUnload", () => {
+  beforeEach(() => {
+    request.mockReset();
+  });
+
+  /**
+   * The progress route is PUT-only and needs the CSRF header. The beacon this
+   * replaced could do neither, so every save made on leaving the page was
+   * refused with 405 and the last minutes watched were lost.
+   */
+  it("saves the place with a keepalive PUT, which carries CSRF like any save", () => {
+    request.mockResolvedValue(undefined);
+
+    reportPlaybackStoppedBeforeUnload(source, 125_000_000);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    const [path, options] = request.mock.calls[0] as [
+      string,
+      { method: string; keepalive?: boolean; csrf?: boolean; body: unknown },
+    ];
+    expect(path).toBe(`/progress/${source.itemId}`);
+    expect(options.method).toBe("PUT");
+    expect(options.keepalive).toBe(true);
+    // Left to the client's default, which sends CSRF for every non-GET.
+    expect(options.csrf).toBeUndefined();
+    expect(options.body).toMatchObject({ positionMs: 12_500 });
+  });
+
+  it("swallows a failure, since the page is already going away", async () => {
+    request.mockRejectedValue(new Error("offline"));
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+
+    reportPlaybackStoppedBeforeUnload(source, 125_000_000);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    process.off("unhandledRejection", unhandled);
+    expect(unhandled).not.toHaveBeenCalled();
   });
 });
 

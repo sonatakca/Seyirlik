@@ -13,7 +13,6 @@ import {
 } from "../api/validation";
 import type { UserRepository, NativeUserRecord } from "./userRepository";
 import {
-  normalizeUsername,
   validatePassword,
   validateUsername,
   type PasswordHasher,
@@ -59,20 +58,35 @@ function toUserDto(
 }
 
 function requirePassword(body: Record<string, unknown>, field: string): string {
+  // An empty string is a passwordless account.
   const password = requireBodyString(body, field, {
-    minLength: 1,
+    minLength: 0,
     maxLength: 512,
   });
   if (Buffer.byteLength(password, "utf8") > MAX_PASSWORD_BYTES) {
     throw validationError(`${field} is invalid.`);
   }
 
-  // The strength rule lives with the hasher so provisioning, self-service and
+  // The rule lives with the hasher so provisioning, self-service and
   // administration cannot drift apart.
   try {
     return validatePassword(password);
   } catch {
-    throw validationError(`${field} does not meet the password policy.`);
+    throw validationError(`${field} is too long.`);
+  }
+}
+
+/**
+ * The shared rule throws a plain Error, which the handler would report as a
+ * 500 — and did, for every name with a space or a Turkish letter in it.
+ */
+function requireUsername(raw: string): string {
+  try {
+    return validateUsername(raw);
+  } catch (error) {
+    throw validationError(
+      error instanceof Error ? error.message : "username is invalid.",
+    );
   }
 }
 
@@ -149,8 +163,7 @@ export function createUserRoutes({
         const rawUsername = requireBodyString(body, "username", {
           maxLength: 128,
         });
-        validateUsername(rawUsername);
-        const normalizedUsername = normalizeUsername(rawUsername);
+        const normalizedUsername = requireUsername(rawUsername);
 
         if (await users.findByNormalizedUsername(normalizedUsername)) {
           throw new OwnApiError(

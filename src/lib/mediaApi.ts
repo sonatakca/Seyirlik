@@ -473,12 +473,14 @@ export async function setItemFavourite(
 async function writeProgress(
   itemId: string,
   positionTicks: number,
+  options: { keepalive?: boolean } = {},
 ): Promise<void> {
   try {
     await ownApiClient.request<unknown>(
       `/progress/${encodeURIComponent(itemId)}`,
       {
         method: "PUT",
+        keepalive: options.keepalive,
         body: {
           positionMs: ticksToMs(positionTicks),
           sequence: nextProgressSequence(),
@@ -540,22 +542,17 @@ export async function reportPlaybackStopped(
 
 /**
  * Fired from `pagehide`/`beforeunload`, where a normal request is cancelled.
- * `sendBeacon` is the only transport the browser guarantees to flush.
+ * A `keepalive` request outlives the page like `sendBeacon` does, but unlike a
+ * beacon it can be a PUT and carry the CSRF header, which the progress route
+ * requires — the beacon this replaced was refused with 405 on every exit.
  */
 export function reportPlaybackStoppedBeforeUnload(
   source: PlaybackSourceCandidate,
   positionTicks: number,
 ): void {
-  if (typeof navigator === "undefined" || !navigator.sendBeacon) return;
-
-  const payload = JSON.stringify({
-    positionMs: ticksToMs(positionTicks),
-    sequence: nextProgressSequence(),
+  writeProgress(source.itemId, positionTicks, { keepalive: true }).catch(() => {
+    // The page is going away; there is no one left to tell.
   });
-  navigator.sendBeacon(
-    ownApiUrl(`/ownAPI/v1/progress/${encodeURIComponent(source.itemId)}`),
-    new Blob([payload], { type: "application/json" }),
-  );
 }
 
 // Audit reporting used to be a separate session channel on the old backend. Native
