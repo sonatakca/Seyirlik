@@ -2070,7 +2070,6 @@ export const tr = {
   "admin.overview.space.label": "Boş alan",
   "admin.overview.space.media": "Medya",
   "admin.overview.space.scratch": "Çalışma",
-  "admin.overview.space.of": "{total} alanın {free} kadarı boş",
   "admin.overview.workflow.heading": "Bir film kitaplığa nasıl ulaşır",
   "admin.overview.workflow.description":
     "İsteyin, bir sürüm seçin, inmesini bekleyin, sonra kitaplığa alın. Her adım aşağıdaki bir araç.",

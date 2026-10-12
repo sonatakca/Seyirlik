@@ -175,6 +175,8 @@ describe("the administration index", () => {
     const scratch = screen.getByText("30.00 GB");
     expect(media.className).toContain("text-white/80");
     expect(scratch.className).toContain("text-amber-300");
+    expect(screen.getByText("4.00 TB")).toBeTruthy();
+    expect(screen.getByText("500.00 GB")).toBeTruthy();
     expect(media.closest("a")?.getAttribute("href")).toBe(
       "/dev/media-processing",
     );

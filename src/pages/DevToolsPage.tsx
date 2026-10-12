@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { Fragment, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { setPageTitle } from "../lib/pageTitle";
@@ -140,7 +140,7 @@ export function DevToolsPage() {
                 )}
               </span>
             ) : (
-              <span className="flex flex-wrap justify-end gap-x-4 gap-y-0.5 text-sm font-black">
+              <span className="grid grid-cols-[auto_auto_auto_auto] items-baseline gap-x-1.5 gap-y-0.5 whitespace-nowrap text-sm font-black tabular-nums">
                 {status.space.map((volume) => {
                   const known =
                     volume.freeBytes !== null && volume.totalBytes !== null;
@@ -149,40 +149,32 @@ export function DevToolsPage() {
                     volume.totalBytes! > 0 &&
                     volume.freeBytes! / volume.totalBytes! < LOW_SPACE_RATIO;
                   return (
-                    <span
-                      key={volume.role}
-                      title={
-                        known
-                          ? t("admin.overview.space.of")
-                              .replace(
-                                "{free}",
-                                formatFileSize(volume.freeBytes),
-                              )
-                              .replace(
-                                "{total}",
-                                formatFileSize(volume.totalBytes),
-                              )
-                          : undefined
-                      }
-                      className="whitespace-nowrap"
-                    >
-                      <span className="font-bold text-white/45">
+                    <Fragment key={volume.role}>
+                      <span className="pr-1 font-bold text-white/45">
                         {t(`admin.overview.space.${volume.role}`)}
-                      </span>{" "}
-                      <span
-                        className={
-                          known
-                            ? low
-                              ? "text-amber-300"
-                              : "text-white/80"
-                            : "text-white/45"
-                        }
-                      >
-                        {known
-                          ? formatFileSize(volume.freeBytes)
-                          : t("admin.overview.status.unavailable")}
                       </span>
-                    </span>
+                      {known ? (
+                        <>
+                          <span
+                            className={`justify-self-end ${
+                              low ? "text-amber-300" : "text-white/80"
+                            }`}
+                          >
+                            {formatFileSize(volume.freeBytes)}
+                          </span>
+                          <span aria-hidden="true" className="text-white/20">
+                            /
+                          </span>
+                          <span className="justify-self-end font-bold text-white/45">
+                            {formatFileSize(volume.totalBytes)}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="col-span-3 justify-self-end text-white/45">
+                          {t("admin.overview.status.unavailable")}
+                        </span>
+                      )}
+                    </Fragment>
                   );
                 })}
               </span>

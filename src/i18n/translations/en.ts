@@ -2072,7 +2072,6 @@ export const en = {
   "admin.overview.space.label": "Free space",
   "admin.overview.space.media": "Media",
   "admin.overview.space.scratch": "Scratch",
-  "admin.overview.space.of": "{free} free of {total}",
   "admin.overview.workflow.heading": "How a film reaches the library",
   "admin.overview.workflow.description":
     "Ask for it, choose a release, let it download, then take it into the library. Each step is a tool below.",
