@@ -21,6 +21,8 @@ const hlsMock = vi.hoisted(() => ({
     audioTracks: Array<{ name: string; url?: string }>;
     levels: Array<{ width: number; height: number; bitrate: number }>;
     bandwidthEstimate: number;
+    bufferingEnabled: boolean;
+    resumeBuffering: ReturnType<typeof vi.fn>;
     config: {
       xhrSetup?: (xhr: XMLHttpRequest, url: string) => void;
       fetchSetup?: (
@@ -59,6 +61,10 @@ vi.mock("hls.js", () => {
     audioTrack = -1;
     audioTracks: Array<{ name: string; url?: string }> = [];
     bandwidthEstimate = 0;
+    bufferingEnabled = true;
+    resumeBuffering = vi.fn(() => {
+      this.bufferingEnabled = true;
+    });
     handlers = new Map<
       string,
       Array<(event: string, data?: unknown) => void>
@@ -858,5 +864,79 @@ describe("the adaptive buffer probe", () => {
 
     expect(highest).toBeGreaterThan(0);
     session.dateNow.mockRestore();
+  });
+});
+
+describe("loading the browser paused under ManagedMediaSource", () => {
+  beforeEach(() => {
+    hlsMock.instances.length = 0;
+    hlsMock.isSupported.mockReturnValue(true);
+  });
+
+  /**
+   * hls.js obeys `endstreaming` by pausing its loaders, then waits for a
+   * `startstreaming` that WebKit does not send after a seek out of the buffer.
+   * Here hls.js has been paused that way, with media buffered from 0 to 40 s.
+   */
+  function pausedByTheBrowser() {
+    setUserAgent("Mozilla/5.0 Chrome/149.0.0.0 Safari/537.36");
+    const video = createVideo("");
+    Object.defineProperty(video, "buffered", {
+      configurable: true,
+      get: () =>
+        ({ length: 1, start: () => 0, end: () => 40 }) as unknown as TimeRanges,
+    });
+    const attachment = attachSourceToVideo(
+      video,
+      "http://example.test/play/master.m3u8",
+      "application/vnd.apple.mpegurl",
+      { adaptiveRendition: true },
+    );
+    const hls = hlsMock.instances[0];
+    if (!hls) throw new Error("hls.js was not attached");
+    hls.bufferingEnabled = false;
+    const seekTo = (seconds: number) => {
+      video.currentTime = seconds;
+      video.dispatchEvent(new Event("seeking"));
+    };
+    return { video, hls, attachment, seekTo };
+  }
+
+  it("starts loading again when a seek leaves the buffer", () => {
+    const { hls, attachment, seekTo } = pausedByTheBrowser();
+
+    seekTo(200);
+
+    expect(hls.resumeBuffering).toHaveBeenCalledTimes(1);
+    attachment.destroy();
+  });
+
+  it("leaves the browser's pause alone for a seek it already has media for", () => {
+    const { hls, attachment, seekTo } = pausedByTheBrowser();
+
+    seekTo(10);
+
+    expect(hls.resumeBuffering).not.toHaveBeenCalled();
+    attachment.destroy();
+  });
+
+  it("starts loading again when the play head runs dry", () => {
+    const { video, hls, attachment } = pausedByTheBrowser();
+
+    video.currentTime = 39.5;
+    video.dispatchEvent(new Event("waiting"));
+
+    expect(hls.resumeBuffering).toHaveBeenCalledTimes(1);
+    attachment.destroy();
+  });
+
+  it("does nothing while loading was never paused", () => {
+    const { hls, attachment, seekTo } = pausedByTheBrowser();
+    hls.bufferingEnabled = true;
+
+    seekTo(200);
+
+    expect(hls.resumeBuffering).not.toHaveBeenCalled();
+    attachment.destroy();
   });
 });
