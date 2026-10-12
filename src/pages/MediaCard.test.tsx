@@ -102,7 +102,7 @@ describe("MediaCard Component", () => {
     expect(screen.getByText("details.watched")).toBeInTheDocument();
   });
 
-  it("shows a full progress bar for items the server marks played", () => {
+  it("shows the seal instead of a progress bar once an item is played", () => {
     render(
       <MemoryRouter>
         <MediaCard
@@ -112,9 +112,10 @@ describe("MediaCard Component", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByTestId("media-card-progress-fill")).toHaveStyle({
-      width: "100%",
-    });
+    expect(screen.getByText("details.watched")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("media-card-progress-fill"),
+    ).not.toBeInTheDocument();
   });
 
   it("does not render watched-status actions on media cards", () => {

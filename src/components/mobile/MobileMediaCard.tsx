@@ -141,7 +141,8 @@ export function MobileMediaCard({
 
   const runtime = formatRuntime(item.RunTimeTicks, labels);
   const countText = getSeriesCount(item, t);
-  const progressPercent = getItemProgressPercent(item);
+  // A finished title carries its seal instead of a full progress bar.
+  const progressPercent = isWatched ? null : getItemProgressPercent(item);
 
   if (isEpisode) {
     // Top line is the big bold episode number (e.g. "3. Bölüm")
@@ -245,13 +246,7 @@ export function MobileMediaCard({
           : "flex h-full min-w-0 flex-col"
       }
     >
-      <div
-        className={`flex flex-1 flex-col overflow-hidden rounded-lg border bg-[#141416] shadow-cinematic-card ${
-          isWatched
-            ? "border-emerald-300/70 ring-2 ring-emerald-300/45 shadow-[0_0_0_1px_rgba(52,211,153,0.25),0_18px_48px_rgba(16,185,129,0.18)]"
-            : "border-white/10"
-        }`}
-      >
+      <div className="flex flex-1 flex-col overflow-hidden rounded-lg border border-white/10 bg-[#141416] shadow-cinematic-card">
         <div
           className={`relative shrink-0 overflow-hidden bg-zinc-900 ${
             isLandscape ? "aspect-video" : "aspect-[2/3]"
@@ -338,6 +333,18 @@ export function MobileMediaCard({
             </div>
           ) : null}
 
+          {/* The eye sits in the artwork's corner, as on desktop; an episode
+              that offers a download keeps that corner for the button. */}
+          <div
+            className={`pointer-events-none absolute top-2 z-30 ${
+              showDownload && isEpisode && isOfflineSupported()
+                ? "left-2"
+                : "right-2"
+            }`}
+          >
+            <WatchedIndicator isWatched={isWatched} reveal="hover" size="sm" />
+          </div>
+
           {showDownload && isEpisode && isOfflineSupported() ? (
             <div className="absolute right-2 top-2 z-30">
               <DownloadButton
@@ -361,12 +368,6 @@ export function MobileMediaCard({
 
         {!usesArtworkOnlyLayout ? (
           <div className="flex flex-1 flex-col justify-center px-3 py-2.5 min-[390px]:px-3.5 min-[390px]:py-3">
-            <WatchedIndicator
-              item={item}
-              className="mb-1.5 self-start px-2 py-0.5 text-[0.52rem] tracking-[0.12em]"
-              iconSize={11}
-            />
-
             {!logoUrl ? (
               <h3
                 className={`truncate font-black text-white ${

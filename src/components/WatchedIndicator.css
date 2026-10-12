@@ -1,0 +1,130 @@
+/*
+ * The watched seal. A disc that holds the eye, and a second grid track that
+ * holds the word ahead of it: the track runs from 0fr to 1fr, so revealing the
+ * word unrolls the seal leftward from a disc that never moves.
+ */
+.watched-seal {
+  --seal-size: 2rem;
+  --seal-type: 0.625rem;
+
+  box-sizing: border-box;
+  display: inline-grid;
+  grid-template-columns: 0fr calc(var(--seal-size) - 2px);
+  align-items: center;
+  height: var(--seal-size);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 9999px;
+  background: rgba(5, 6, 7, 0.72);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
+  backdrop-filter: blur(12px) saturate(1.4);
+  box-shadow:
+    0 8px 18px rgba(0, 0, 0, 0.42),
+    0 1px 3px rgba(0, 0, 0, 0.5);
+  color: #f8fafc;
+  transform-origin: center;
+  transition: grid-template-columns 380ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.watched-seal[data-size="sm"] {
+  --seal-size: 1.5rem;
+  --seal-type: 0.5625rem;
+}
+
+.watched-seal[data-size="lg"] {
+  --seal-size: 2.5rem;
+  --seal-type: 0.75rem;
+}
+
+.watched-seal__mark {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: var(--accent);
+}
+
+.watched-seal__mark svg {
+  width: 58%;
+  height: 58%;
+}
+
+.watched-seal__label {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.watched-seal__label > span {
+  display: block;
+  padding-left: calc(var(--seal-size) * 0.44);
+  font-size: var(--seal-type);
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.watched-seal[data-reveal="always"],
+.group:hover .watched-seal[data-reveal="hover"],
+.group:focus-within .watched-seal[data-reveal="hover"] {
+  grid-template-columns: 1fr calc(var(--seal-size) - 2px);
+}
+
+.watched-seal[data-reveal="always"] .watched-seal__label > span,
+.group:hover .watched-seal[data-reveal="hover"] .watched-seal__label > span,
+.group:focus-within
+  .watched-seal[data-reveal="hover"]
+  .watched-seal__label
+  > span {
+  opacity: 1;
+  transition: opacity 240ms ease 90ms;
+}
+
+/*
+ * The opening: played only when a card on screen becomes watched. The disc
+ * arrives, then the eye opens from a closed lid.
+ */
+.watched-seal[data-opening] {
+  animation: watched-seal-arrive 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.watched-seal[data-opening] .watched-seal__eye {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: watched-seal-open 420ms cubic-bezier(0.22, 1, 0.36, 1) 160ms both;
+}
+
+@keyframes watched-seal-arrive {
+  from {
+    opacity: 0;
+    transform: scale(0.55);
+  }
+}
+
+@keyframes watched-seal-open {
+  from {
+    transform: scaleY(0.08);
+  }
+}
+
+@keyframes watched-seal-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .watched-seal,
+  .watched-seal__label > span {
+    transition: none;
+  }
+
+  .watched-seal[data-opening] {
+    animation: watched-seal-fade 120ms ease both;
+  }
+
+  .watched-seal[data-opening] .watched-seal__eye {
+    animation: none;
+  }
+}

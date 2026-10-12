@@ -233,8 +233,10 @@ export function MediaCard({
   const displayTitle = episodeDisplayTitle ?? title;
 
   const itemCounts = getCountLabel(item, t);
-  const progressPercent = getItemProgressPercent(item);
   const isWatched = isItemCompleted(item);
+  // Progress is for something still under way. A finished title says so with
+  // its seal; a full bar beside it would only say it again.
+  const progressPercent = isWatched ? null : getItemProgressPercent(item);
   const isContinueWatchingCard = Boolean(onClearContinueWatching);
   const runtimeLabel = formatRuntime(item.RunTimeTicks, mediaFormatLabels);
   const episodeSeasonLabel = getEpisodeSeasonLabel(item, t);
@@ -407,13 +409,7 @@ export function MediaCard({
         whileTap={shouldReduceMotion ? undefined : { scale: 0.985 }}
         {...motionProps}
       >
-        <div
-          className={`media-card-cinematic group relative grid aspect-[4/3] h-full min-w-0 grid-cols-2 scroll-ml-4 transform-gpu overflow-hidden rounded-xl border bg-[var(--surface)] shadow-cinematic-card transition-[border-color,box-shadow,transform] duration-300 will-change-transform hover:-translate-y-1.5 hover:scale-[1.012] hover:border-white/20 motion-reduce:hover:translate-y-0 motion-reduce:hover:scale-100 ${
-            isWatched
-              ? "border-emerald-300/70 ring-2 ring-emerald-300/45"
-              : "border-white/10"
-          }`}
-        >
+        <div className="media-card-cinematic group relative grid aspect-[4/3] h-full min-w-0 grid-cols-2 scroll-ml-4 transform-gpu overflow-hidden rounded-xl border border-white/10 bg-[var(--surface)] shadow-cinematic-card transition-[border-color,box-shadow,transform] duration-300 will-change-transform hover:-translate-y-1.5 hover:scale-[1.012] hover:border-white/20 motion-reduce:hover:translate-y-0 motion-reduce:hover:scale-100">
           <Link
             to={primaryCardTo}
             aria-label={`${primaryActionLabel} ${title}`}
@@ -661,14 +657,10 @@ export function MediaCard({
       {...motionProps}
     >
       <div
-        className={`media-card-cinematic group relative h-full w-full min-w-0 scroll-ml-4 transform-gpu overflow-hidden rounded-xl border bg-[var(--surface)] shadow-cinematic-card transition-[border-color,box-shadow,transform] duration-300 will-change-transform hover:border-white/20 motion-reduce:hover:translate-y-0 motion-reduce:hover:scale-100 ${
+        className={`media-card-cinematic group relative h-full w-full min-w-0 scroll-ml-4 transform-gpu overflow-hidden rounded-xl border border-white/10 bg-[var(--surface)] shadow-cinematic-card transition-[border-color,box-shadow,transform] duration-300 will-change-transform hover:border-white/20 motion-reduce:hover:translate-y-0 motion-reduce:hover:scale-100 ${
           isEpisode
             ? "flex flex-col hover:-translate-y-1"
             : `block ${aspectClass} hover:-translate-y-1.5 hover:scale-[1.025]`
-        } ${
-          isWatched
-            ? "border-emerald-300/70 ring-2 ring-emerald-300/45 shadow-[0_0_0_1px_rgba(52,211,153,0.28),0_22px_60px_rgba(16,185,129,0.2)]"
-            : "border-white/10"
         }`}
       >
         <Link
@@ -715,11 +707,17 @@ export function MediaCard({
           )}
         </div>
 
-        <div className="absolute right-3 top-3 z-30 sm:right-4 sm:top-4">
+        <div
+          className={`absolute right-3 top-3 z-30 sm:right-4 sm:top-4 ${
+            canPlay && showRestartWatching
+              ? "transition-opacity duration-200 group-hover:opacity-0 group-focus-within:opacity-0"
+              : ""
+          }`}
+        >
           <WatchedIndicator
-            item={item}
-            className="px-2 py-0.5 text-[0.56rem] tracking-[0.14em] sm:px-2.5 sm:py-1 sm:text-[0.62rem]"
-            iconSize={12}
+            isWatched={isWatched}
+            reveal="hover"
+            size={variant === "poster" ? "md" : "sm"}
           />
         </div>
 

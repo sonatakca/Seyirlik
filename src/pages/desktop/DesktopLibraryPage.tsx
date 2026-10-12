@@ -868,11 +868,7 @@ export function DesktopLibraryPage({
           direction="up"
           delay={0.03}
         >
-          <WatchedIndicator
-            isWatched
-            className="px-5 py-2 text-sm tracking-[0.16em]"
-            iconSize={18}
-          />
+          <WatchedIndicator isWatched size="lg" />
         </MotionReveal>
       ) : null}
 

@@ -727,11 +727,7 @@ export function MobileLibraryPage({
 
       {isLibraryScopeWatched ? (
         <div className="mb-5 flex justify-center">
-          <WatchedIndicator
-            isWatched
-            className="px-4 py-1.5 text-xs tracking-[0.14em]"
-            iconSize={15}
-          />
+          <WatchedIndicator isWatched size="md" />
         </div>
       ) : null}
 
