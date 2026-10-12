@@ -28,6 +28,13 @@ export type SeekPreviewPhase = "scrubbing" | "landing";
 export interface SeekPreviewState {
   seconds: number;
   phase: SeekPreviewPhase;
+  /**
+   * Whether the picture is up. A scrub always shows it. A jump — an arrow
+   * key, a skip button, a double tap — holds it back until the seek has
+   * failed to land at once, so a seek into what is buffered never puts a
+   * thumbnail over a frame that was about to be there anyway.
+   */
+  shown: boolean;
 }
 
 /** How close the element must be to the target for its frame to count. */
@@ -55,6 +62,13 @@ const SCRUB_IDLE_CEILING_MS = 30_000;
  */
 const FRAME_CALLBACK_WAIT_MS = 250;
 
+/**
+ * How long a jump may take before its preview comes up over the frame it
+ * left. A buffered seek lands within a few frames; past this the old frame
+ * is visibly standing still where the viewer asked to be elsewhere.
+ */
+export const JUMP_PREVIEW_REVEAL_MS = 120;
+
 interface UseSeekPreviewOptions {
   videoRef: RefObject<HTMLVideoElement>;
   /** Changes when the active element is replaced (quality handoff). */
@@ -71,6 +85,7 @@ export function useSeekPreview({
   const [preview, setPreview] = useState<SeekPreviewState | null>(null);
   const previewRef = useRef<SeekPreviewState | null>(null);
   const ceilingTimerRef = useRef<number | null>(null);
+  const revealTimerRef = useRef<number | null>(null);
   // Every change bumps this, so an in-flight "frame painted" wait that
   // belongs to an earlier seek cannot clear a later one.
   const generationRef = useRef(0);
@@ -82,12 +97,20 @@ export function useSeekPreview({
     }
   }, []);
 
+  const clearReveal = useCallback(() => {
+    if (revealTimerRef.current !== null) {
+      window.clearTimeout(revealTimerRef.current);
+      revealTimerRef.current = null;
+    }
+  }, []);
+
   const apply = useCallback(
     (next: SeekPreviewState | null) => {
       generationRef.current += 1;
       previewRef.current = next;
       setPreview(next);
       clearCeiling();
+      if (!next || next.shown) clearReveal();
 
       if (!next) return;
 
@@ -102,14 +125,14 @@ export function useSeekPreview({
         next.phase === "landing" ? LANDING_CEILING_MS : SCRUB_IDLE_CEILING_MS,
       );
     },
-    [clearCeiling],
+    [clearCeiling, clearReveal],
   );
 
   const showScrub = useCallback(
     (seconds: number) => {
       const current = previewRef.current;
       if (current?.phase === "scrubbing" && current.seconds === seconds) return;
-      apply({ seconds, phase: "scrubbing" });
+      apply({ seconds, phase: "scrubbing", shown: true });
     },
     [apply],
   );
@@ -118,10 +141,29 @@ export function useSeekPreview({
 
   const land = useCallback(
     (seconds: number) => {
-      // Only a scrub has a picture to hold. A keyboard step has none, and
-      // putting one up for it flashed the whole frame on every arrow press.
-      if (previewRef.current?.phase !== "scrubbing") return;
-      apply({ seconds, phase: "landing" });
+      const current = previewRef.current;
+      if (current?.phase === "scrubbing" || current?.shown) {
+        apply({ seconds, phase: "landing", shown: true });
+      } else {
+        // A jump. Putting the picture up at once flashed a thumbnail over
+        // the frame on every arrow press, so it waits to be needed. Presses
+        // that follow before then keep the first one's deadline: a held key
+        // re-seeks faster than any seek lands and would otherwise put the
+        // reveal off for as long as the key is down.
+        apply({ seconds, phase: "landing", shown: false });
+        if (revealTimerRef.current === null) {
+          revealTimerRef.current = window.setTimeout(() => {
+            revealTimerRef.current = null;
+            const pending = previewRef.current;
+            if (pending?.phase !== "landing" || pending.shown) return;
+            // Not through `apply`: the seek is the same one, and a new
+            // generation would orphan a frame wait already under way.
+            const revealed = { ...pending, shown: true };
+            previewRef.current = revealed;
+            setPreview(revealed);
+          }, JUMP_PREVIEW_REVEAL_MS);
+        }
+      }
       // A seek to where the element already is raises no `seeked`; a paused
       // element then raises nothing at all. Look once the seek has been made.
       window.setTimeout(() => checkLandedRef.current(), 0);
@@ -135,7 +177,13 @@ export function useSeekPreview({
     apply(null);
   }, [apply, resetKey]);
 
-  useEffect(() => clearCeiling, [clearCeiling]);
+  useEffect(
+    () => () => {
+      clearCeiling();
+      clearReveal();
+    },
+    [clearCeiling, clearReveal],
+  );
 
   useEffect(() => {
     const video = videoRef.current;
@@ -174,6 +222,14 @@ export function useSeekPreview({
         !video.ended &&
         Math.abs(currentTime - current.seconds) > LANDED_TOLERANCE_SECONDS
       ) {
+        return;
+      }
+
+      // Nothing is up to dissolve: the element has the frame, and the
+      // preview it was holding in reserve is no longer needed.
+      if (!current.shown) {
+        stopFrameWait();
+        apply(null);
         return;
       }
 

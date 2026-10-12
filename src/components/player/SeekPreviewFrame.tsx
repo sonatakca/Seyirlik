@@ -12,6 +12,11 @@ export interface SeekPreviewTile {
 interface SeekPreviewFrameProps {
   /** Null hides the frame; it dissolves into whatever is underneath. */
   tile: SeekPreviewTile | null;
+  /**
+   * False while a jump's preview is held in reserve: the tile's sheet is
+   * decoded meanwhile, so it can come up at once if it is needed.
+   */
+  shown: boolean;
   rect: { left: number; top: number; width: number; height: number } | null;
   className: string;
 }
@@ -162,12 +167,13 @@ function TileStack({
 
 export function SeekPreviewFrame({
   tile,
+  shown: isShown,
   rect,
   className,
 }: SeekPreviewFrameProps) {
   const reduceMotion = useReducedMotion();
   const shown = useDecodedTile(tile);
-  const visible = tile !== null && shown !== null && rect !== null;
+  const visible = isShown && tile !== null && shown !== null && rect !== null;
 
   return (
     <AnimatePresence>

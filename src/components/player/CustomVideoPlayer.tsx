@@ -371,6 +371,9 @@ export function CustomVideoPlayer({
     key: number;
   } | null>(null);
   const suppressMouseMoveUntilRef = useRef(0);
+  // The seek preview is set up further down, after the source it resets on;
+  // the checkpoint return, above it, reaches it through this.
+  const landSeekPreviewAtElementRef = useRef<() => void>(() => undefined);
   const viewModeCursorHideTimerRef = useRef<number | null>(null);
   const { resetTouchSeekSession, handleTouchTap } = useTouchSeek(containerRef);
 
@@ -630,6 +633,7 @@ export function CustomVideoPlayer({
         : Math.max(0, checkpointSeconds);
 
     partyWatch.seekTo(target);
+    landSeekPreviewAtElementRef.current();
     setCheckpointSeconds(null);
 
     if (!isViewModeEnabled) {
@@ -1300,6 +1304,28 @@ export function CustomVideoPlayer({
     resetKey: `${activeSource.itemId}:${activeSource.mediaSourceId ?? ""}`,
   });
   const seekPreviewSeconds = seekPreview?.seconds ?? null;
+
+  // The preview is told the seek has been made before the element is asked
+  // to make it, so the `seeked` that follows always finds it landing. The seek
+  // itself still goes through the party engine untouched.
+  const handleSeekCommit = useCallback(
+    (seconds: number) => {
+      landSeekPreview(seconds);
+      partyWatch.seekTo(seconds);
+    },
+    [landSeekPreview, partyWatch.seekTo],
+  );
+
+  // For a seek whose target only the party engine works out (a step from
+  // wherever it last sent the group). The element holds the target as soon
+  // as it is asked, and `seeked` is only queued, so landing after is in time.
+  const landSeekPreviewAtElement = useCallback(() => {
+    const video = videoRef.current;
+    if (video && Number.isFinite(video.currentTime)) {
+      landSeekPreview(video.currentTime);
+    }
+  }, [landSeekPreview, videoRef]);
+  landSeekPreviewAtElementRef.current = landSeekPreviewAtElement;
   // Scrubbing loads nothing — the film plays on under the preview — so only a
   // seek that has been made counts as waiting.
   const isSeekLoadingShown = useLoadingReveal(
@@ -1608,12 +1634,14 @@ export function CustomVideoPlayer({
   const handleSeekBy = useCallback(
     (seconds: number) => {
       partyWatch.seekBy(seconds);
+      landSeekPreviewAtElement();
       triggerSeekFeedback(seconds);
       revealPlayerChrome();
       hidePlayerChromeWithSeekFeedback();
     },
     [
       hidePlayerChromeWithSeekFeedback,
+      landSeekPreviewAtElement,
       partyWatch,
       revealPlayerChrome,
       triggerSeekFeedback,
@@ -1637,10 +1665,10 @@ export function CustomVideoPlayer({
           : Math.max(0, rawTarget);
 
       setDismissedSkipSegmentId(segment.id);
-      partyWatch.seekTo(target);
+      handleSeekCommit(target);
       revealPlayerChrome();
     },
-    [partyWatch, progress.duration, revealPlayerChrome],
+    [handleSeekCommit, progress.duration, revealPlayerChrome],
   );
 
   const handleDefaultNextEpisodePlay = useCallback(() => {
@@ -1675,7 +1703,7 @@ export function CustomVideoPlayer({
     currentTime: progress.currentTime,
     duration: progress.duration,
     onTogglePlay: partyWatch.togglePlay,
-    onSeekTo: partyWatch.seekTo,
+    onSeekTo: handleSeekCommit,
     onSeekBy: handleSeekBy,
     onNextTrack:
       nextEpisode && onAutoPlayNextEpisode && !isInParty
@@ -3436,17 +3464,6 @@ export function CustomVideoPlayer({
       revealPlayerChrome();
     },
     [revealPlayerChrome, showSeekScrub],
-  );
-
-  // The preview is told the seek has been made before the element is asked
-  // to make it, so the `seeked` that follows always finds it landing. The seek
-  // itself still goes through the party engine untouched.
-  const handleSeekCommit = useCallback(
-    (seconds: number) => {
-      landSeekPreview(seconds);
-      partyWatch.seekTo(seconds);
-    },
-    [landSeekPreview, partyWatch.seekTo],
   );
 
   const handleSelectSubtitleStream = useCallback(
@@ -5363,6 +5380,7 @@ export function CustomVideoPlayer({
 
       <SeekPreviewFrame
         tile={fullscreenSeekPreview}
+        shown={seekPreview?.shown === true}
         rect={fullscreenSeekPreviewRect}
         className={pictureBoxClass}
       />
