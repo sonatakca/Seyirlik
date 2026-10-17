@@ -118,11 +118,16 @@ $controlLog = Join-Path $dataDir 'control.log'
 & $Nssm set $ServiceName Start SERVICE_AUTO_START | Out-Null
 & $Nssm set $ServiceName DisplayName 'Seyirlik Control' | Out-Null
 & $Nssm set $ServiceName Description 'Settings and services dashboard for Seyirlik, reachable over Tailscale only.' | Out-Null
-# Its own virtual account. `sc config obj=` rejects the empty password a
-# virtual account needs (1639); NSSM sets it. Windows PowerShell 5.1 drops an
-# empty-string argument to a native program, so it has to be spelled '""'.
-$emptyPassword = if ($PSVersionTable.PSVersion.Major -ge 7) { '' } else { '""' }
-& $Nssm set $ServiceName ObjectName $account $emptyPassword | Out-Null
+# Its own virtual account. A virtual account has no password, and Windows
+# PowerShell 5.1 cannot pass an empty-string argument to a native program
+# (NSSM's ObjectName and `sc config password= ""` both fail that way), so the
+# password is left out altogether, with the WMI Change method as the fallback.
+& sc.exe config $ServiceName obj= $account | Out-Null
+if ((Get-CimInstance Win32_Service -Filter "Name='$ServiceName'").StartName -ne $account) {
+  $svc = Get-CimInstance Win32_Service -Filter "Name='$ServiceName'"
+  $r = Invoke-CimMethod -InputObject $svc -MethodName Change -Arguments @{ StartName = $account; StartPassword = $null }
+  Write-Output "CHANGE_RESULT=$($r.ReturnValue)"
+}
 $startName = (Get-CimInstance Win32_Service -Filter "Name='$ServiceName'").StartName
 if ($startName -ne $account) { throw "the service runs as '$startName', not $account; refusing to continue" }
 
