@@ -10,6 +10,21 @@ tailnet — a laptop, a phone, the server itself.
 http://<server's Tailscale address>:43200
 ```
 
+The short way in is **seyirlik.org/control**. Vercel redirects it
+(`vercel.json`) to the server's MagicDNS name over HTTPS, which Tailscale
+serves with its own certificate:
+
+```
+tailscale serve --bg --https=443 http://127.0.0.1:43200
+```
+
+Run that once on the server. It needs Serve and HTTPS certificates turned on
+for the tailnet, and the command prints the link to do that. The redirect
+reveals nothing that is not already public: issuing the certificate records
+the machine's name in Certificate Transparency logs, and the name resolves
+only inside the tailnet. The PWA's service worker is told not to answer
+`/control` itself, or it would open the app's not-found page.
+
 ## Why it is a separate service
 
 The media server cannot be the thing that repairs the media server. The moment
