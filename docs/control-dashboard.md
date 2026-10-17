@@ -117,7 +117,9 @@ powershell -ExecutionPolicy Bypass -File deploy\windows\install-control.ps1
 It copies `control\` to `C:\Program Files\Seyirlik\control`, installs the
 `SeyirlikControl` service under NSSM, applies the grants above, writes
 `C:\ProgramData\Seyirlik\control\control.json`, adds the firewall rule, asks
-for the password on first install, starts the service and checks it answers.
+for the password on first install (or skips that with `-SkipPassword`, for a
+non-interactive session), starts the service and checks it answers. Its own
+log is `C:\ProgramData\Seyirlik\control\control.log`.
 
 Run the same script to update. It keeps the password and refreshes the listen
 address from Tailscale.

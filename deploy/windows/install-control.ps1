@@ -39,7 +39,11 @@ param(
   [string] $ServiceName = 'SeyirlikControl',
   [string[]] $ManagedServices = @('SeyirlikServer', 'SeyirlikWorker', 'SeyirlikPostgres'),
   [string[]] $RestartOnApply = @('SeyirlikServer', 'SeyirlikWorker'),
-  [string] $HealthUrl = 'http://127.0.0.1:43111/ownAPI/v1/health'
+  [string] $HealthUrl = 'http://127.0.0.1:43111/ownAPI/v1/health',
+
+  # Install without asking for the dashboard password, for a non-interactive
+  # session. Set it afterwards with the set-password command in the docs.
+  [switch] $SkipPassword
 )
 
 $ErrorActionPreference = 'Stop'
@@ -98,8 +102,11 @@ if (-not $existing) {
 & $Nssm set $ServiceName Application $Node | Out-Null
 & $Nssm set $ServiceName AppParameters "`"$InstallDir\server.mjs`" --config `"$configPath`"" | Out-Null
 & $Nssm set $ServiceName AppDirectory $InstallDir | Out-Null
-& $Nssm set $ServiceName AppStdout (Join-Path $logsDir 'control.log') | Out-Null
-& $Nssm set $ServiceName AppStderr (Join-Path $logsDir 'control.log') | Out-Null
+# Its own log goes in its own data folder: NSSM opens the file as the service
+# account, which may only read logs\.
+$controlLog = Join-Path $dataDir 'control.log'
+& $Nssm set $ServiceName AppStdout $controlLog | Out-Null
+& $Nssm set $ServiceName AppStderr $controlLog | Out-Null
 & $Nssm set $ServiceName AppRotateFiles 1 | Out-Null
 & $Nssm set $ServiceName AppRotateBytes 5242880 | Out-Null
 & $Nssm set $ServiceName AppStdoutCreationDisposition 4 | Out-Null
@@ -197,7 +204,9 @@ New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow -Pro
 Write-Output 'FIREWALL=ok'
 
 # --- password -----------------------------------------------------------------
-if (-not $config['passwordHash']) {
+if (-not $config['passwordHash'] -and $SkipPassword) {
+  Write-Output 'PASSWORD=not set; the dashboard refuses sign-in until set-password is run'
+} elseif (-not $config['passwordHash']) {
   Write-Output ''
   Write-Output 'Choose the dashboard password (at least 12 characters).'
   & $Node "$InstallDir\server.mjs" set-password --config $configPath
@@ -214,7 +223,7 @@ for ($i = 0; $i -lt 20 -and -not $ok; $i++) {
     $ok = $r.StatusCode -eq 200
   } catch { }
 }
-if (-not $ok) { throw "the dashboard did not answer on 127.0.0.1:$Port; see $logsDir\control.log" }
+if (-not $ok) { throw "the dashboard did not answer on 127.0.0.1:$Port; see $controlLog" }
 
 Write-Output ''
 Write-Output 'Seyirlik Control is running. Open it from any device on your tailnet:'
