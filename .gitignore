@@ -47,3 +47,6 @@ docs/windows-migration/
 # Design masters (ProRes and other editing sources). Kept out of public/ so the
 # build never copies them; the site uses the WebP exports made from them.
 design/
+
+# Local state of the control dashboard in development (control/dev-setup.mjs).
+control/.dev/

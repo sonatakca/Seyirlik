@@ -123,3 +123,10 @@ the server being dead.
 The recoverable state is the database, the configuration and the secrets.
 Generated storage is a cache and is rebuilt. Media is never written by
 Seyirlik. Back up with `pg_dump`, and keep the secrets file with its ACL.
+
+## Control dashboard
+
+`SeyirlikControl` is a separate service that edits `settings.env` and
+`secrets.env`, restarts the services and shows the health report and logs,
+over Tailscale only. It is installed with `deploy\windows\install-control.ps1`.
+See [Control dashboard](./control-dashboard.md).
