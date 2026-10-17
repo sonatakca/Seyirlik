@@ -29,7 +29,8 @@ is still not exposed to them.
 #>
 [CmdletBinding()]
 param(
-  [string] $Source = (Join-Path $PSScriptRoot '..\..\control'),
+  # Defaults to the control\ folder of the checkout this script is in.
+  [string] $Source = '',
   [string] $InstallDir = 'C:\Program Files\Seyirlik\control',
   [string] $DataRoot = 'C:\ProgramData\Seyirlik',
   [string] $Nssm = 'C:\Program Files\Seyirlik\bin\nssm.exe',
@@ -48,6 +49,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+
+# Resolved here, not as a parameter default: under `powershell -File`,
+# Windows PowerShell 5.1 leaves $PSScriptRoot empty while binding parameters.
+if (-not $Source) {
+  $Source = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) '..\..\control'
+}
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
