@@ -107,7 +107,12 @@ if (-not $existing) {
   & $Nssm install $ServiceName $Node | Out-Null
 }
 & $Nssm set $ServiceName Application $Node | Out-Null
-& $Nssm set $ServiceName AppParameters "`"$InstallDir\server.mjs`" --config `"$configPath`"" | Out-Null
+# No quoted paths on the command line: Windows PowerShell 5.1 drops embedded
+# quotes when it calls a native program, and "C:\Program Files\..." then
+# splits at the space. The script is relative to AppDirectory, and the config
+# path travels in an environment variable, which needs no quoting.
+& $Nssm set $ServiceName AppParameters 'server.mjs' | Out-Null
+& $Nssm set $ServiceName AppEnvironmentExtra "SEYIRLIK_CONTROL_CONFIG=$configPath" | Out-Null
 & $Nssm set $ServiceName AppDirectory $InstallDir | Out-Null
 # Its own log goes in its own data folder: NSSM opens the file as the service
 # account, which may only read logs\.
