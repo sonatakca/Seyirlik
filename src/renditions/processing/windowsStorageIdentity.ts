@@ -450,9 +450,10 @@ export function createWindowsVolumeIdentityQuery(options: {
      * A network path is answered without running anything. The medium is known
      * with certainty from the path's own shape, and no local query can produce
      * an identifier for a share. Reporting `network` with a null identifier is
-     * strictly more useful than reporting nothing: it still fails closed in
-     * `satisfiesRecovery`, which requires an identifier, while letting
-     * `requiresOperatorAfterUncleanRestart` make the cautious choice it exists
+     * strictly more useful than reporting nothing: `satisfiesRecovery` can let
+     * an operator recover a share (which has no disk to have been swapped)
+     * while still refusing it in place of physical media, and
+     * `requiresOperatorAfterUncleanRestart` makes the cautious choice it exists
      * to make.
      */
     if (target.kind === "unc") {
