@@ -266,8 +266,22 @@ Write-Output 'ACTIVATED'
 # After the activation has succeeded, never before: until then the previous
 # release is the rollback. A failure here is reported and nothing more — the
 # new release is already serving, and leftover space is not an outage.
+#
+# In the background: it took 20 seconds of every deployment, and nothing waits
+# on it. A SYSTEM scheduled task rather than a child process, because a process
+# started from an SSH session dies when the session closes. The next deployment
+# waits for a prune still running (ship-release.ps1), so the two never overlap.
 try {
-  & (Join-Path $PSScriptRoot 'prune-releases.ps1') -AppRoot $AppRoot
+  $prune = Join-Path $PSScriptRoot 'prune-releases.ps1'
+  $log = Join-Path (Split-Path -Parent $AppRoot) 'logs\prune-releases.log'
+  $arguments = '/c powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -AppRoot "{1}" > "{2}" 2>&1' -f $prune, $AppRoot, $log
+  $task = 'SeyirlikPruneReleases'
+  Register-ScheduledTask -TaskName $task -Force `
+    -Action (New-ScheduledTaskAction -Execute 'cmd.exe' -Argument $arguments) `
+    -Principal (New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest) `
+    -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30)) | Out-Null
+  Start-ScheduledTask -TaskName $task
+  Write-Output "PRUNE=running in the background; see $log"
 }
 catch {
   Write-Output ("PRUNE_FAILED=" + $_.Exception.Message)

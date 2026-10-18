@@ -211,7 +211,14 @@ export default defineConfig(({ mode }) => {
       // The dual-deck handoff suite needs a real decoder and runs under
       // `vitest.browser.config.ts` (`npm run test:browser`). jsdom would load
       // it and hang waiting for video that never plays.
-      exclude: ["**/node_modules/**", "**/dist/**", "**/*.browser.test.tsx"],
+      // `.claude/**` holds nested worktrees and QA harnesses; a path filter
+      // would otherwise collect the repository twice.
+      exclude: [
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/*.browser.test.tsx",
+        ".claude/**",
+      ],
       /*
        * Bounded on purpose, and this is not a performance setting.
        *

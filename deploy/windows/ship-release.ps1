@@ -27,7 +27,9 @@ param(
   # The release-build clone. Its name is historical; check its HEAD.
   [string] $Clone = 'C:\ProgramData\Seyirlik\scratch\ui-release-42e325f',
   # Stage without activating, for a rehearsal.
-  [switch] $StageOnly
+  [switch] $StageOnly,
+  # Build the frontend even when nothing it is built from changed.
+  [switch] $ForceBuild
 )
 
 $ErrorActionPreference = 'Stop'
@@ -55,9 +57,19 @@ function Invoke-Native([string] $CommandLine, [string] $What) {
 # This script's own process, and the shell OpenSSH started it from, both carry
 # its name on their command lines.
 $self = @($PID, (Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId)
-$busy = Get-CimInstance Win32_Process | Where-Object {
-  $self -notcontains $_.ProcessId -and
-  $_.CommandLine -match 'ship-release|stage-release|activate-release|prune-releases|Robocopy'
+function Get-Busy {
+  Get-CimInstance Win32_Process | Where-Object {
+    $self -notcontains $_.ProcessId -and
+    $_.CommandLine -match 'ship-release|stage-release|activate-release|prune-releases|Robocopy'
+  }
+}
+# The previous deployment's prune runs in the background after it activates.
+# That one is waited for rather than refused: it is not another deployment,
+# and it finishes in seconds.
+$busy = Get-Busy
+for ($i = 0; $i -lt 60 -and $busy -and -not ($busy | Where-Object { $_.CommandLine -notmatch 'prune-releases' }); $i++) {
+  Start-Sleep -Seconds 2
+  $busy = Get-Busy
 }
 if ($busy) {
   $busy | ForEach-Object { Write-Output ("BUSY={0} {1}" -f $_.ProcessId, $_.CommandLine) }
@@ -87,17 +99,51 @@ else {
 }
 Write-Phase 'dependencies'
 
-Push-Location $Clone
-try {
-  # Same-origin build: the API is this host, so no base URL is baked in.
-  $env:VITE_OWN_API_BASE_URL = $null
-  Invoke-Native 'npx vite build' 'vite build'
+<#
+Whether this commit changes anything the frontend is built from, against the
+release that is serving now. When it does not, the build is skipped and the
+active release's dist is linked into the new one (stage-release -ReuseDist),
+with only version.json's commit rewritten. The buildId is left alone on
+purpose: it is what open tabs compare, and the bundle they run is unchanged.
+
+Conservative: anything under src/ outside src/server counts, because src/lib
+is shared with the server, as do the build's own inputs. Tests never do.
+#>
+$reuseDist = $false
+if (-not $ForceBuild) {
+  $activeRelease = (Get-Item -LiteralPath 'C:\ProgramData\Seyirlik\app\current' -ErrorAction SilentlyContinue).Target | Select-Object -First 1
+  if ($activeRelease -and (Test-Path -LiteralPath (Join-Path $activeRelease 'dist\version.json'))) {
+    $activeCommit = [string](Get-Content -LiteralPath (Join-Path $activeRelease 'RELEASE.json') -Raw | ConvertFrom-Json).commit
+    & git -C $Clone cat-file -e "$activeCommit^{commit}" 2>$null
+    if ($LASTEXITCODE -eq 0) {
+      $changed = @(& git -C $Clone diff --name-only $activeCommit HEAD)
+      $frontend = @($changed | Where-Object {
+          ($_ -match '^src/' -and $_ -notmatch '^src/server/' -and $_ -notmatch '\.(test|integration\.test|browser\.test)\.(ts|tsx)$') -or
+          $_ -match '^(index\.html|public/|vite\.config\.ts|tailwind\.config\.ts|postcss\.config\.js|package\.json|package-lock\.json|tsconfig\.json)'
+        })
+      if ($frontend.Count -eq 0) { $reuseDist = $true }
+    }
+  }
 }
-finally { Pop-Location }
+
+if ($reuseDist) {
+  Write-Output 'FRONTEND=unchanged; reusing the active release''s dist'
+}
+else {
+  Push-Location $Clone
+  try {
+    # Same-origin build: the API is this host, so no base URL is baked in.
+    $env:VITE_OWN_API_BASE_URL = $null
+    Invoke-Native 'npx vite build' 'vite build'
+  }
+  finally { Pop-Location }
+}
 Write-Phase 'build'
 
 $stageScript = Join-Path $Clone 'deploy\windows\stage-release.ps1'
-$stageOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $stageScript -SourceCheckout $Clone 2>&1
+$stageArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $stageScript, '-SourceCheckout', $Clone)
+if ($reuseDist) { $stageArgs += '-ReuseDist' }
+$stageOutput = & powershell.exe @stageArgs 2>&1
 $stageExit = $LASTEXITCODE
 $stageOutput | ForEach-Object { Write-Output "  stage: $_" }
 if ($stageExit -ne 0) { throw "staging failed (exit $stageExit); nothing was activated" }

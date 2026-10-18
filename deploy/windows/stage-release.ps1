@@ -48,7 +48,12 @@ param(
 
   # The virtual accounts the services run as. They need to read a release and
   # must not be able to write one.
-  [string[]] $ServiceAccounts = @('NT SERVICE\SeyirlikServer', 'NT SERVICE\SeyirlikWorker')
+  [string[]] $ServiceAccounts = @('NT SERVICE\SeyirlikServer', 'NT SERVICE\SeyirlikWorker'),
+  # Link `dist` from the active release instead of copying the checkout's,
+  # rewriting only version.json's commit. For a commit that changes nothing
+  # the frontend is built from (ship-release.ps1 decides), so it was not
+  # rebuilt; the buildId stays, which is what open tabs compare.
+  [switch] $ReuseDist
 )
 
 $ErrorActionPreference = 'Stop'
@@ -157,28 +162,94 @@ if ($dependencyLock) {
   } | Sort-Object StagedAt -Descending | Select-Object -First 1
 }
 
-# Hard links through the Win32 call: New-Item -ItemType HardLink takes about
-# a second per hundred files, too slow for 33,000 of them.
-function Copy-TreeAsHardLinks([string] $From, [string] $To) {
-  if (-not ('Seyirlik.HardLink' -as [type])) {
-    Add-Type -Namespace Seyirlik -Name HardLink -MemberDefinition @'
-[System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
-public static extern bool CreateHardLink(string lpFileName, string lpExistingFileName, System.IntPtr lpSecurityAttributes);
-'@
-  }
-  $fromLength = $From.Length
-  [void][IO.Directory]::CreateDirectory($To)
-  foreach ($dir in [IO.Directory]::EnumerateDirectories($From, '*', 'AllDirectories')) {
-    [void][IO.Directory]::CreateDirectory($To + $dir.Substring($fromLength))
-  }
-  $count = 0
-  foreach ($file in [IO.Directory]::EnumerateFiles($From, '*', 'AllDirectories')) {
-    if (-not [Seyirlik.HardLink]::CreateHardLink($To + $file.Substring($fromLength), $file, [IntPtr]::Zero)) {
-      throw ("hard link failed for {0} (Win32 error {1})" -f $file, [Runtime.InteropServices.Marshal]::GetLastWin32Error())
+# Hard links through the Win32 call, with the loop compiled: New-Item -ItemType
+# HardLink takes about a second per hundred files, and even a PowerShell loop
+# over CreateHardLink spent 14 seconds on 33,000 of them.
+if (-not ('Seyirlik.ReleaseLinks' -as [type])) {
+  Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
+namespace Seyirlik {
+  public static class ReleaseLinks {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool CreateHardLink(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
+
+    static void Link(string from, string to) {
+      if (!CreateHardLink(to, from, IntPtr.Zero)) {
+        throw new IOException(String.Format("hard link failed for {0} (Win32 error {1})", from, Marshal.GetLastWin32Error()));
+      }
     }
-    $count++
+
+    // Linking is metadata work NTFS does in parallel: node_modules' 33,600
+    // files took 14 s one at a time and 6 s on eight threads (16 was slower).
+    static void LinkAll(string[] froms, string[] tos) {
+      try {
+        Parallel.For(0, froms.Length, new ParallelOptions { MaxDegreeOfParallelism = 8 }, i => Link(froms[i], tos[i]));
+      }
+      catch (AggregateException failure) {
+        throw failure.InnerExceptions[0];
+      }
+    }
+
+    /// Every file under `from`, linked at the same relative path under `to`.
+    public static int LinkTree(string from, string to) {
+      int fromLength = from.Length;
+      Directory.CreateDirectory(to);
+      foreach (var dir in Directory.EnumerateDirectories(from, "*", SearchOption.AllDirectories)) {
+        Directory.CreateDirectory(to + dir.Substring(fromLength));
+      }
+      var froms = Directory.EnumerateFiles(from, "*", SearchOption.AllDirectories).ToArray();
+      LinkAll(froms, froms.Select(file => to + file.Substring(fromLength)).ToArray());
+      return froms.Length;
+    }
+
+    /// These relative paths (forward slashes), linked from `fromRoot` into `toRoot`.
+    public static int LinkFiles(string fromRoot, string toRoot, string[] relativePaths) {
+      var natives = relativePaths.Select(relative => relative.Replace('/', Path.DirectorySeparatorChar)).ToArray();
+      var tos = natives.Select(native => Path.Combine(toRoot, native)).ToArray();
+      foreach (var dir in tos.Select(Path.GetDirectoryName).Distinct()) {
+        Directory.CreateDirectory(dir);
+      }
+      LinkAll(natives.Select(native => Path.Combine(fromRoot, native)).ToArray(), tos);
+      return natives.Length;
+    }
   }
-  return $count
+}
+'@
+}
+function Copy-TreeAsHardLinks([string] $From, [string] $To) {
+  return [Seyirlik.ReleaseLinks]::LinkTree($From, $To)
+}
+
+<#
+The release being replaced, when it can lend this one its unchanged files.
+
+Most of a release is the previous release: a deployment changes a handful of
+source files. Writing all 1,600 again meant Defender read every one of them on
+the first open, which was most of the 20 seconds verification took. A file
+whose path git says did not change since the active release's commit is that
+release's file, already on disk and checked when it was staged, so it is
+linked instead; only changed files are written. Same rules as node_modules:
+the donor must have been verified (INTEGRITY.json) and its commit must be
+known to this checkout, or everything is extracted as it always was.
+#>
+$sourceDonor = $null
+$currentLink = Join-Path $AppRoot 'current'
+if (Test-Path -LiteralPath $currentLink) {
+  $activePath = (Get-Item -LiteralPath $currentLink).Target | Select-Object -First 1
+  if ($activePath -and (Test-Path -LiteralPath (Join-Path $activePath 'INTEGRITY.json'))) {
+    try {
+      $activeManifest = Get-Content -LiteralPath (Join-Path $activePath 'RELEASE.json') -Raw | ConvertFrom-Json
+      & git -C $SourceCheckout cat-file -e "$($activeManifest.commit)^{commit}" 2>$null
+      if ($LASTEXITCODE -eq 0) {
+        $sourceDonor = [pscustomobject]@{ Path = $activePath; Commit = [string]$activeManifest.commit; Name = (Split-Path -Leaf $activePath) }
+      }
+    }
+    catch { $sourceDonor = $null }
+  }
 }
 
 Push-Location $SourceCheckout
@@ -192,15 +263,58 @@ try {
 
   New-Item -ItemType Directory -Force -Path $target | Out-Null
 
+  # Paths this release must contain, and which of them changed since the
+  # donor. `-z` keeps unusual characters in names intact.
+  $allPaths = @((& git -c core.quotepath=off ls-tree -r --name-only -z HEAD) -split "`0" | Where-Object { $_ })
+  $writePaths = $allPaths
+  $linkedSourceFiles = 0
+  # PowerShell decodes git's output with the console code page, so a name
+  # outside printable ASCII could come back altered; extract everything then.
+  if ($sourceDonor -and @($allPaths | Where-Object { $_ -match '[^\x20-\x7E]' }).Count -gt 0) {
+    Write-Output 'SOURCE_LINK_SKIPPED=a path is not plain ASCII; extracting everything'
+    $sourceDonor = $null
+  }
+  if ($sourceDonor) {
+    $changedPaths = @((& git -c core.quotepath=off diff --name-only -z --no-renames $sourceDonor.Commit HEAD) -split "`0" | Where-Object { $_ })
+    $changedSet = [Collections.Generic.HashSet[string]]::new([string[]]$changedPaths, [StringComparer]::Ordinal)
+    $linkPaths = New-Object System.Collections.Generic.List[string]
+    $extract = New-Object System.Collections.Generic.List[string]
+    foreach ($relative in $allPaths) {
+      $inDonor = [IO.File]::Exists((Join-Path $sourceDonor.Path $relative))
+      if (-not $changedSet.Contains($relative) -and $inDonor) { $linkPaths.Add($relative) } else { $extract.Add($relative) }
+    }
+    try {
+      $linkedSourceFiles = [Seyirlik.ReleaseLinks]::LinkFiles($sourceDonor.Path, $target, $linkPaths.ToArray())
+      $writePaths = $extract.ToArray()
+      Write-Output ("LINKED_SOURCE={0} files from {1}; writing {2}" -f $linkedSourceFiles, $sourceDonor.Name, $writePaths.Count)
+    }
+    catch {
+      # Removing the half-made tree removes links, never the donor's files.
+      Write-Output ("SOURCE_LINK_FAILED=" + $_.Exception.Message + "; extracting everything")
+      Remove-Item -LiteralPath $target -Recurse -Force
+      New-Item -ItemType Directory -Force -Path $target | Out-Null
+      $sourceDonor = $null
+      $linkedSourceFiles = 0
+      $writePaths = $allPaths
+    }
+  }
+
   # git archive writes only tracked files at that commit. Via a tar file
   # rather than a pipe, because PowerShell's pipeline is text and would
-  # corrupt the stream.
-  $tar = Join-Path ([IO.Path]::GetTempPath()) "seyirlik-release-$Version.tar"
-  & git archive --format=tar -o $tar HEAD
-  if ($LASTEXITCODE -ne 0) { throw 'git archive failed' }
-  & tar.exe -xf $tar -C $target
-  if ($LASTEXITCODE -ne 0) { throw 'extracting the release archive failed' }
-  Remove-Item -LiteralPath $tar -Force
+  # corrupt the stream. Paths go in batches so a large change cannot exceed
+  # the command line.
+  if ($writePaths.Count -gt 0) {
+    $tar = Join-Path ([IO.Path]::GetTempPath()) "seyirlik-release-$Version.tar"
+    $batches = if ($sourceDonor) { [Math]::Ceiling($writePaths.Count / 200) } else { 1 }
+    for ($b = 0; $b -lt $batches; $b++) {
+      $paths = if ($sourceDonor) { @($writePaths | Select-Object -Skip ($b * 200) -First 200) } else { @() }
+      & git archive --format=tar -o $tar HEAD -- @paths
+      if ($LASTEXITCODE -ne 0) { throw 'git archive failed' }
+      & tar.exe -xf $tar -C $target
+      if ($LASTEXITCODE -ne 0) { throw 'extracting the release archive failed' }
+      Remove-Item -LiteralPath $tar -Force
+    }
+  }
 }
 finally { Pop-Location }
 
@@ -210,7 +324,27 @@ Write-Phase 'source'
 # delete against the wrong path if it ever is not.
 $linkedFrom = $null
 $linkedFiles = 0
+$distLinked = $false
+if ($ReuseDist) {
+  if (-not $sourceDonor -or -not (Test-Path -LiteralPath (Join-Path $sourceDonor.Path 'dist\version.json'))) {
+    throw 'ReuseDist needs a verified active release with a dist; build instead'
+  }
+  $distFiles = [Seyirlik.ReleaseLinks]::LinkTree((Join-Path $sourceDonor.Path 'dist'), (Join-Path $target 'dist'))
+  # version.json is replaced, not edited: it is a link to the donor's file.
+  # Only the commit changes, as text: the file is UTF-8 with a "·" in its
+  # version, which Get-Content would read as ANSI and write back mangled.
+  $versionPath = Join-Path $target 'dist\version.json'
+  $versionText = [IO.File]::ReadAllText($versionPath, [Text.Encoding]::UTF8)
+  $newCommit = (& git -C $SourceCheckout rev-parse HEAD).Trim()
+  $rewritten = [regex]::Replace($versionText, '("commit"\s*:\s*")[0-9a-f]{40}(")', "`${1}$newCommit`${2}")
+  if ($rewritten -eq $versionText -and $versionText -notmatch $newCommit) { throw 'version.json has no commit to rewrite; build instead' }
+  Remove-Item -LiteralPath $versionPath -Force
+  [IO.File]::WriteAllText($versionPath, $rewritten, (New-Object Text.UTF8Encoding $false))
+  $distLinked = $true
+  Write-Output ("LINKED_DIST={0} files from {1}; frontend unchanged" -f $distFiles, $sourceDonor.Name)
+}
 foreach ($dir in 'node_modules', 'dist') {
+  if ($dir -eq 'dist' -and $distLinked) { continue }
   $from = Join-Path $SourceCheckout $dir
   if (-not (Test-Path -LiteralPath $from)) { throw "source checkout has no $dir; build or install first" }
   $to = Join-Path $target $dir
@@ -288,7 +422,23 @@ Write-Phase 'flush'
 # 33,000 new paths costs this host about seven minutes.
 . (Join-Path $PSScriptRoot 'release-integrity.ps1')
 $skip = if ($linkedFrom) { @('node_modules') } else { @() }
-$integrity = Find-ZeroFilledFiles $target -SkipTopLevel $skip
+# Linked source and dist are the donor's checked files, like node_modules.
+if ($distLinked) { $skip += 'dist' }
+# With a source donor only what was written is new: the changed source, plus
+# a dist copied from the checkout when it was not linked.
+$onlyPaths = $null
+if ($sourceDonor) {
+  $onlyPaths = New-Object System.Collections.Generic.List[string]
+  foreach ($relative in $writePaths) { $onlyPaths.Add($relative) }
+  if (-not $distLinked) {
+    $distRoot = Join-Path $target 'dist'
+    foreach ($file in [IO.Directory]::EnumerateFiles($distRoot, '*', 'AllDirectories')) {
+      $onlyPaths.Add(('dist' + $file.Substring($distRoot.Length)).Replace('\', '/'))
+    }
+  }
+  $onlyPaths = $onlyPaths.ToArray()
+}
+$integrity = Find-ZeroFilledFiles $target -SkipTopLevel $skip -OnlyRelative $onlyPaths
 if ($integrity.Damaged.Count -gt 0) {
   throw ("staged release has $($integrity.Damaged.Count) zero-filled file(s); do not activate it:`n" + ($integrity.Damaged -join "`n"))
 }
@@ -306,6 +456,8 @@ $bootTicks = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalT
 [ordered]@{
   checkedFiles = $integrity.Checked
   linkedFiles  = $linkedFiles
+  linkedSourceFiles = $linkedSourceFiles
+  sourceLinkedFrom  = if ($sourceDonor) { $sourceDonor.Name } else { $null }
   linkedFrom   = $linkedFrom
   bootTicks    = $bootTicks
   verifiedAt   = (Get-Date).ToUniversalTime().ToString('o')

@@ -11,6 +11,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:changed": "bash scripts/test-changed.sh",
+    "test:db": "bash scripts/test-db.sh",
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "bench:containers": "bash scripts/build-container-benchmark.sh",
     "bench:epochs": "node --import tsx scripts/benchmark-epoch-checkpoints.ts",

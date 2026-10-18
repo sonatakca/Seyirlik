@@ -65,6 +65,15 @@ sequential=0
 if git -C "$repo" diff --name-only "$live" "$sha" -- src/server scripts deploy/windows package.json package-lock.json | grep -q .; then
   sequential=1
 fi
+# Whether the commits touch anything the frontend is built from. The same rule
+# ship-release.ps1 uses to skip the Windows build: src/ outside src/server
+# (src/lib is shared), the build's own inputs; never tests.
+frontend=0
+if git -C "$repo" diff --name-only "$live" "$sha" |
+  grep -E '^src/|^(index\.html|public/|vite\.config\.ts|tailwind\.config\.ts|postcss\.config\.js|package\.json|package-lock\.json|tsconfig\.json)' |
+  grep -vE '^src/server/|\.(test|integration\.test|browser\.test)\.(ts|tsx)$' | grep -q .; then
+  frontend=1
+fi
 
 ship_windows() {
   local t; t=$(date +%s)
@@ -86,7 +95,7 @@ ship_windows() {
       "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $SCRATCH\\ops\\ship-release.ps1 -Bundle $SCRATCH\\ship-$short.bundle -Ref ship/$short" 2>&1
     echo $? >"$work/windows.exit"
   } | { grep --line-buffered -vE 'post-quantum|store now, decrypt later|openssh.com/pq|^[[:space:]]*$' || true; } |
-    sed 's/^/  windows: /'
+    sed -l 's/^/  windows: /' | tee -a "$work/windows.out"
   since "$t" >"$work/windows.time"
   [ "$(cat "$work/windows.exit" 2>/dev/null)" = 0 ]
 }
@@ -119,11 +128,35 @@ ship_origin() {
 }
 
 failed=""
-if [ "$sequential" = 1 ]; then
-  log "server or deploy code changed: Windows first, then the front ends"
-  ship_windows || die "Windows did not activate; www and origin were left as they were"
+check_hosts=("${HOSTS[@]}")
+if [ "$sequential" = 1 ] && [ "$frontend" = 0 ]; then
+  # Nothing the browser runs changed, so the front ends have nothing to
+  # deploy. main is still pushed, so it stays what production runs; Vercel
+  # rebuilds the same bundle on its own time and nobody waits for it.
+  log "server only: Windows; the front ends are unchanged"
+  check_hosts=(playback.seyirlik.org)
+  ship_windows || die "Windows did not activate"
+  git -C "$repo" push -q origin "$sha:refs/heads/main"
+  log "www: pushed main (frontend unchanged, not waited for)"
+elif [ "$sequential" = 1 ]; then
+  # Both changed. The front ends must not go live ahead of the API they call,
+  # but they need not wait for the restart either: they start once Windows has
+  # staged (the release exists and is verified), and Vercel's build overlaps
+  # activation. If activation then fails and rolls back, www is ahead of the
+  # server until this is shipped again, and the failure says so.
+  log "server and frontend changed: front ends start once Windows has staged"
+  : >"$work/windows.out"
+  ship_windows & windows_pid=$!
+  until grep -q '^  windows: STAGED=' "$work/windows.out" 2>/dev/null || ! kill -0 "$windows_pid" 2>/dev/null; do
+    sleep 1
+  done
+  if ! grep -q '^  windows: STAGED=' "$work/windows.out"; then
+    wait "$windows_pid"
+    die "Windows did not stage; www and origin were left as they were"
+  fi
   ship_www & www_pid=$!
   ship_origin & origin_pid=$!
+  wait "$windows_pid" || failed="$failed windows(www-is-ahead-of-the-server)"
   wait "$www_pid" || failed="$failed www"
   wait "$origin_pid" || failed="$failed origin"
 else
@@ -139,7 +172,7 @@ fi
 echo
 log "live commit on every hostname:"
 stale=0
-for h in "${HOSTS[@]}"; do
+for h in "${check_hosts[@]}"; do
   c=""
   for _ in 1 2 3 4 5 6; do
     c=$(live_commit "$h")
