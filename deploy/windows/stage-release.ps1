@@ -307,7 +307,11 @@ try {
     $tar = Join-Path ([IO.Path]::GetTempPath()) "seyirlik-release-$Version.tar"
     $batches = if ($sourceDonor) { [Math]::Ceiling($writePaths.Count / 200) } else { 1 }
     for ($b = 0; $b -lt $batches; $b++) {
-      $paths = if ($sourceDonor) { @($writePaths | Select-Object -Skip ($b * 200) -First 200) } else { @() }
+      # Assigned directly: `$paths = if (...) { @(...) }` unrolls a
+      # one-element array into a string, and splatting that broke a release
+      # that changed a single file.
+      $paths = @()
+      if ($sourceDonor) { $paths = @($writePaths | Select-Object -Skip ($b * 200) -First 200) }
       & git archive --format=tar -o $tar HEAD -- @paths
       if ($LASTEXITCODE -ne 0) { throw 'git archive failed' }
       & tar.exe -xf $tar -C $target
@@ -421,7 +425,8 @@ Write-Phase 'flush'
 # checked when it was staged and never written since, and a first read of
 # 33,000 new paths costs this host about seven minutes.
 . (Join-Path $PSScriptRoot 'release-integrity.ps1')
-$skip = if ($linkedFrom) { @('node_modules') } else { @() }
+$skip = @()
+if ($linkedFrom) { $skip += 'node_modules' }
 # Linked source and dist are the donor's checked files, like node_modules.
 if ($distLinked) { $skip += 'dist' }
 # With a source donor only what was written is new: the changed source, plus
