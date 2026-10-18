@@ -538,4 +538,84 @@ describe("reconcileLibraryScan", () => {
       [...store.items.values()].every((item) => item.missingSince === null),
     ).toBe(true);
   });
+
+  it("only hides a vanished title when deletion is off, however long it stays gone", async () => {
+    const store = createStore();
+    const start = new Date("2026-01-01T00:00:00Z");
+    const full = scan([
+      movie("movie:a", "Alien", "Movies/a.mkv"),
+      movie("movie:b", "Aliens", "Movies/b.mkv"),
+    ]);
+    const partial = scan([movie("movie:a", "Alien", "Movies/a.mkv")]);
+    await reconcileLibraryScan({ store, libraryId: LIBRARY, scan: full });
+
+    const marked = await reconcileLibraryScan({
+      store,
+      libraryId: LIBRARY,
+      scan: partial,
+      deleteMissing: false,
+      now: () => start,
+    });
+    expect(marked.itemsMarkedMissing).toBe(1);
+    expect(marked.filesMarkedMissing).toBe(1);
+
+    const muchLater = new Date(start.getTime() + 90 * 24 * 60 * 60 * 1_000);
+    const later = await reconcileLibraryScan({
+      store,
+      libraryId: LIBRARY,
+      scan: partial,
+      deleteMissing: false,
+      now: () => muchLater,
+    });
+    expect(later.itemsDeleted).toBe(0);
+    expect(later.filesDeleted).toBe(0);
+    expect(store.items.size).toBe(2);
+    expect(store.files.size).toBe(2);
+
+    await reconcileLibraryScan({
+      store,
+      libraryId: LIBRARY,
+      scan: full,
+      deleteMissing: false,
+      now: () => muchLater,
+    });
+    expect(
+      [...store.files.values()].every((file) => file.missingSince === null),
+    ).toBe(true);
+  });
+
+  it("measures mass disappearance against files that were still present", async () => {
+    const store = createStore();
+    await reconcileLibraryScan({
+      store,
+      libraryId: LIBRARY,
+      scan: scan([
+        movie("movie:a", "A", "Movies/a.mkv"),
+        movie("movie:b", "B", "Movies/b.mkv"),
+        movie("movie:c", "C", "Movies/c.mkv"),
+        movie("movie:d", "D", "Movies/d.mkv"),
+        movie("movie:e", "E", "Movies/e.mkv"),
+      ]),
+    });
+    // Most of the library is already gone: b, c and d are missing.
+    await reconcileLibraryScan({
+      store,
+      libraryId: LIBRARY,
+      scan: scan([
+        movie("movie:a", "A", "Movies/a.mkv"),
+        movie("movie:e", "E", "Movies/e.mkv"),
+      ]),
+      allowMassRemoval: true,
+    });
+
+    // One of the two that remained goes too. Counting the three already
+    // missing would read as 4 of 5 vanishing and suppress the marker.
+    const summary = await reconcileLibraryScan({
+      store,
+      libraryId: LIBRARY,
+      scan: scan([movie("movie:a", "A", "Movies/a.mkv")]),
+    });
+    expect(summary.removalsSuppressed).toBe(false);
+    expect(summary.filesMarkedMissing).toBe(1);
+  });
 });

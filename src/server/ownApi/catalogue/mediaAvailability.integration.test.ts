@@ -106,7 +106,7 @@ const databaseUrl = process.env.SEYIRLIK_TEST_DATABASE_URL;
         [],
       );
     });
-    it("keeps a published rendition visible after its source is gone", async () => {
+    it("does not let a succeeded processing job stand in for files that are gone", async () => {
       const fileId = (
         await pool.query("SELECT id FROM media_files WHERE item_id=$1", [
           missing,
@@ -116,9 +116,18 @@ const databaseUrl = process.env.SEYIRLIK_TEST_DATABASE_URL;
         "INSERT INTO processing_jobs (id,item_id,media_file_id,source_fingerprint,profile,state,published_version) VALUES ($1,$2,$3,'test','test','succeeded','v1')",
         [randomUUID(), missing, fileId],
       );
+      expect(await catalogue.getItemsByIds(user, [missing])).toEqual([]);
+    });
+    it("keeps a title whose source was replaced by its complete package", async () => {
+      const packaged = await item("Packaged");
+      await file(packaged);
+      await pool.query(
+        "UPDATE media_files SET probe_state='packaged' WHERE item_id=$1",
+        [packaged],
+      );
       expect(
-        (await catalogue.getItemsByIds(user, [missing])).map((row) => row.id),
-      ).toEqual([missing]);
+        (await catalogue.getItemsByIds(user, [packaged])).map((row) => row.id),
+      ).toEqual([packaged]);
     });
     it("adds one TMDB identity transactionally and supports removing wanted intent without deleting media", async () => {
       const client = {

@@ -67,12 +67,14 @@ import {
 } from "./libraries/libraryRepository";
 import { createJobQueue } from "./tasks/jobQueue";
 import { createWorker } from "./tasks/worker";
+import { createJobHandlers, JOB_TYPES } from "./tasks/jobHandlers";
 import {
-  createJobHandlers,
-  JOB_TYPES,
-  MEDIA_LANE_JOB_TYPES,
-  TRICKPLAY_LANE_JOB_TYPES,
-} from "./tasks/jobHandlers";
+  ownsLibrary,
+  ownsProcessing,
+  parseWorkerRole,
+  workerLanes,
+} from "./tasks/workerRole";
+import { parseDeleteMissing, parseRescanMinutes } from "./scanner/scanSettings";
 import { createTaskRoutes } from "./tasks/taskRoutes";
 import {
   createProcessingJobStore,
@@ -391,6 +393,21 @@ export async function createNativeRuntime({
 
   const libraries = createLibraryRepository(pool);
   const definitions = parseLibraryDefinitions(environment.SEYIRLIK_LIBRARIES);
+
+  /*
+   * Which half of the queue this process's worker takes, and the two settings
+   * that make a partial library on a cloud mount safe to scan. See
+   * `workerRole.ts` and `ReconcileOptions.deleteMissing`.
+   */
+  const workerRole = parseWorkerRole(environment.SEYIRLIK_WORKER_ROLE);
+  const processingWorker = ownsProcessing(runWorker, workerRole);
+  const libraryWorker = ownsLibrary(runWorker, workerRole);
+  const deleteMissingTitles = parseDeleteMissing(
+    environment.SEYIRLIK_CATALOGUE_DELETE_MISSING,
+  );
+  const libraryRescanMs = parseRescanMinutes(
+    environment.SEYIRLIK_LIBRARY_RESCAN_MINUTES,
+  );
   if (definitions.length > 0) {
     await libraries.provision(definitions);
   }
@@ -490,7 +507,7 @@ export async function createNativeRuntime({
     legacyLogsRoot:
       environment.SEYIRLIK_RENDITION_LOGS_ROOT?.trim() ||
       path.join(mediaRoot, ".seyirlik", "logs"),
-    allowUnavailable: !runWorker,
+    allowUnavailable: !processingWorker,
   });
   const processingJobs = createProcessingJobStore(pool);
 
@@ -817,7 +834,7 @@ export async function createNativeRuntime({
       } else {
         await storageGuard.observeAvailability(false);
       }
-      if (!runWorker) return;
+      if (!processingWorker) return;
       for (const job of active) {
         await processingJobs.requestPause(
           job.id,
@@ -829,7 +846,7 @@ export async function createNativeRuntime({
     },
     onRestored: async () => {
       await storageGuard.observeAvailability(true);
-      if (!runWorker) return;
+      if (!processingWorker) return;
       /*
        * Only the jobs the watchdog itself paused: a job an operator paused by
        * hand stays paused, because the drive returning does not answer why a
@@ -921,7 +938,7 @@ export async function createNativeRuntime({
    * cached copy of it, so each one has to re-read the row in the state where
    * its copy can be wrong in the direction that does harm. The two are mirror
    * images, because raising a hold and lifting one happen in different
-   * processes: only the worker raises (the `!runWorker` returns in the
+   * processes: only the worker raises (the `!processingWorker` returns in the
    * watchdog above), and only the API server lifts, on the two recovery
    * presses.
    *
@@ -947,7 +964,7 @@ export async function createNativeRuntime({
   const releaseTimer = setInterval(() => {
     if (
       !shouldRereadIncident({
-        runWorker,
+        runWorker: processingWorker,
         mayStartWork: storageGuard.mayStartWork(),
       })
     ) {
@@ -957,7 +974,7 @@ export async function createNativeRuntime({
       const before = storageGuard.health.state;
       await storageGuard.reload();
       if (
-        runWorker &&
+        processingWorker &&
         before !== storageGuard.health.state &&
         storageGuard.mayStartWork()
       ) {
@@ -1008,7 +1025,7 @@ export async function createNativeRuntime({
 
   // Same ownership rule: the process that will run the work is the one that
   // decides what to do with work the last run left behind.
-  if (runWorker) {
+  if (processingWorker) {
     await sweepAbandonedScratch().catch((error) => {
       // Never fatal: scratch that is not released is wasted space, while a
       // worker that will not start is a library that does not process at all.
@@ -1385,20 +1402,11 @@ export async function createNativeRuntime({
      * measured beside `TRICKPLAY_LANE_JOB_TYPES`. What is left is discovery,
      * reconciliation and bookkeeping: several libraries can be read at once,
      * and none of them has any reason to wait for an encode to finish.
+     *
+     * A `light` or `heavy` worker runs only its half of these; see
+     * `workerRole.ts`.
      */
-    lanes: [
-      { name: "media", jobTypes: MEDIA_LANE_JOB_TYPES, concurrency: 1 },
-      { name: "trickplay", jobTypes: TRICKPLAY_LANE_JOB_TYPES, concurrency: 1 },
-      {
-        name: "library",
-        excludeJobTypes: [
-          ...MEDIA_LANE_JOB_TYPES,
-          ...TRICKPLAY_LANE_JOB_TYPES,
-          ...disabledSubtitleJobTypes(subtitleConfig),
-        ],
-        concurrency: 3,
-      },
-    ],
+    lanes: workerLanes(workerRole, disabledSubtitleJobTypes(subtitleConfig)),
     handlers: {
       ...createJobHandlers({
         libraries,
@@ -1462,6 +1470,7 @@ export async function createNativeRuntime({
         trickplayService: trickplay,
         segmentService: segments,
         ...(writesFiles(nfoConfig.mode) ? { nfoService } : {}),
+        deleteMissing: deleteMissingTitles,
       }),
       ...createNfoJobHandlers(nfoService),
       ...(subtitles?.handlers ?? {}),
@@ -1846,7 +1855,7 @@ export async function createNativeRuntime({
    * not polling something that changes on its own.
    */
   const importReconcileTimer =
-    importing && runWorker
+    importing && processingWorker
       ? setInterval(() => {
           void queue
             .enqueue({
@@ -1870,17 +1879,17 @@ export async function createNativeRuntime({
         dedupeKey: GARBAGE_JOB_TYPES.collect,
       })
       .catch(() => undefined);
-  const garbageFirstPass = runWorker
+  const garbageFirstPass = processingWorker
     ? setTimeout(enqueueGarbageCollection, GARBAGE_FIRST_PASS_DELAY_MS)
     : undefined;
   garbageFirstPass?.unref();
-  const garbageTimer = runWorker
+  const garbageTimer = processingWorker
     ? setInterval(enqueueGarbageCollection, GARBAGE_INTERVAL_MS)
     : undefined;
   garbageTimer?.unref();
 
   const acquisitionReconcileTimer =
-    acquisition && runWorker
+    acquisition && processingWorker
       ? setInterval(() => {
           void queue
             .enqueue({
@@ -1901,6 +1910,30 @@ export async function createNativeRuntime({
         }, ACQUISITION_RECONCILE_INTERVAL_MS)
       : undefined;
   acquisitionReconcileTimer?.unref();
+
+  /*
+   * Every library, on a timer, where the library lives on a cloud mount.
+   *
+   * There the scan is the availability check: the mount shows a file only once
+   * it has finished uploading, so a title appears when its bytes are really on
+   * Drive and is hidden again if they go. The same job the Library page starts,
+   * collapsed onto one already queued or running for that library.
+   */
+  const libraryRescanTimer =
+    libraryWorker && libraryRescanMs !== null
+      ? setInterval(() => {
+          void (async () => {
+            for (const library of await libraries.listAll()) {
+              await queue.enqueue({
+                jobType: JOB_TYPES.libraryScan,
+                payload: { libraryId: library.id },
+                dedupeKey: `${JOB_TYPES.libraryScan}:${library.id}`,
+              });
+            }
+          })().catch(() => undefined);
+        }, libraryRescanMs)
+      : undefined;
+  libraryRescanTimer?.unref();
 
   let closed = false;
 
@@ -1933,6 +1966,7 @@ export async function createNativeRuntime({
       bookSearch.close();
       if (acquisitionReconcileTimer) clearInterval(acquisitionReconcileTimer);
       if (importReconcileTimer) clearInterval(importReconcileTimer);
+      if (libraryRescanTimer) clearInterval(libraryRescanTimer);
       if (garbageFirstPass) clearTimeout(garbageFirstPass);
       if (garbageTimer) clearInterval(garbageTimer);
       storageWatchdog.stop();

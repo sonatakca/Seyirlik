@@ -18,6 +18,30 @@ wedged encoder does not take playback down. Set `SEYIRLIK_RUN_WORKER=false`
 whenever the worker runs as its own service, or the API process will run one
 too and you will have two.
 
+### Splitting the worker across two machines
+
+When the library lives on a cloud mount (an rclone mount of Google Drive) the
+always-on server cannot download or encode, and a second machine that is
+switched on by hand does that instead. Both workers claim from the same queue:
+
+| Setting                             | Server  | Second machine |
+| ----------------------------------- | ------- | -------------- |
+| `SEYIRLIK_WORKER_ROLE`              | `light` | `heavy`        |
+| `SEYIRLIK_CATALOGUE_DELETE_MISSING` | `false` | `false`        |
+| `SEYIRLIK_LIBRARY_RESCAN_MINUTES`   | `10`    | unset          |
+
+- `light` runs scans, probes, TMDB metadata and artwork, subtitles and NFO.
+  `heavy` runs downloads, imports, encodes, trickplay, intro detection and its
+  own scratch and download clean-up. A job waits in the queue until a worker
+  that takes it is running. The default, `all`, is one machine doing both.
+- Availability is judged only from files the server's scan finds. The server's
+  mount shows a file once it has finished uploading, so the scheduled scan
+  shows a title when it is really on Drive and hides it again if its files go.
+  A succeeded or failed processing job is not consulted.
+- With `SEYIRLIK_CATALOGUE_DELETE_MISSING=false` a missing title is hidden,
+  never deleted, however long it stays missing. Its watch history and
+  metadata are kept for when it comes back.
+
 Both are supervised by NSSM, which is invoked from a machine-wide copy. Node is
 executed **directly**: running it through `npm` puts a shell between the
 supervisor and the server, so the supervisor watches the wrapper, kills it,
