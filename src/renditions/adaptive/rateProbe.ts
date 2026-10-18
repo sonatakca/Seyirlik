@@ -293,6 +293,12 @@ export interface ProbeTitleRatesInput {
   signal?: AbortSignal;
   /** Holds off between steps while the queue is paused. */
   waitWhilePaused?: () => Promise<void>;
+  /** Called after each sample encode and each VMAF measurement finishes. */
+  onProgress?: (progress: {
+    encodes: number;
+    measurements: number;
+    qualityHeight?: number;
+  }) => void;
 }
 
 /**
@@ -319,6 +325,8 @@ export async function probeTitleRates(
   await mkdir(sampleRoot, { recursive: true });
   const vmafThreads = Math.max(1, cpus().length - 2);
   const encodes = new Map<number, Promise<string[]>>();
+  let encodesDone = 0;
+  let measurementsDone = 0;
 
   const encodeAt = (factor: number): Promise<string[]> => {
     let pending = encodes.get(factor);
@@ -355,6 +363,11 @@ export async function probeTitleRates(
             ...(input.signal ? { signal: input.signal } : {}),
           });
           files.push(outputPath);
+          encodesDone += 1;
+          input.onProgress?.({
+            encodes: encodesDone,
+            measurements: measurementsDone,
+          });
         }
         return files;
       })();
@@ -421,6 +434,12 @@ export async function probeTitleRates(
           scores.push(frame.metrics.vmaf);
         }
       }
+      measurementsDone += 1;
+      input.onProgress?.({
+        encodes: encodesDone,
+        measurements: measurementsDone,
+        qualityHeight: output.qualityHeight,
+      });
     }
     return poolVmafScores(scores);
   };

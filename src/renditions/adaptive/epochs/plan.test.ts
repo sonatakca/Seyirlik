@@ -233,13 +233,18 @@ describe("planMatches", () => {
     ["source-fingerprint", { sourceFingerprint: "other" }],
     ["profile-version", { profileVersion: "other" }],
     ["media-id", { mediaId: "other" }],
-    ["epoch-target", { epochTargetSeconds: 300 }],
     ["segment-target", { segmentSeconds: 4 }],
   ])("refuses a plan whose %s differs", (reason, override) => {
     expect(planMatches(plan, { ...expected, ...override })).toEqual({
       ok: false,
       reason,
     });
+  });
+
+  it("keeps a plan made under another epoch length, so its checkpoints survive a change of length", () => {
+    expect(
+      planMatches(plan, { ...expected, epochTargetSeconds: 1800 }),
+    ).toEqual({ ok: true });
   });
 
   it("refuses a plan written under a different timeline policy", () => {

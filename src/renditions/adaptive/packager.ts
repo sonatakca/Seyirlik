@@ -8,7 +8,7 @@
  * leaves the previously active package — legacy or adaptive — exactly as it was.
  *
  * The unit of *work*, however, is no longer the whole package. The timeline is
- * cut into nominal five-minute epochs, each encoded by one FFmpeg process that
+ * cut into nominal thirty-minute epochs, each encoded by one FFmpeg process that
  * reads and decodes the source once and produces every rung of the ladder for
  * that stretch. An epoch that finishes is validated, manifested and renamed
  * into place, and from that moment it is immutable: a crash, a cancel, an
@@ -103,7 +103,10 @@ import {
   safeFraction,
   VERIFICATION_STALE_MS,
   type AssemblyPhaseProgress,
+  type PlanningPhaseProgress,
   type PublishPhaseProgress,
+  type SubtitlePhaseProgress,
+  type SubtitleTrackProgress,
 } from "./phaseProgress";
 import {
   defaultSoftwareEncoderThreads,
@@ -1515,6 +1518,11 @@ export async function packageAdaptiveRendition(
       epochTargetSeconds,
       segmentSeconds,
     });
+    onEvent?.({
+      type: "planning-progress",
+      mediaId: request.mediaId,
+      progress: { step: "timeline", boundaryCount: boundaries.length },
+    });
     const timeline = await probeSourceFrameTimeline({
       sourcePath: request.sourcePath,
       boundaries,
@@ -1577,6 +1585,24 @@ export async function packageAdaptiveRendition(
         encoder,
         encodePreset,
       );
+      const reportRates = (
+        rates: NonNullable<PlanningPhaseProgress["rateProbe"]>,
+      ) =>
+        onEvent?.({
+          type: "planning-progress",
+          mediaId: request.mediaId,
+          progress: {
+            step: "rates",
+            boundaryCount: boundaries.length,
+            epochCount: plan.epochs.length,
+            rateProbe: rates,
+          },
+        });
+      reportRates(
+        stored
+          ? { encodes: 0, measurements: 0, reused: true }
+          : { encodes: 0, measurements: 0 },
+      );
       const probed =
         stored ??
         ((await listCompletedEpochIndexes(checkpoints)).length > 0
@@ -1598,6 +1624,7 @@ export async function packageAdaptiveRendition(
                 : { filterComplexThreads: qsvFilterThreads }),
               checkpointRoot: checkpoints,
               ...(signal ? { signal } : {}),
+              onProgress: reportRates,
               waitWhilePaused: async () => {
                 while (pauseController?.pauseRequested && !signal?.aborted) {
                   await new Promise((resolve) => setTimeout(resolve, 1_000));
@@ -2413,14 +2440,95 @@ export async function packageAdaptiveRendition(
       });
     }
 
-    if (
-      plannedSubtitleStreamIndexes.length > 0 ||
-      plannedSidecarSubtitles.length > 0
-    ) {
+    /*
+     * Every track this stage will convert, named up front, so the page can list
+     * them all from the first sample and tick them off as each run finishes.
+     */
+    const subtitleProgress: SubtitlePhaseProgress = {
+      tracks: [
+        ...plannedSubtitleStreamIndexes.flatMap((streamIndex) => {
+          const track = probe.subtitleTracks.find(
+            (candidate) =>
+              candidate.streamIndex === streamIndex && candidate.isTextBased,
+          );
+          return track
+            ? [
+                {
+                  id: subtitleRenditionId(streamIndex),
+                  origin: "embedded" as const,
+                  ...(track.language ? { language: track.language } : {}),
+                  ...(track.title ? { title: track.title } : {}),
+                  ...(track.isForced ? { isForced: true } : {}),
+                  state: "waiting" as const,
+                },
+              ]
+            : [];
+        }),
+        ...plannedSidecarSubtitles.map((sidecar) => ({
+          id: subtitleRenditionId(sidecar.streamIndex),
+          origin: "sidecar" as const,
+          ...(sidecar.language !== UNKNOWN_LANGUAGE
+            ? { language: sidecar.language }
+            : {}),
+          ...(sidecar.isForced ? { isForced: true } : {}),
+          state: "waiting" as const,
+        })),
+      ],
+      completedTracks: 0,
+      fraction: 0,
+      writtenBytes: 0,
+    };
+    const reportSubtitle = (
+      id: string,
+      state: SubtitleTrackProgress["state"],
+      bytes?: number,
+    ): void => {
+      const track = subtitleProgress.tracks.find((entry) => entry.id === id);
+      if (!track) return;
+      track.state = state;
+      if (bytes !== undefined) track.bytes = bytes;
+      const finished = subtitleProgress.tracks.filter(
+        (entry) => entry.state === "complete" || entry.state === "skipped",
+      ).length;
+      subtitleProgress.completedTracks = finished;
+      subtitleProgress.fraction = safeFraction(
+        finished,
+        subtitleProgress.tracks.length,
+      );
+      subtitleProgress.writtenBytes = subtitleProgress.tracks.reduce(
+        (sum, entry) => sum + (entry.bytes ?? 0),
+        0,
+      );
+      if (state === "running") {
+        subtitleProgress.currentId = id;
+        subtitleProgress.currentStartedAtMs = Date.now();
+      } else if (subtitleProgress.currentId === id) {
+        delete subtitleProgress.currentId;
+        delete subtitleProgress.currentStartedAtMs;
+      }
+      onEvent?.({
+        type: "subtitle-progress",
+        mediaId: request.mediaId,
+        progress: {
+          ...subtitleProgress,
+          tracks: subtitleProgress.tracks.map((entry) => ({ ...entry })),
+        },
+      });
+    };
+
+    if (subtitleProgress.tracks.length > 0) {
       onEvent?.({
         type: "build-stage",
         mediaId: request.mediaId,
         stage: "subtitles",
+      });
+      onEvent?.({
+        type: "subtitle-progress",
+        mediaId: request.mediaId,
+        progress: {
+          ...subtitleProgress,
+          tracks: subtitleProgress.tracks.map((entry) => ({ ...entry })),
+        },
       });
     }
     for (const streamIndex of plannedSubtitleStreamIndexes) {
@@ -2429,6 +2537,7 @@ export async function packageAdaptiveRendition(
       );
       if (!sourceTrack) continue;
       const id = subtitleRenditionId(streamIndex);
+      reportSubtitle(id, "running");
       const playlistPath = `${ADAPTIVE_SUBTITLE_DIRECTORY}/${id}/${ADAPTIVE_PLAYLIST_FILE}`;
       const subtitlePath = `${ADAPTIVE_SUBTITLE_DIRECTORY}/${id}/${ADAPTIVE_SUBTITLE_FILE}`;
       const absoluteSubtitle = path.join(
@@ -2463,6 +2572,7 @@ export async function packageAdaptiveRendition(
         "utf8",
       );
       subtitleBytes += extracted.fileSizeBytes;
+      reportSubtitle(id, "complete", extracted.fileSizeBytes);
       subtitleRenditions.push({
         id,
         sourceStreamIndex: streamIndex,
@@ -2493,6 +2603,7 @@ export async function packageAdaptiveRendition(
         ...subtitlePath.split("/"),
       );
       let extracted: { fileSizeBytes: number };
+      reportSubtitle(id, "running");
       try {
         extracted = await extractWebVttFile({
           ffmpegPath,
@@ -2513,6 +2624,7 @@ export async function packageAdaptiveRendition(
             sidecar.fileName
           } — ${error instanceof Error ? error.message : String(error)}`,
         );
+        reportSubtitle(id, "skipped");
         continue;
       }
       await writeFile(
@@ -2521,6 +2633,7 @@ export async function packageAdaptiveRendition(
         "utf8",
       );
       subtitleBytes += extracted.fileSizeBytes;
+      reportSubtitle(id, "complete", extracted.fileSizeBytes);
       subtitleRenditions.push({
         id,
         sourceStreamIndex: sidecar.streamIndex,

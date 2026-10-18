@@ -3,7 +3,7 @@
  *
  * One loop, one rule: for every epoch in the plan, either a valid checkpoint
  * already exists and is reused, or one FFmpeg process reads the source once,
- * decodes it once, and produces every rung of the ladder for that five minutes.
+ * decodes it once, and produces every rung of the ladder for that half hour.
  * Nothing else in the system decides what to encode — the CLI and the server
  * job both come through here, so "why did it re-encode that" has one answer.
  *

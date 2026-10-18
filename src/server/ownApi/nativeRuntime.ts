@@ -87,6 +87,12 @@ import {
 import { createProcessingRoutes } from "./processing/processingRoutes";
 import { createProcessingJobRunner } from "./processing/jobRunner";
 import {
+  createDatabaseDriveUploadStore,
+  createDriveRcClient,
+  createDriveUploadTracker,
+  driveRcConfigFromEnvironment,
+} from "./processing/driveUpload";
+import {
   createDatabaseLiveProgressStore,
   pruneLiveProgress,
   shareLiveProgress,
@@ -1064,6 +1070,41 @@ export async function createNativeRuntime({
   // The encoder may be another machine (the helper laptop), so live samples
   // also travel through the database for the API to read.
   shareLiveProgress(createDatabaseLiveProgressStore(pool));
+
+  /*
+   * Where publication lands in a Drive mount's write-back cache, the upload
+   * that follows is tracked from here. Only on the machine that encodes, and
+   * only where the mount's remote control is configured.
+   */
+  const driveRc = processingWorker
+    ? driveRcConfigFromEnvironment(environment)
+    : null;
+  const driveUploads = driveRc
+    ? createDriveUploadTracker({
+        config: driveRc,
+        client: createDriveRcClient(driveRc),
+        store: createDatabaseDriveUploadStore(pool),
+        onFinished: (processingJobId, upload) => {
+          const minutes = Math.max(
+            1,
+            Math.round(
+              ((upload.finishedAtMs ?? upload.updatedAtMs) -
+                upload.startedAtMs) /
+                60_000,
+            ),
+          );
+          void processingJobs
+            .appendEvent({
+              processingJobId,
+              stage: "complete",
+              message: `Uploaded to Google Drive in about ${minutes} min.`,
+            })
+            .catch(() => undefined);
+        },
+      })
+    : undefined;
+  if (driveUploads) void driveUploads.resume().catch(() => undefined);
+
   void pruneLiveProgress(
     (await processingJobs.listActive()).map((job) => job.id),
   ).catch(() => undefined);
@@ -1436,6 +1477,7 @@ export async function createNativeRuntime({
         processingRunner: createProcessingJobRunner({
           // How the processing page names this machine beside its encoder.
           workerName: environment.SEYIRLIK_WORKER_NAME?.trim() || hostname(),
+          ...(driveUploads ? { driveUploads } : {}),
           store: processingJobs,
           paths: renditionPaths,
           mediaRoot,

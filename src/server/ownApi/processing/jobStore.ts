@@ -144,6 +144,10 @@ export interface ProcessingJobRecord {
    * the disk could not answer — and nothing may present it as a perfect result.
    */
   sourceDamage: Record<string, unknown>[] | null;
+  /** One summary per finished build phase of this attempt. */
+  phaseHistory?: Record<string, unknown>[] | null;
+  /** The background upload to Drive after publication, while it is tracked. */
+  driveUpload?: Record<string, unknown> | null;
   /**
    * The scratch volume this job's workspace was claimed on.
    *
@@ -240,6 +244,7 @@ export interface ProcessingJobUpdate {
   validation?: Record<string, unknown> | null;
   warnings?: string[];
   sourceDamage?: Record<string, unknown>[] | null;
+  phaseHistory?: Record<string, unknown>[] | null;
   scratchIdentity?: VolumeIdentity | null;
   errorCode?: string | null;
   errorMessage?: string | null;
@@ -280,6 +285,7 @@ const COLUMNS = `
   bytes_processed, output_bytes, estimated_output_bytes, estimated_staging_bytes,
   speed, fps, eta_seconds, hardware_adapter, video_encoder, processed_by,
   decision, stream_decisions, validation, warnings, source_damage,
+  phase_history, drive_upload,
   error_code, error_message, staging_directory, published_version,
   attempts, cancellation_requested, pause_requested, paused_reason,
   epoch_count, epoch_index, completed_epochs, protected_seconds,
@@ -355,6 +361,8 @@ interface RawRow {
   validation: Record<string, unknown> | null;
   warnings: string[] | null;
   source_damage: Record<string, unknown>[] | null;
+  phase_history: Record<string, unknown>[] | null;
+  drive_upload: Record<string, unknown> | null;
   scratch_volume_uuid: string | null;
   scratch_volume_medium: StorageMedium | null;
   scratch_volume_fs_type: string | null;
@@ -416,6 +424,8 @@ function toRecord(row: RawRow): ProcessingJobRecord {
     streamDecisions: row.stream_decisions,
     validation: row.validation,
     sourceDamage: row.source_damage,
+    phaseHistory: row.phase_history,
+    driveUpload: row.drive_upload,
     /*
      * Only a row that recorded a UUID yields an identity. A medium without one
      * is not a weaker identity, it is none — the same rule the storage-incident
@@ -839,6 +849,14 @@ export function createProcessingJobStore(
             : JSON.stringify(update.sourceDamage),
         );
       }
+      if (update.phaseHistory !== undefined) {
+        set(
+          "phase_history",
+          update.phaseHistory === null
+            ? null
+            : JSON.stringify(update.phaseHistory),
+        );
+      }
       if (update.scratchIdentity !== undefined) {
         set("scratch_volume_uuid", update.scratchIdentity?.volumeUuid ?? null);
         set("scratch_volume_medium", update.scratchIdentity?.medium ?? null);
@@ -1023,6 +1041,8 @@ export function createProcessingJobStore(
             * not looked at the disk yet.
             */
            source_damage = NULL,
+           phase_history = NULL,
+           drive_upload = NULL,
            error_code = NULL,
            error_message = NULL,
            cancellation_requested = false,

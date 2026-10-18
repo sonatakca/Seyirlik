@@ -34,7 +34,9 @@ import type { ProcessingStage } from "./stages";
 import type {
   AssemblyPhaseProgress,
   AudioPhaseProgress,
+  PlanningPhaseProgress,
   PublishPhaseProgress,
+  SubtitlePhaseProgress,
   VerificationPhaseProgress,
 } from "../../../renditions/adaptive/phaseProgress";
 import type { SourceDamageRecord } from "../../../renditions/adaptive/epochs/salvage";
@@ -147,12 +149,16 @@ export interface LiveProgressSnapshot {
   globalProgress?: number;
   /** How far through the current phase, measured by that phase's own work. */
   phaseFraction?: number;
+  /** When the current phase began, so a panel can say how long it has run. */
+  phaseStartedAtMs?: number;
   /**
    * The current phase's own detail. Exactly one is present at a time — the one
    * belonging to `phase` — and it is absent entirely during video, whose
    * detail is the epoch fields above.
    */
+  planning?: PlanningPhaseProgress;
   audio?: AudioPhaseProgress;
+  subtitles?: SubtitlePhaseProgress;
   assembly?: AssemblyPhaseProgress;
   verification?: VerificationPhaseProgress;
   publish?: PublishPhaseProgress;

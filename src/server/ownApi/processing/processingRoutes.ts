@@ -2,6 +2,7 @@ import { stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import { OwnApiError } from "../ownApiHandler";
 import { sendData } from "../api/envelope";
+import { publicDriveUpload } from "./driveUploadStatus";
 import type { RouteDefinition } from "../api/router";
 import {
   asObjectBody,
@@ -157,6 +158,9 @@ function toJobDto(job: ProcessingJobRecord) {
      * state alone cannot say. It carries seconds and counts only — never a path.
      */
     sourceDamage: job.sourceDamage,
+    phaseHistory: job.phaseHistory ?? null,
+    // Progress only; the stored copy also holds the folder it watches.
+    driveUpload: publicDriveUpload(job.driveUpload),
     errorCode: job.errorCode,
     errorMessage: job.errorMessage,
     publishedVersion: job.publishedVersion,

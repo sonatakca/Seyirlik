@@ -262,9 +262,14 @@ export function planMatches(
   if (plan.profileVersion !== expected.profileVersion) {
     return { ok: false, reason: "profile-version" };
   }
-  if (plan.epochTargetSeconds !== expected.epochTargetSeconds) {
-    return { ok: false, reason: "epoch-target" };
-  }
+  /*
+   * The epoch length is deliberately not compared. A plan carries its own
+   * boundaries, and every checkpoint under it was cut on them, so a plan made
+   * under a different length is still a whole, joinable description of this
+   * build. Refusing it would discard hours of finished epochs because a deploy
+   * changed the length new plans are made with — which is the one thing a
+   * checkpoint exists to survive. The new length applies from the next plan.
+   */
   if (plan.segmentSeconds !== expected.segmentSeconds) {
     return { ok: false, reason: "segment-target" };
   }

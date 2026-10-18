@@ -2,7 +2,9 @@ import type { RenditionVideoEncoder } from "./encoding";
 import type {
   AssemblyPhaseProgress,
   AudioPhaseProgress,
+  PlanningPhaseProgress,
   PublishPhaseProgress,
+  SubtitlePhaseProgress,
   VerificationPhaseProgress,
 } from "./adaptive/phaseProgress";
 import type {
@@ -236,6 +238,16 @@ export type RenditionProgressEvent =
       type: "audio-progress";
       mediaId: string;
       progress: AudioPhaseProgress;
+    }
+  | {
+      type: "planning-progress";
+      mediaId: string;
+      progress: PlanningPhaseProgress;
+    }
+  | {
+      type: "subtitle-progress";
+      mediaId: string;
+      progress: SubtitlePhaseProgress;
     }
   | {
       type: "assembly-progress";

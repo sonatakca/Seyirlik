@@ -9,8 +9,11 @@ import type {
   AssemblyRenditionProgress,
   AudioPhaseProgress,
   AudioTrackProgress,
+  PlanningPhaseProgress,
   PublishPhaseProgress,
   PublishStepProgress,
+  SubtitlePhaseProgress,
+  SubtitleTrackProgress,
   VerificationPhaseProgress,
 } from "../renditions/adaptive/phaseProgress";
 import type {
@@ -18,16 +21,25 @@ import type {
   SourceInterval,
 } from "../renditions/adaptive/epochs/salvage";
 import type { SourceIoStatus } from "../server/ownApi/processing/liveProgress";
+import type { DriveUploadStatus } from "../server/ownApi/processing/driveUploadStatus";
 
-export type { SourceDamageRecord, SourceInterval, SourceIoStatus };
+export type {
+  DriveUploadStatus,
+  SourceDamageRecord,
+  SourceInterval,
+  SourceIoStatus,
+};
 
 export type {
   AssemblyPhaseProgress,
   AssemblyRenditionProgress,
   AudioPhaseProgress,
   AudioTrackProgress,
+  PlanningPhaseProgress,
   PublishPhaseProgress,
   PublishStepProgress,
+  SubtitlePhaseProgress,
+  SubtitleTrackProgress,
   VerificationPhaseProgress,
 };
 
@@ -193,6 +205,16 @@ export interface ProcessingJob {
    * two as the same outcome.
    */
   sourceDamage: SourceDamageRecord[] | null;
+  /**
+   * One summary per finished build phase, kept on the row so a finished card
+   * can still say how its build went. Absent from servers that predate it.
+   */
+  phaseHistory?: CompletedPhaseSummary[] | null;
+  /**
+   * The package's upload to Google Drive after publication, where publishing
+   * only reached a mount's cache. Null where there is no such upload.
+   */
+  driveUpload?: DriveUploadStatus | null;
   errorCode: string | null;
   errorMessage: string | null;
   publishedVersion: string | null;
@@ -304,8 +326,12 @@ export interface ProcessingLiveProgress {
   globalProgress?: number;
   /** How far through the current phase, by that phase's own measure. */
   phaseFraction?: number;
+  /** When the current phase began, so a panel can say how long it has run. */
+  phaseStartedAtMs?: number;
   /** Present only for the phase named by `phase`. */
+  planning?: PlanningPhaseProgress;
   audio?: AudioPhaseProgress;
+  subtitles?: SubtitlePhaseProgress;
   assembly?: AssemblyPhaseProgress;
   verification?: VerificationPhaseProgress;
   publish?: PublishPhaseProgress;

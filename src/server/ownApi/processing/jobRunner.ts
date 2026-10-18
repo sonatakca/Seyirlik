@@ -76,6 +76,7 @@ import {
   type StorageGuard,
 } from "./storageGuard";
 import { createDependencyGate } from "../../../renditions/processing/dependencyGate";
+import type { DriveUploadTracker } from "./driveUpload";
 import {
   clearLiveProgress,
   writeLiveProgress,
@@ -223,11 +224,16 @@ export interface ProcessingJobRunnerDeps {
   /** Reads a path's volume identity. `diskutil` in production, injected in tests. */
   scratchIdentityProbe?: StorageIdentityProbe;
   /**
-   * Nominal epoch length. Five minutes in production; a deployment with very
+   * Nominal epoch length. Thirty minutes in production; a deployment with very
    * short titles or very slow storage can shorten it, at the cost of one FFmpeg
    * start and one validation pass more often.
    */
   epochTargetSeconds?: number;
+  /**
+   * Follows a published package up to Google Drive, where publication only
+   * reaches a mount's write-back cache. Absent where there is no such mount.
+   */
+  driveUploads?: DriveUploadTracker;
   /**
    * What to do when part of a source cannot be read at all.
    *
@@ -436,6 +442,7 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
     storageGuard = createPermissiveStorageGuard(),
     scratchIdentityProbe,
     epochTargetSeconds,
+    driveUploads,
     sourceDamagePolicy = sourceDamagePolicyFromEnvironment(),
     stalls = stallThresholds(),
   } = deps;
@@ -1080,7 +1087,9 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
       writtenBytes?: number;
       globalProgress?: number;
       phaseFraction?: number;
+      planning?: LiveProgressSnapshot["planning"];
       audio?: LiveProgressSnapshot["audio"];
+      subtitles?: LiveProgressSnapshot["subtitles"];
       assembly?: LiveProgressSnapshot["assembly"];
       verification?: LiveProgressSnapshot["verification"];
       publish?: LiveProgressSnapshot["publish"];
@@ -1201,6 +1210,16 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
       );
       if (!completedPhases.some((entry) => entry.phase === phase)) {
         completedPhases.push({ phase, elapsedSeconds, ...summary });
+        /*
+         * Onto the row as well as into the sample. The sample is cleared when
+         * the job ends, and the history is the one thing a finished card has
+         * left to say how the build went.
+         */
+        void store
+          .update(job.id, {
+            phaseHistory: completedPhases.map((entry) => ({ ...entry })),
+          })
+          .catch(() => undefined);
       }
       phaseStartedMs = Date.now();
     };
@@ -1245,7 +1264,10 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
         ...(live.phaseFraction === undefined
           ? {}
           : { phaseFraction: live.phaseFraction }),
+        phaseStartedAtMs: phaseStartedMs,
+        ...(live.planning === undefined ? {} : { planning: live.planning }),
         ...(live.audio === undefined ? {} : { audio: live.audio }),
+        ...(live.subtitles === undefined ? {} : { subtitles: live.subtitles }),
         ...(live.assembly === undefined ? {} : { assembly: live.assembly }),
         ...(live.verification === undefined
           ? {}
@@ -1753,6 +1775,22 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
                    * the thousands of measurements that produced it.
                    */
                   switch (live.phase) {
+                    case "planning":
+                      closePhase("planning", {
+                        ...(live.planning?.epochCount === undefined
+                          ? {}
+                          : { count: live.planning.epochCount }),
+                        ...(live.planning?.rateProbe?.reused
+                          ? { reused: true }
+                          : {}),
+                      });
+                      break;
+                    case "subtitles":
+                      closePhase("subtitles", {
+                        count: live.subtitles?.completedTracks ?? 0,
+                        bytes: live.subtitles?.writtenBytes ?? 0,
+                      });
+                      break;
                     case "encoding":
                       closePhase("encoding", {
                         count: live.completedEpochs,
@@ -1785,7 +1823,9 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
                     default:
                       closePhase(live.phase, {});
                   }
+                  live.planning = undefined;
                   live.audio = undefined;
+                  live.subtitles = undefined;
                   live.assembly = undefined;
                   live.verification = undefined;
                   live.publish = undefined;
@@ -2302,6 +2342,40 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
                 return;
               }
 
+              case "planning-progress": {
+                /*
+                 * Planning has no measurable total — the rate probe's search
+                 * runs as long as its answers require — so the bar moves by
+                 * step and the panel reports the work done in each.
+                 */
+                const first = live.planning?.step !== event.progress.step;
+                live.planning = event.progress;
+                advance(
+                  "planning",
+                  event.progress.step === "timeline" ? 0 : 0.5,
+                );
+                publishLiveThrottled(first);
+                return;
+              }
+
+              case "subtitle-progress": {
+                live.subtitles = event.progress;
+                const global = advance("subtitles", event.progress.fraction);
+                // Each sample is a track starting or finishing: all of them
+                // are state changes, and there are only a handful.
+                publishLiveThrottled(true);
+                if (Date.now() - lastPersistMs >= PERSIST_INTERVAL_MS) {
+                  lastPersistMs = Date.now();
+                  void store
+                    .update(job.id, {
+                      stageProgress: event.progress.fraction,
+                      overallProgress: Math.max(lastOverall, global),
+                    })
+                    .catch(() => undefined);
+                }
+                return;
+              }
+
               case "assembly-progress": {
                 const first = live.assembly === undefined;
                 live.assembly = event.progress;
@@ -2580,6 +2654,18 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
       overallProgress: globalProgress(weights, "publishing", 1),
     });
 
+    /*
+     * The packager returned, so publication — the last phase it reports — is
+     * over. Closed here because no further stage event will close it.
+     */
+    if (live.phase === "publishing") {
+      closePhase("publishing", {
+        ...(live.publish?.completedBytes
+          ? { bytes: live.publish.completedBytes }
+          : {}),
+      });
+    }
+
     // -------------------------------------------------------- publishing
     await enterStage(job, "publishing", "Publishing the verified package.");
     await clearLiveProgress(job.id);
@@ -2635,6 +2721,23 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
     registryItem.adaptiveProfileVersion = ADAPTIVE_PROFILE_VERSION;
     delete registryItem.adaptiveLastError;
     await saveRenditionRegistry(registryPath, registry);
+
+    /*
+     * Published here means written into the mount's cache. The upload to
+     * Drive carries on in the background and is followed from there; the job
+     * does not wait for it, so the encoder is already free for the next title.
+     */
+    if (driveUploads && result.status !== "already-valid") {
+      void titleRootForInput(input)
+        .then((directory) =>
+          driveUploads.track({
+            processingJobId: job.id,
+            directory,
+            totalBytes: result.jobOutputBytes ?? result.storageBytes ?? 0,
+          }),
+        )
+        .catch(() => undefined);
+    }
 
     /*
      * Publication is now reflected in both durable records. Until this point
