@@ -75,6 +75,7 @@ import {
   workerLanes,
 } from "./tasks/workerRole";
 import { parseDeleteMissing, parseRescanMinutes } from "./scanner/scanSettings";
+import { deviceLossEvidence } from "./processing/storageLoss";
 import { createTaskRoutes } from "./tasks/taskRoutes";
 import {
   createProcessingJobStore,
@@ -818,7 +819,8 @@ export async function createNativeRuntime({
        * nothing is running. Only the acting on it is gated below.
        */
       const active = await processingJobs.listActive().catch(() => []);
-      if (active.length > 0) {
+      const evidence = deviceLossEvidence(processingWorker, active);
+      if (evidence) {
         /*
          * Missing at idle is a clean unmount. Missing while an encoder or
          * probe has the source open is device loss during a read, which is
@@ -829,7 +831,7 @@ export async function createNativeRuntime({
         await storageGuard.reportFailure({
           kind: "storage-device-lost",
           detail: `${storageWatchdog.missingRoots.join(", ") || "The storage"} disappeared while processing was active.`,
-          processingJobId: active[0]?.id,
+          processingJobId: evidence.id,
         });
       } else {
         await storageGuard.observeAvailability(false);
