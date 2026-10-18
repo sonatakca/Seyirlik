@@ -1746,6 +1746,9 @@ export async function createNativeRuntime({
       mediaRoot,
       workRoot: storageRoles.jobsRoot,
       ...(ffmpegPath ? { ffmpegPath } : {}),
+      // A `light` worker here means encodes run on another machine, whose own
+      // scratch is what a job will spend.
+      processingElsewhere: workerRole === "light",
     }),
     ...(tmdb
       ? [

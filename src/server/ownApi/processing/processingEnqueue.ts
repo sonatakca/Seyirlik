@@ -66,6 +66,15 @@ export interface ProcessingEnqueueOptions {
   ffprobePath: string;
   hardware: () => Promise<HardwareReport>;
   storageGuard: StorageGuard;
+  /**
+   * Encodes run on another machine (this host's worker is `light`).
+   *
+   * Free space on this host's scratch then says nothing about the job, so it is
+   * not measured: the estimate is left unknown rather than refused on the
+   * wrong disk. The worker that claims the job checks its own scratch before
+   * planning, which is where the space is actually spent.
+   */
+  processingElsewhere?: boolean;
 }
 
 export interface LocatedSource {
@@ -201,6 +210,7 @@ export function createProcessingEnqueuer({
   ffprobePath,
   hardware,
   storageGuard,
+  processingElsewhere = false,
 }: ProcessingEnqueueOptions): ProcessingEnqueuer {
   const resolvedMediaRoot = path.resolve(mediaRoot);
 
@@ -347,7 +357,9 @@ export function createProcessingEnqueuer({
     }
     const probe = await probeMediaFile(absolutePath, ffprobePath);
     const report = await hardware();
-    const freeBytes = await freeBytesOn(workRoot);
+    const freeBytes = processingElsewhere
+      ? undefined
+      : await freeBytesOn(workRoot);
     const fingerprint = await computeSourceFingerprint(absolutePath, stats);
     const titleRoot = await titleRootFor(itemId, absolutePath);
     const existing = await existingPackage(titleRoot, fingerprint);

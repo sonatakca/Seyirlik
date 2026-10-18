@@ -67,6 +67,8 @@ export interface ProcessingRoutesOptions {
   /** Scratch root used by the worker, including its job directories. */
   workRoot: string;
   ffmpegPath?: string;
+  /** See `ProcessingEnqueueOptions.processingElsewhere`. */
+  processingElsewhere?: boolean;
   ffprobePath?: string;
   /**
    * Whether the media volume is currently mounted. Injected rather than probed
@@ -264,6 +266,7 @@ export function createProcessingRoutes({
   mediaRoot,
   workRoot,
   ffmpegPath = process.env.SEYIRLIK_FFMPEG_PATH ?? "ffmpeg",
+  processingElsewhere = false,
   ffprobePath = process.env.SEYIRLIK_FFPROBE_PATH ?? "ffprobe",
   storageAvailable = () => true,
   storageGuard = createPermissiveStorageGuard(),
@@ -337,6 +340,7 @@ export function createProcessingRoutes({
     ffprobePath,
     hardware,
     storageGuard,
+    processingElsewhere,
   });
   const { locateSource, statSource, existingPackage, analyse } = enqueuer;
 

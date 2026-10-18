@@ -412,6 +412,7 @@ function build(
   library: Library,
   seed: ProcessingJobRecord[] = [],
   workRoot = library.root,
+  processingElsewhere = false,
 ) {
   const store = createStore(seed);
   const queue = createQueue();
@@ -421,6 +422,7 @@ function build(
     queue,
     mediaRoot: library.root,
     workRoot,
+    processingElsewhere,
   });
   return { routes, store, queue };
 }
@@ -591,6 +593,34 @@ describe("processing scratch capacity", () => {
       expect(queued.error?.statusCode).toBe(507);
       expect(store.created).toHaveLength(0);
       expect(queue.enqueued).toHaveLength(0);
+    } finally {
+      space.mockRestore();
+    }
+  });
+});
+
+describe("encodes that run on another machine", () => {
+  /*
+   * The server's worker is `light` and a laptop encodes. The server's own
+   * scratch says nothing about that job, and refusing on it blocked every
+   * title while the laptop had hundreds of gigabytes free.
+   */
+  it("queues the job without measuring this host's scratch", async () => {
+    const library = await buildLibrary(SEASON_ONE);
+    const workRoot = path.join(library.root, "scratch");
+    const space = vi
+      .spyOn(processingDecision, "freeBytesOn")
+      .mockImplementation(async () => 1_000_000);
+    try {
+      const { routes, store, queue } = build(library, [], workRoot, true);
+      const itemId = library.rows.find((row) => row.kind === "episode")!.itemId;
+      const queued = await call(routes, "POST", "/processing/jobs", {
+        body: { itemId },
+      });
+      expect(queued.error).toBeUndefined();
+      expect(store.created).toHaveLength(1);
+      expect(queue.enqueued).toHaveLength(1);
+      expect(space).not.toHaveBeenCalledWith(workRoot);
     } finally {
       space.mockRestore();
     }
