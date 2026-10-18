@@ -21,6 +21,11 @@ import {
 } from "../api/validation";
 import type { JobQueue } from "../tasks/jobQueue";
 import { ACQUISITION_JOB_TYPES } from "./acquisitionJobs";
+import {
+  createAcquisitionFallback,
+  mediaTargetOf,
+  type AcquisitionFallbackOptions,
+} from "./acquisitionFallback";
 import type {
   AcquisitionRepository,
   AcquisitionSummary,
@@ -29,14 +34,11 @@ import {
   BLOCKLISTABLE_STATES,
   type AcquisitionService,
 } from "./acquisitionService";
-import type { AcquisitionTarget } from "./acquisitionRepository";
 import type { IndexerRegistry } from "../indexers/indexerRegistry";
 import type { SabJob, SabnzbdClient } from "./sabnzbd";
 import { SabError } from "./sabnzbd";
 import { IndexerError } from "../indexers/indexerTypes";
 import type { IndexerSearchService } from "../indexers/searchService";
-import { selectRelease, type MediaTarget } from "../releases/decide";
-import { searchFor } from "../releases/releaseRoutes";
 import type { PolicyRepository } from "../releases/policyRepository";
 import type { BlocklistRepository } from "../releases/blocklistRepository";
 
@@ -212,27 +214,6 @@ function progressOf(
 }
 
 /** The decision engine's view of what an acquisition was for. */
-function mediaTargetOf(target: AcquisitionTarget): MediaTarget | null {
-  if (target.kind === "movie") {
-    return {
-      kind: "movie",
-      title: target.title,
-      ...(target.year === undefined ? {} : { year: target.year }),
-    };
-  }
-  if (target.season === undefined) return null;
-  if (target.kind === "season") {
-    return { kind: "season", title: target.title, season: target.season };
-  }
-  if (target.episode === undefined) return null;
-  return {
-    kind: "episode",
-    title: target.title,
-    season: target.season,
-    episode: target.episode,
-  };
-}
-
 export interface CreateAcquisitionRoutesOptions {
   readonly repository: AcquisitionRepository;
   readonly service: AcquisitionService;
@@ -242,6 +223,11 @@ export interface CreateAcquisitionRoutesOptions {
   readonly search: IndexerSearchService;
   readonly policies: PolicyRepository;
   readonly blocklist: BlocklistRepository;
+  /**
+   * The episodes of a series' season, for replacing a season pack episode by
+   * episode. Without it a season with no other pack stays failed.
+   */
+  readonly episodesOf?: AcquisitionFallbackOptions["episodesOf"];
 }
 
 export function createAcquisitionRoutes({
@@ -253,7 +239,17 @@ export function createAcquisitionRoutes({
   search,
   policies,
   blocklist,
+  episodesOf = async () => [],
 }: CreateAcquisitionRoutesOptions): RouteDefinition[] {
+  const fallback = createAcquisitionFallback({
+    repository,
+    search,
+    policies,
+    blocklist,
+    queue,
+    episodesOf,
+    submitJobType: ACQUISITION_JOB_TYPES.submit,
+  });
   return [
     {
       method: "GET",
@@ -660,11 +656,10 @@ export function createAcquisitionRoutes({
           return;
         }
 
-        const target = mediaTargetOf(searchContext.target);
         const policy = searchContext.profileId
           ? await policies.load(searchContext.profileId)
           : null;
-        if (!target || !policy) {
+        if (!mediaTargetOf(searchContext.target) || !policy) {
           // Nothing recorded to repeat the decision with. The Releases page
           // can still be used by hand.
           sendData(context.response, context.requestId, {
@@ -679,11 +674,17 @@ export function createAcquisitionRoutes({
         const abort = () => controller.abort();
         context.request.once("aborted", abort);
         context.request.once("close", abort);
-        let found;
+        let choice;
         try {
-          found = await search.search(searchFor(target, undefined), {
-            signal: controller.signal,
-          });
+          // The release is already on the blocklist, so the search cannot
+          // recommend it again; a season with no other pack falls back to its
+          // episodes (see acquisitionFallback.ts).
+          choice = await fallback.choose(
+            searchContext.target,
+            policy,
+            null,
+            controller.signal,
+          );
         } catch (error) {
           if (error instanceof IndexerError) {
             throw new OwnApiError(
@@ -698,14 +699,7 @@ export function createAcquisitionRoutes({
           context.request.off("close", abort);
         }
 
-        const result = selectRelease(target, found.releases, {
-          profile: policy.profile,
-          preferences: policy.preferences,
-          isBlocklisted: await blocklist.matcherFor(found.releases),
-          current: null,
-        });
-        const winner = result.winner;
-        if (!winner) {
+        if (choice.kind === "none") {
           await repository.update(
             id,
             "failed",
@@ -723,58 +717,23 @@ export function createAcquisitionRoutes({
           return;
         }
 
-        /*
-         * Superseding is the claim. Two operators pressing this at once both
-         * search, but only one of them moves the row out of `failed`, and
-         * only that one creates the replacement.
-         */
-        if (
-          !(await repository.update(
-            id,
-            "failed",
-            { state: "superseded" },
-            `Replaced by ${winner.release.title}.`,
-          ))
-        ) {
+        const applied = await fallback.apply(id, choice, policy);
+        if (!applied) {
           throw new OwnApiError(
             "ACQUISITION_CHANGED",
             "The acquisition changed while it was being searched again.",
             409,
           );
         }
-
-        const replacement = await repository.create({
-          target: searchContext.target,
-          indexerId: winner.release.indexerId,
-          releaseGuid: winner.release.guid,
-          releaseTitle: winner.release.title,
-          origin: "fallback",
-          evidence: {
-            profileId: policy.profile.id,
-            profileName: policy.profile.name,
-            policySnapshot: {},
-            releaseFacts: winner.facts,
-            score: winner.score,
-            reasons: winner.reasons,
-            rejected: result.candidates
-              .filter((candidate) => !candidate.accepted)
-              .slice(0, 50)
-              .map((candidate) => ({
-                title: candidate.release.title,
-                reason: candidate.rejection,
-              })),
-          },
-        });
-        await repository.supersedeFailedFor(replacement.id);
-        const taskId = await queue.enqueue({
-          jobType: ACQUISITION_JOB_TYPES.submit,
-          payload: { acquisitionId: replacement.id },
-          dedupeKey: submitDedupeKey(replacement.id),
-        });
         sendData(
           context.response,
           context.requestId,
-          { searched: true, replacement: toDto(replacement), taskId },
+          {
+            searched: true,
+            replacement: toDto(applied.created[0]!),
+            replacements: applied.created.map((created) => toDto(created)),
+            taskId: applied.taskIds[0],
+          },
           202,
         );
       },

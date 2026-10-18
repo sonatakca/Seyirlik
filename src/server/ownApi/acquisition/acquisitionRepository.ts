@@ -107,6 +107,18 @@ export interface AcquisitionRepository extends AcquisitionStore {
    * the page say a title needs attention while it is downloading.
    */
   supersedeFailedFor(acquisitionId: string): Promise<number>;
+  /**
+   * Whether this target already has a download that is running or done.
+   *
+   * Asked before a season is replaced episode by episode, so an episode that
+   * is already downloading, or already downloaded, is not fetched twice.
+   */
+  hasLiveAcquisitionFor(target: AcquisitionTarget): Promise<boolean>;
+  /**
+   * How many replacements this acquisition's target has had: the fallback
+   * acquisitions for the same title. Bounds automatic retries per title.
+   */
+  replacementsFor(acquisitionId: string): Promise<number>;
   /** What was asked for, and against which profile — enough to ask again. */
   searchContext(id: string): Promise<{
     target: AcquisitionTarget;
@@ -382,6 +394,59 @@ export function createAcquisitionRepository(
         [acquisitionId],
       );
       return result.rows.length;
+    },
+
+    async hasLiveAcquisitionFor(target) {
+      // The same matching `supersedeFailedFor` uses: the catalogue item when
+      // both name one, otherwise kind, title, season and episode.
+      const result = await pool.query<{ live: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM acquisitions a
+            WHERE a.state NOT IN ('failed','cancelled','superseded')
+              AND a.target_kind = $1
+              AND (
+                ($2::uuid IS NOT NULL AND a.target_item_id = $2::uuid)
+                OR (
+                  lower(a.target_title) = lower($3)
+                  AND (a.target_year IS NULL OR $4::int IS NULL
+                       OR a.target_year = $4::int)
+                  AND a.target_season IS NOT DISTINCT FROM $5::int
+                  AND a.target_episode IS NOT DISTINCT FROM $6::int
+                )
+              )
+         ) AS live`,
+        [
+          target.kind,
+          target.itemId ?? null,
+          target.title,
+          target.year ?? null,
+          target.season ?? null,
+          target.episode ?? null,
+        ],
+      );
+      return result.rows[0]?.live === true;
+    },
+
+    async replacementsFor(acquisitionId) {
+      const result = await pool.query<{ count: string }>(
+        `WITH this AS (SELECT * FROM acquisitions WHERE id = $1)
+         SELECT count(*) AS count
+           FROM acquisitions a, this n
+          WHERE a.origin = 'fallback'
+            AND a.target_kind = n.target_kind
+            AND (
+              (a.target_item_id IS NOT NULL AND a.target_item_id = n.target_item_id)
+              OR (
+                lower(a.target_title) = lower(n.target_title)
+                AND (a.target_year IS NULL OR n.target_year IS NULL
+                     OR a.target_year = n.target_year)
+                AND a.target_season IS NOT DISTINCT FROM n.target_season
+                AND a.target_episode IS NOT DISTINCT FROM n.target_episode
+              )
+            )`,
+        [acquisitionId],
+      );
+      return Number(result.rows[0]?.count ?? 0);
     },
 
     async searchContext(id) {

@@ -151,6 +151,10 @@ import { createIndexerRoutes } from "./indexers/indexerRoutes";
 import { createPolicyRepository } from "./releases/policyRepository";
 import { createReleaseRoutes } from "./releases/releaseRoutes";
 import { createBlocklistRepository } from "./releases/blocklistRepository";
+import {
+  createAcquisitionFallback,
+  createCatalogueEpisodeLookup,
+} from "./acquisition/acquisitionFallback";
 import { createMonitoringRepository } from "./releases/monitoringRepository";
 import { createWantedRoutes } from "./catalogue/wantedRoutes";
 import { createLibraryAdminRepository } from "./catalogue/libraryAdmin";
@@ -1107,6 +1111,7 @@ export async function createNativeRuntime({
   const indexerSearch = createIndexerSearchService(indexerRegistry);
   const releasePolicies = createPolicyRepository(pool);
   const releaseBlocklist = createBlocklistRepository(pool);
+  const seasonEpisodes = createCatalogueEpisodeLookup(pool);
 
   /*
    * The download client, when one is configured.
@@ -1485,6 +1490,21 @@ export async function createNativeRuntime({
         ? createAcquisitionJobHandlers(
             acquisition.service,
             acquisition.repository,
+            {
+              // A release that can never complete is replaced by the next
+              // acceptable one without waiting for an operator.
+              fallback: createAcquisitionFallback({
+                repository: acquisition.repository,
+                search: indexerSearch,
+                policies: releasePolicies,
+                blocklist: releaseBlocklist,
+                queue,
+                episodesOf: seasonEpisodes,
+                submitJobType: ACQUISITION_JOB_TYPES.submit,
+              }),
+              blocklist: releaseBlocklist,
+              queue,
+            },
           )
         : {}),
       [GARBAGE_JOB_TYPES.collect]: collectGarbageJob,
@@ -1674,6 +1694,7 @@ export async function createNativeRuntime({
           search: indexerSearch,
           policies: releasePolicies,
           blocklist: releaseBlocklist,
+          episodesOf: seasonEpisodes,
         })
       : []),
     ...(importing && importStarter

@@ -266,6 +266,52 @@ integration("acquisitions in PostgreSQL", () => {
     expect(completed.rows[0]!.completed_at).toBeInstanceOf(Date);
   });
 
+  it("knows whether an episode already has a download, by its own title", async () => {
+    const episode = (n: number) => ({
+      ...input,
+      target: {
+        kind: "episode" as const,
+        title: "Replacement Show",
+        season: 1,
+        episode: n,
+      },
+    });
+    const first = await repository.create(episode(1));
+    expect(await repository.hasLiveAcquisitionFor(episode(1).target)).toBe(
+      true,
+    );
+    expect(await repository.hasLiveAcquisitionFor(episode(2).target)).toBe(
+      false,
+    );
+
+    // A failed download is not one: the episode is still wanted.
+    await repository.update(first.id, "planned", {
+      state: "failed",
+      failureClass: "missing-articles",
+    });
+    expect(await repository.hasLiveAcquisitionFor(episode(1).target)).toBe(
+      false,
+    );
+  });
+
+  it("counts the replacements a title has had", async () => {
+    const season = {
+      ...input,
+      target: { kind: "season" as const, title: "Counted Show", season: 2 },
+    };
+    const original = await repository.create(season);
+    expect(await repository.replacementsFor(original.id)).toBe(0);
+    await repository.create({ ...season, origin: "fallback" });
+    await repository.create({ ...season, origin: "fallback" });
+    // Another season of the same show is another title.
+    await repository.create({
+      ...season,
+      target: { ...season.target, season: 3 },
+      origin: "fallback",
+    });
+    expect(await repository.replacementsFor(original.id)).toBe(2);
+  });
+
   it("returns nothing for an acquisition that does not exist", async () => {
     const absent = "00000000-0000-4000-8000-000000000000";
     expect(await repository.get(absent)).toBeNull();
