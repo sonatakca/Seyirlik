@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowDownToLine, Play, RotateCw, Trash2, WifiOff } from "lucide-react";
+import { BackButton } from "../components/BackButton";
 import { useLanguage } from "../i18n/LanguageContext";
 import {
   cancelDownload,
@@ -195,7 +196,10 @@ export function DownloadsPage() {
   }, [load, t]);
 
   return (
-    <main className="mx-auto min-h-screen w-full max-w-4xl px-4 pb-24 pt-24 text-white sm:px-6 sm:pt-28">
+    <main className="mx-auto min-h-screen w-full max-w-4xl px-4 pb-24 pt-[calc(env(safe-area-inset-top)+1.5rem)] text-white sm:px-6 sm:pt-12">
+      {/* Routed outside the app shell so it works offline, which leaves it
+          without the navbar; the way out is the homepage, as on Alerts. */}
+      <BackButton to="/home" label={t("common.home")} className="mb-8" />
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-3xl font-black tracking-tight sm:text-4xl">
