@@ -264,6 +264,30 @@ export function describeJobs(
   return titles;
 }
 
+/**
+ * This machine's encoders, detected at most once a minute.
+ *
+ * Shared by the routes and by anything else that queues processing, so both
+ * describe a job with the adapter the same detection chose.
+ */
+export function createHardwareDetector(
+  ffmpegPath: string,
+): () => Promise<HardwareReport> {
+  let hardwareCache: { report: HardwareReport; at: number } | null = null;
+  return async () => {
+    if (hardwareCache && Date.now() - hardwareCache.at < HARDWARE_CACHE_MS) {
+      return hardwareCache.report;
+    }
+    const report = await detectHardware({
+      ffmpegPath,
+      probeWidth: 1920,
+      probeHeight: 1080,
+    });
+    hardwareCache = { report, at: Date.now() };
+    return report;
+  };
+}
+
 export function createProcessingRoutes({
   catalogue,
   store,
@@ -316,20 +340,7 @@ export function createProcessingRoutes({
     /** True when verification has passed and only the resume press remains. */
     awaitingResume: storageGuard.health.state === "recovery-pending",
   });
-  let hardwareCache: { report: HardwareReport; at: number } | null = null;
-
-  async function hardware(): Promise<HardwareReport> {
-    if (hardwareCache && Date.now() - hardwareCache.at < HARDWARE_CACHE_MS) {
-      return hardwareCache.report;
-    }
-    const report = await detectHardware({
-      ffmpegPath,
-      probeWidth: 1920,
-      probeHeight: 1080,
-    });
-    hardwareCache = { report, at: Date.now() };
-    return report;
-  }
+  const hardware = createHardwareDetector(ffmpegPath);
 
   /*
    * The one path that creates a job, shared by the single-title button, the

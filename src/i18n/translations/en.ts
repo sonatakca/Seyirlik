@@ -29,6 +29,7 @@ export const en = {
   "tasks.importRun": "Importing media",
   "tasks.importReconcile": "Checking imports",
   "tasks.importHandoff": "Handing downloads to the importer",
+  "tasks.importProcess": "Queueing imports for processing",
   "tasks.storageCollect": "Clearing Seyirlik's leftovers",
   "tasks.started": "Started",
   "tasks.refused": "Could not start",
@@ -50,6 +51,7 @@ export const en = {
   "tasks.awaitingAlternative": "Need another release",
   "tasks.committed": "Imported",
   "tasks.needsAttention": "Need attention",
+  "tasks.gaveUp": "Left for you to queue",
 
   "wanted.catalogue": "Find movies and shows",
   "wanted.description":

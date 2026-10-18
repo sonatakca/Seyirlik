@@ -29,6 +29,7 @@ export const tr = {
   "tasks.importRun": "Medya içe aktarılıyor",
   "tasks.importReconcile": "İçe aktarmalar kontrol ediliyor",
   "tasks.importHandoff": "İndirmeler içe aktarıcıya veriliyor",
+  "tasks.importProcess": "İçe aktarılanlar işleme sırasına alınıyor",
   "tasks.storageCollect": "Seyirlik artıkları temizleniyor",
   "tasks.started": "Başlatılan",
   "tasks.refused": "Başlatılamayan",
@@ -50,6 +51,7 @@ export const tr = {
   "tasks.awaitingAlternative": "Başka sürüm gereken",
   "tasks.committed": "İçe aktarılan",
   "tasks.needsAttention": "Müdahale gereken",
+  "tasks.gaveUp": "Sıraya almanız gereken",
 
   "wanted.catalogue": "Film ve dizi bul",
   "wanted.description":

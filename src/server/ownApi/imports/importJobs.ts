@@ -6,13 +6,15 @@
  * survives a service restart is exactly what those were built for.
  *
  * Two handlers. One carries a single import as far as it can get; the other
- * sweeps the rows whose filesystem outcome nobody knows. Everything else —
+ * sweeps the rows whose filesystem outcome nobody knows. (A third, beside
+ * them, hands what was imported to processing.) Everything else —
  * retry, backoff, escalation — is a consequence of those two running again,
  * which is what makes the pair safe to re-run at any moment.
  */
 import type { JobHandler } from "../tasks/worker";
 import { PermanentJobError } from "../tasks/worker";
 import type { ImportRecord, ImportRepository } from "./importRepository";
+import type { ImportProcessingSweepResult } from "./importProcessing";
 import type { ImportService } from "./importService";
 import {
   dispositionFor,
@@ -24,6 +26,7 @@ export const IMPORT_JOB_TYPES = {
   run: "import.run",
   reconcile: "import.reconcile",
   handoff: "import.handoff",
+  process: "import.process",
 } as const;
 
 export interface ImportJobExtras {
@@ -40,12 +43,19 @@ export interface ImportJobExtras {
    * already where they belong.
    */
   readonly onImported?: (record: ImportRecord) => Promise<void>;
+  /**
+   * Queues processing for imported files the library has registered.
+   *
+   * Absent when automatic processing is switched off, or when this process
+   * does not run the encoder.
+   */
+  readonly queueProcessing?: () => Promise<ImportProcessingSweepResult>;
 }
 
 export function createImportJobHandlers(
   service: ImportService,
   repository: ImportRepository,
-  { handOff, onImported }: ImportJobExtras = {},
+  { handOff, onImported, queueProcessing }: ImportJobExtras = {},
 ): Record<string, JobHandler> {
   const announce = async (record: ImportRecord | null) => {
     if (!record || !onImported) return;
@@ -175,9 +185,16 @@ export function createImportJobHandlers(
     return handOff();
   };
 
+  const processImported: JobHandler = async ({ reportProgress }) => {
+    if (!queueProcessing) return { examined: 0 };
+    await reportProgress(0, "Queueing imported files for processing");
+    return { ...(await queueProcessing()) };
+  };
+
   return {
     [IMPORT_JOB_TYPES.run]: run,
     [IMPORT_JOB_TYPES.reconcile]: reconcile,
     [IMPORT_JOB_TYPES.handoff]: handoff,
+    [IMPORT_JOB_TYPES.process]: processImported,
   };
 }

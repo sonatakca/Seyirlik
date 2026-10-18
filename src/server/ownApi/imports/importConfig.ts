@@ -19,6 +19,13 @@ export interface ImportConfig {
   readonly retainSource: boolean;
   /** Real copies rather than hardlinks, when an operator wants them. */
   readonly forceCopy: boolean;
+  /**
+   * Whether an imported media file is queued for processing by itself, once
+   * the library has registered it. On unless declared `false`: a download is
+   * asked for in order to be watched, and an unprocessed one is not yet
+   * something the site can serve well.
+   */
+  readonly autoProcess: boolean;
 }
 
 function fail(message: string): never {
@@ -59,7 +66,7 @@ export function parseImportConfig(
     fail("downloadRoot must be an absolute path.");
   }
 
-  for (const flag of ["retainSource", "forceCopy"]) {
+  for (const flag of ["retainSource", "forceCopy", "autoProcess"]) {
     if (entry[flag] !== undefined && typeof entry[flag] !== "boolean") {
       fail(`${flag} must be true or false.`);
     }
@@ -69,5 +76,6 @@ export function parseImportConfig(
     downloadRoot: downloadRoot.replace(/[\\/]+$/, ""),
     retainSource: entry.retainSource === true,
     forceCopy: entry.forceCopy === true,
+    autoProcess: entry.autoProcess !== false,
   };
 }

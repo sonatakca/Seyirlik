@@ -84,7 +84,15 @@ import {
   createProcessingJobStore,
   WORKSPACE_CLAIMING_STATES,
 } from "./processing/jobStore";
-import { createProcessingRoutes } from "./processing/processingRoutes";
+import {
+  createHardwareDetector,
+  createProcessingRoutes,
+} from "./processing/processingRoutes";
+import { createProcessingEnqueuer } from "./processing/processingEnqueue";
+import {
+  createImportProcessingStore,
+  createImportProcessingSweep,
+} from "./imports/importProcessing";
 import { createProcessingJobRunner } from "./processing/jobRunner";
 import {
   createDatabaseDriveUploadStore,
@@ -321,6 +329,12 @@ const ACQUISITION_RECONCILE_INTERVAL_MS = 30_000;
  * changes on its own between one look and the next.
  */
 const IMPORT_RECONCILE_INTERVAL_MS = 120_000;
+/**
+ * How often to look for imported files the library has registered and
+ * processing has not been asked about. A listing of a handful of rows, so a
+ * newly registered episode is queued within a minute.
+ */
+const IMPORT_PROCESSING_INTERVAL_MS = 30_000;
 /** Leftovers accumulate over days; a pass every six hours keeps up with them. */
 const GARBAGE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 /** Long enough after a start that the startup sweep and recovery are done. */
@@ -1352,6 +1366,39 @@ export async function createNativeRuntime({
       : undefined;
 
   /*
+   * Imported films and episodes, queued for processing once the library scan
+   * has registered them — through the same enqueuer the processing buttons
+   * use, run here by the machine that encodes. Its own mount is the one the
+   * encode reads, its own scratch is the one the job spends, and its encoder
+   * is the one the job records. The first pass after a start is also the
+   * backfill: every committed import file nothing has decided on yet.
+   */
+  const queueImportedProcessing =
+    importing && importConfig?.autoProcess && processingWorker
+      ? createImportProcessingSweep({
+          store: createImportProcessingStore(pool),
+          enqueueAll: createProcessingEnqueuer({
+            catalogue,
+            store: processingJobs,
+            queue,
+            mediaRoot: path.resolve(mediaRoot),
+            workRoot: storageRoles.jobsRoot,
+            ffprobePath:
+              ffprobePath ?? environment.SEYIRLIK_FFPROBE_PATH ?? "ffprobe",
+            hardware: createHardwareDetector(
+              ffmpegPath ?? environment.SEYIRLIK_FFMPEG_PATH ?? "ffmpeg",
+            ),
+            storageGuard,
+          }).enqueueAll,
+          libraryRoots: definitions
+            .filter(
+              (entry) => entry.kind === "movies" || entry.kind === "series",
+            )
+            .flatMap((entry) => entry.roots),
+        })
+      : undefined;
+
+  /*
    * Books handed over from another computer land in the first configured Books
    * library, and that library is scanned so they appear. Without a Books
    * library there is nowhere to put one, so the route does not exist.
@@ -1563,6 +1610,9 @@ export async function createNativeRuntime({
               ? { handOff: handOffFinishedDownloads }
               : {}),
             onImported: scanAfterImport,
+            ...(queueImportedProcessing
+              ? { queueProcessing: queueImportedProcessing }
+              : {}),
           })
         : {}),
     },
@@ -1991,6 +2041,18 @@ export async function createNativeRuntime({
       : undefined;
   acquisitionReconcileTimer?.unref();
 
+  const importProcessingTimer = queueImportedProcessing
+    ? setInterval(() => {
+        void queue
+          .enqueue({
+            jobType: IMPORT_JOB_TYPES.process,
+            dedupeKey: IMPORT_JOB_TYPES.process,
+          })
+          .catch(() => undefined);
+      }, IMPORT_PROCESSING_INTERVAL_MS)
+    : undefined;
+  importProcessingTimer?.unref();
+
   /*
    * Every library, on a timer, where the library lives on a cloud mount.
    *
@@ -2046,6 +2108,7 @@ export async function createNativeRuntime({
       bookSearch.close();
       if (acquisitionReconcileTimer) clearInterval(acquisitionReconcileTimer);
       if (importReconcileTimer) clearInterval(importReconcileTimer);
+      if (importProcessingTimer) clearInterval(importProcessingTimer);
       if (libraryRescanTimer) clearInterval(libraryRescanTimer);
       if (garbageFirstPass) clearTimeout(garbageFirstPass);
       if (garbageTimer) clearInterval(garbageTimer);
