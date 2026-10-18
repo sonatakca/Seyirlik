@@ -749,6 +749,7 @@ export const tr = {
     "Uyarlanabilir oynatma paketlerini analiz edin, kodlayın ve yayınlayın.",
   "processing.back": "Geliştirici araçları",
   "processing.hardware": "Donanım",
+  "processing.device": "Cihaz",
   "processing.hardwareProbed": "Gerçek kodlamayla sınandı",
   "processing.unavailable": "Kullanılamıyor",
   "processing.available": "Kullanılabilir",

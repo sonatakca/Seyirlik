@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import path from "node:path";
 import type { IncomingMessage } from "node:http";
 import type { OwnApiRouteHandler } from "./ownApiHandler";
@@ -1422,6 +1422,8 @@ export async function createNativeRuntime({
          */
         storageGuard,
         processingRunner: createProcessingJobRunner({
+          // How the processing page names this machine beside its encoder.
+          workerName: environment.SEYIRLIK_WORKER_NAME?.trim() || hostname(),
           store: processingJobs,
           paths: renditionPaths,
           mediaRoot,

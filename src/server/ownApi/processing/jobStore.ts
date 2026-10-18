@@ -127,6 +127,11 @@ export interface ProcessingJobRecord {
   etaSeconds: number | null;
   hardwareAdapter: string | null;
   videoEncoder: string | null;
+  /**
+   * The machine that planned this attempt (`SEYIRLIK_WORKER_NAME`, else its
+   * host name). Absent until a worker plans it.
+   */
+  processedBy?: string | null;
   decision: Record<string, unknown> | null;
   streamDecisions: Record<string, unknown> | null;
   validation: Record<string, unknown> | null;
@@ -231,6 +236,7 @@ export interface ProcessingJobUpdate {
   etaSeconds?: number | null;
   hardwareAdapter?: string;
   videoEncoder?: string;
+  processedBy?: string | null;
   validation?: Record<string, unknown> | null;
   warnings?: string[];
   sourceDamage?: Record<string, unknown>[] | null;
@@ -272,7 +278,7 @@ const COLUMNS = `
   id, job_id, item_id, media_file_id, source_fingerprint, profile,
   state, stage, stage_progress, overall_progress,
   bytes_processed, output_bytes, estimated_output_bytes, estimated_staging_bytes,
-  speed, fps, eta_seconds, hardware_adapter, video_encoder,
+  speed, fps, eta_seconds, hardware_adapter, video_encoder, processed_by,
   decision, stream_decisions, validation, warnings, source_damage,
   error_code, error_message, staging_directory, published_version,
   attempts, cancellation_requested, pause_requested, paused_reason,
@@ -343,6 +349,7 @@ interface RawRow {
   eta_seconds: number | null;
   hardware_adapter: string | null;
   video_encoder: string | null;
+  processed_by: string | null;
   decision: Record<string, unknown> | null;
   stream_decisions: Record<string, unknown> | null;
   validation: Record<string, unknown> | null;
@@ -404,6 +411,7 @@ function toRecord(row: RawRow): ProcessingJobRecord {
     etaSeconds: row.eta_seconds,
     hardwareAdapter: row.hardware_adapter,
     videoEncoder: row.video_encoder,
+    processedBy: row.processed_by,
     decision: row.decision,
     streamDecisions: row.stream_decisions,
     validation: row.validation,
@@ -820,6 +828,8 @@ export function createProcessingJobStore(
         set("hardware_adapter", update.hardwareAdapter);
       if (update.videoEncoder !== undefined)
         set("video_encoder", update.videoEncoder);
+      if (update.processedBy !== undefined)
+        set("processed_by", update.processedBy);
       if (update.validation !== undefined) set("validation", update.validation);
       if (update.sourceDamage !== undefined) {
         set(
@@ -1037,6 +1047,7 @@ export function createProcessingJobStore(
            stream_decisions = COALESCE($5::jsonb, stream_decisions),
            hardware_adapter = COALESCE($6, hardware_adapter),
            video_encoder = COALESCE($7, video_encoder),
+           processed_by = NULL,
            warnings = COALESCE($8::jsonb, warnings),
            updated_at = now()
          WHERE id = $1

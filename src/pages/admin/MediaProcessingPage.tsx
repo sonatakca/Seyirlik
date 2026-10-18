@@ -18,6 +18,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
+import { processingDeviceLabel } from "./processingDevice";
 import { setPageTitle } from "../../lib/pageTitle";
 import { notify } from "../../lib/notifications/notificationStore";
 import {
@@ -3596,6 +3597,18 @@ export function MediaProcessingPage() {
                           <span className="text-xs text-white/40">
                             {t(`processing.stage.${job.stage}` as never)}
                           </span>
+                          {(() => {
+                            const device = processingDeviceLabel(job);
+                            return device ? (
+                              <span
+                                className="inline-flex items-center gap-1 text-xs text-white/50"
+                                title={t("processing.device")}
+                              >
+                                <Cpu size={11} aria-hidden="true" />
+                                {device}
+                              </span>
+                            ) : null;
+                          })()}
                           <div className="ml-auto flex items-center gap-2">
                             <button
                               type="button"
@@ -4072,6 +4085,10 @@ export function MediaProcessingPage() {
               <Stat
                 label={t("processing.hardware")}
                 value={detail.hardwareAdapter ?? "—"}
+              />
+              <Stat
+                label={t("processing.device")}
+                value={processingDeviceLabel(detail) ?? "—"}
               />
               <Stat
                 label={t("processing.inputSize")}

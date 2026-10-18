@@ -179,6 +179,8 @@ export const LIVE_HEARTBEAT_INTERVAL_MS = 2_000;
 
 export interface ProcessingJobRunnerDeps {
   store: ProcessingJobStore;
+  /** What the processing page calls this machine; see `processedBy`. */
+  workerName?: string;
   paths: RenditionPaths;
   mediaRoot: string;
   ffmpegPath?: string;
@@ -422,6 +424,7 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
     ffmpegPath = process.env.SEYIRLIK_FFMPEG_PATH ?? "ffmpeg",
     ffprobePath = process.env.SEYIRLIK_FFPROBE_PATH ?? "ffprobe",
     softwareThreads,
+    workerName,
     detectHardwareFn = detectHardware,
     packageFn = packageAdaptiveRendition,
     probeFn = probeMediaFile,
@@ -952,6 +955,7 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
     await store.update(job.id, {
       hardwareAdapter: decision.hardwareAdapter,
       videoEncoder: decision.videoEncoder,
+      ...(workerName ? { processedBy: workerName } : {}),
       warnings: decision.warnings,
       sourceDurationSeconds: probe.durationSeconds,
       // Shown beside the protected bytes so an operator can see the headroom

@@ -146,6 +146,7 @@ function toJobDto(job: ProcessingJobRecord) {
     etaSeconds: job.etaSeconds,
     hardwareAdapter: job.hardwareAdapter,
     videoEncoder: job.videoEncoder,
+    processedBy: job.processedBy ?? null,
     decision: job.decision,
     validation: job.validation,
     warnings: job.warnings,

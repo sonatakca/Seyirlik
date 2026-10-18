@@ -179,6 +179,8 @@ export interface ProcessingJob {
   etaSeconds: number | null;
   hardwareAdapter: string | null;
   videoEncoder: string | null;
+  /** The machine that planned this attempt; null until a worker plans it. */
+  processedBy?: string | null;
   decision: ProcessingDecision | null;
   validation: { ok: boolean; issues: string[] } | null;
   warnings: string[];

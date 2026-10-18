@@ -747,6 +747,7 @@ export const en = {
     "Analyse, encode and publish adaptive playback packages.",
   "processing.back": "Developer tools",
   "processing.hardware": "Hardware",
+  "processing.device": "Device",
   "processing.hardwareProbed": "Probed by encoding",
   "processing.unavailable": "Unavailable",
   "processing.available": "Available",
