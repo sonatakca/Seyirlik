@@ -106,7 +106,9 @@ export function encoderTakesTargetRate(
     encoder === "h264_qsv" ||
     encoder === "hevc_qsv" ||
     encoder === "h264_videotoolbox" ||
-    encoder === "hevc_videotoolbox"
+    encoder === "hevc_videotoolbox" ||
+    encoder === "h264_nvenc" ||
+    encoder === "hevc_nvenc"
   );
 }
 

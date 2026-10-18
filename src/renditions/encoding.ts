@@ -5,9 +5,11 @@ export type RenditionVideoEncoder =
   | "libx264"
   | "h264_qsv"
   | "h264_videotoolbox"
+  | "h264_nvenc"
   | "libx265"
   | "hevc_qsv"
-  | "hevc_videotoolbox";
+  | "hevc_videotoolbox"
+  | "hevc_nvenc";
 export type RenditionEncoderPreference =
   | "auto"
   | "qsv"
@@ -230,7 +232,8 @@ export function codecFamilyForEncoder(
 ): RenditionCodecFamily {
   return encoder === "libx265" ||
     encoder === "hevc_qsv" ||
-    encoder === "hevc_videotoolbox"
+    encoder === "hevc_videotoolbox" ||
+    encoder === "hevc_nvenc"
     ? "hevc"
     : "h264";
 }
@@ -303,10 +306,31 @@ export function presetForEncoder(
   encoder: RenditionVideoEncoder,
   preset: string,
 ): string {
+  if (encoder === "h264_nvenc" || encoder === "hevc_nvenc") {
+    return NVENC_PRESET_EQUIVALENT[preset] ?? preset;
+  }
   if (encoder !== "h264_qsv" && encoder !== "hevc_qsv") return preset;
   if (QSV_PRESETS.has(preset)) return preset;
   return QSV_PRESET_EQUIVALENT[preset] ?? preset;
 }
+
+/**
+ * NVENC's presets are `p1` (fastest) to `p7` (best). Its old names (`slow`,
+ * `medium`, `fast`) still parse but are deprecated aliases that FFmpeg warns
+ * about, so the x264 vocabulary is translated to the nearest `p` level.
+ */
+const NVENC_PRESET_EQUIVALENT: Record<string, string> = {
+  ultrafast: "p1",
+  superfast: "p2",
+  veryfast: "p3",
+  faster: "p3",
+  fast: "p4",
+  medium: "p5",
+  slow: "p6",
+  slower: "p7",
+  veryslow: "p7",
+  placebo: "p7",
+};
 
 function levelFor(qualityHeight: number, family: RenditionCodecFamily): string {
   if (family === "hevc") {
@@ -330,6 +354,11 @@ function videoEncoderArgs(
   hdr: RenditionHdrSignal | undefined,
   tonemappedToSdr = false,
 ): string[] {
+  // The single-file renditions predate NVENC support, which exists only for
+  // adaptive packages; `resolveVideoEncoder` never offers it here.
+  if (encoder === "h264_nvenc" || encoder === "hevc_nvenc") {
+    throw new Error(`${encoder} is configured only for adaptive packages.`);
+  }
   const family = codecFamilyForEncoder(encoder);
   const policy = getEncodingPolicy(qualityHeight, family);
   const rateCap = [

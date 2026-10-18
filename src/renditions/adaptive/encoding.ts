@@ -276,14 +276,19 @@ function pixelFormatFor(
   encoder: RenditionVideoEncoder,
   hdr: RenditionHdrSignal | undefined,
 ): string {
+  // NVENC takes 10-bit only as P010; it has no planar yuv420p10le input.
   if (hdr)
-    return encoder === "hevc_qsv" || encoder === "hevc_videotoolbox"
+    return encoder === "hevc_qsv" ||
+      encoder === "hevc_videotoolbox" ||
+      encoder === "hevc_nvenc"
       ? "p010le"
       : "yuv420p10le";
   return encoder === "h264_qsv" ||
     encoder === "hevc_qsv" ||
     encoder === "h264_videotoolbox" ||
-    encoder === "hevc_videotoolbox"
+    encoder === "hevc_videotoolbox" ||
+    encoder === "h264_nvenc" ||
+    encoder === "hevc_nvenc"
     ? "nv12"
     : "yuv420p";
 }
@@ -423,6 +428,32 @@ function qsvTargetBitrate(specifier: string, bitrate: number): string[] {
   return [`-b:${specifier}`, String(bitrate)];
 }
 
+/**
+ * NVENC's rate control: variable bitrate at the rung's target, held under the
+ * cap that follows, like QSV's.
+ *
+ * `vbr` is named rather than left to the preset, which may pick constant QP
+ * when no rate mode is given. `multipass qres` runs a quarter-resolution first
+ * pass per frame, so the bits go where the picture needs them while the
+ * average still lands on the target. Spatial AQ moves bits from flat areas to
+ * detailed ones within a frame, which is where a fixed-rate ladder otherwise
+ * shows its blocks. `tune hq` is the quality tuning, not low latency.
+ */
+function nvencTargetBitrate(specifier: string, bitrate: number): string[] {
+  return [
+    `-tune:${specifier}`,
+    "hq",
+    `-rc:${specifier}`,
+    "vbr",
+    `-multipass:${specifier}`,
+    "qres",
+    `-spatial-aq:${specifier}`,
+    "1",
+    `-b:${specifier}`,
+    String(bitrate),
+  ];
+}
+
 function videoEncoderArgsFor(
   encoder: RenditionVideoEncoder,
   ordinal: number,
@@ -460,6 +491,12 @@ function videoEncoderArgsFor(
       hdr ? "main10" : "main",
       ...qsvTargetBitrate(specifier, rate.target),
     );
+  } else if (encoder === "hevc_nvenc") {
+    args.push(
+      `-profile:${specifier}`,
+      hdr ? "main10" : "main",
+      ...nvencTargetBitrate(specifier, rate.target),
+    );
   } else if (encoder === "libx265") {
     args.push(`-crf:${specifier}`, String(policy.crf));
   } else if (encoder === "hevc_videotoolbox") {
@@ -472,6 +509,14 @@ function videoEncoderArgsFor(
   } else if (encoder === "h264_qsv") {
     args.push(
       ...qsvTargetBitrate(specifier, rate.target),
+      `-profile:${specifier}`,
+      "high",
+      `-level:${specifier}`,
+      levelFor(output, family, rungFrameRate),
+    );
+  } else if (encoder === "h264_nvenc") {
+    args.push(
+      ...nvencTargetBitrate(specifier, rate.target),
       `-profile:${specifier}`,
       "high",
       `-level:${specifier}`,
@@ -502,6 +547,10 @@ function videoEncoderArgsFor(
     // in fragmented MP4. Epoch assembly requires a zero-based local timeline;
     // progressive MP4 edit lists cannot repair independently joined fragments.
     args.push(`-bf:${specifier}`, "0", `-async_depth:${specifier}`, "1");
+  } else if (encoder === "h264_nvenc" || encoder === "hevc_nvenc") {
+    // The same timeline rule. NVENC's presets enable B-frames, which delay the
+    // first presentation time just as QSV's do.
+    args.push(`-bf:${specifier}`, "0");
   }
 
   args.push(

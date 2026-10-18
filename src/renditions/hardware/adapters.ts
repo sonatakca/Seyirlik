@@ -24,8 +24,6 @@ export type HardwarePlatform = "darwin" | "win32" | "linux" | "any";
  */
 export type HardwareEncoderName =
   | RenditionVideoEncoder
-  | "h264_nvenc"
-  | "hevc_nvenc"
   | "h264_amf"
   | "hevc_amf"
   | "h264_vaapi"
@@ -38,6 +36,8 @@ const DRIVEABLE_ENCODERS = new Set<string>([
   "hevc_qsv",
   "h264_videotoolbox",
   "hevc_videotoolbox",
+  "h264_nvenc",
+  "hevc_nvenc",
 ]);
 
 /** Whether the encoder argument builder can actually configure this encoder. */

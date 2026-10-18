@@ -50,7 +50,7 @@ function valueAfter(args: string[], flag: string): string | undefined {
 }
 
 describe("per-rung frame rate", () => {
-  it.each(["h264_qsv", "hevc_qsv"] as const)(
+  it.each(["h264_qsv", "hevc_qsv", "h264_nvenc", "hevc_nvenc"] as const)(
     "keeps %s epoch presentation time free of reorder delay",
     (encoder) => {
       const args = build({ encoder });
@@ -94,6 +94,8 @@ describe("QSV rate control", () => {
   it.each([
     ["hevc_qsv", "hevc"],
     ["h264_qsv", "h264"],
+    ["hevc_nvenc", "hevc"],
+    ["h264_nvenc", "h264"],
   ] as const)(
     "gives every %s rung its planned bitrate as a target under its cap",
     (encoder, family) => {
@@ -116,8 +118,53 @@ describe("QSV rate control", () => {
   );
 });
 
+describe("NVENC", () => {
+  const HDR = {
+    colorPrimaries: "bt2020",
+    colorTransfer: "smpte2084",
+    colorSpace: "bt2020nc",
+  } as const;
+
+  it("asks for variable bitrate explicitly rather than the preset's default", () => {
+    const args = build({ encoder: "hevc_nvenc" });
+    for (const index of LADDER.keys()) {
+      expect(valueAfter(args, `-rc:v:${index}`)).toBe("vbr");
+      expect(valueAfter(args, `-multipass:v:${index}`)).toBe("qres");
+      expect(valueAfter(args, `-tune:v:${index}`)).toBe("hq");
+    }
+  });
+
+  it("carries an HDR grade as Main 10 from P010 frames", () => {
+    const args = build({ encoder: "hevc_nvenc", hdr: HDR });
+    expect(valueAfter(args, "-profile:v:0")).toBe("main10");
+    expect(valueAfter(args, "-color_trc:v:0")).toBe("smpte2084");
+    expect(valueAfter(args, "-filter_complex")).toContain("format=p010le");
+  });
+
+  it("holds every rung to a fixed two-second cadence of IDR frames", () => {
+    const args = build({ encoder: "h264_nvenc" });
+    for (const index of LADDER.keys()) {
+      expect(valueAfter(args, `-no-scenecut:v:${index}`)).toBe("1");
+      expect(valueAfter(args, `-forced-idr:v:${index}`)).toBe("1");
+      expect(valueAfter(args, `-profile:v:${index}`)).toBe("high");
+    }
+  });
+
+  it("translates x264 preset names to NVENC's p1-p7", () => {
+    expect(
+      valueAfter(
+        build({ encoder: "hevc_nvenc", preset: "medium" }),
+        "-preset:v:0",
+      ),
+    ).toBe("p5");
+    expect(
+      valueAfter(build({ encoder: "hevc_nvenc", preset: "p6" }), "-preset:v:0"),
+    ).toBe("p6");
+  });
+});
+
 describe("measured rung rates", () => {
-  it.each(["h264_qsv", "hevc_qsv"] as const)(
+  it.each(["h264_qsv", "hevc_qsv", "h264_nvenc", "hevc_nvenc"] as const)(
     "gives %s a rung's measured rate in place of the table's",
     (encoder) => {
       const args = build({
@@ -130,7 +177,7 @@ describe("measured rung rates", () => {
       expect(valueAfter(args, "-b:v:0")).toBe("3850000");
       expect(valueAfter(args, "-maxrate:v:0")).toBe("7000000");
       expect(valueAfter(args, "-bufsize:v:0")).toBe("14000000");
-      const family = encoder === "hevc_qsv" ? "hevc" : "h264";
+      const family = encoder.startsWith("hevc") ? "hevc" : "h264";
       expect(valueAfter(args, "-b:v:1")).toBe(
         String(getEncodingPolicy(720, family).expectedVideoBitrate),
       );

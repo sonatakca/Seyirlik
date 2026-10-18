@@ -743,7 +743,9 @@ export async function replaceableScratchPackageBytes({
     path.join(workRoot, assertWorkspaceId(workspaceId)),
   );
   const paths = verifiedPackagePaths(workspaceDirectory, sourceFingerprint);
-  if ((await readVerifiedScratchPackage({ ...paths, sourceFingerprint })) !== null)
+  if (
+    (await readVerifiedScratchPackage({ ...paths, sourceFingerprint })) !== null
+  )
     return 0;
   return checkpointBytes(paths.workVersionRoot);
 }
@@ -1553,7 +1555,12 @@ export async function packageAdaptiveRendition(
       preset ??
       (encoder === "h264_qsv" || encoder === "hevc_qsv"
         ? "veryfast"
-        : "medium");
+        : encoder === "h264_nvenc" || encoder === "hevc_nvenc"
+          ? // p5 of p1-p7: the GPU is rarely the bottleneck of a full ladder
+            // (decoding and scaling on the CPU are), so it spends its spare
+            // time on quality.
+            "p5"
+          : "medium");
     const qsvFilterThreads =
       encoder === "h264_qsv" || encoder === "hevc_qsv" ? 2 : undefined;
 
