@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Bell, BellOff, CircleAlert, Send } from "lucide-react";
+import { BackButton } from "../components/BackButton";
 import { useLanguage } from "../i18n/LanguageContext";
 import type { TranslationKey } from "../i18n/translations";
 import { isAdministrator } from "../lib/authStorage";
@@ -118,7 +119,8 @@ export function AlertsPage() {
 
   if (!isAdministrator()) {
     return (
-      <main className="mx-auto min-h-screen max-w-3xl px-4 pt-28 text-white">
+      <main className="mx-auto min-h-screen max-w-3xl px-4 pt-[calc(env(safe-area-inset-top)+1.5rem)] text-white sm:pt-12">
+        <BackButton to="/home" label={t("common.home")} className="mb-8" />
         <p className="text-sm font-semibold text-white/60">
           {t("alerts.adminsOnly")}
         </p>
@@ -147,7 +149,11 @@ export function AlertsPage() {
   };
 
   return (
-    <main className="mx-auto min-h-screen w-full max-w-3xl px-4 pb-24 pt-24 text-white sm:px-6 sm:pt-28">
+    <main className="mx-auto min-h-screen w-full max-w-3xl px-4 pb-24 pt-[calc(env(safe-area-inset-top)+1.5rem)] text-white sm:px-6 sm:pt-12">
+      {/* No navbar here (the page must work while the server is down), and a
+          notification opens it with no history behind it, so the way out is
+          a named place rather than "back". */}
+      <BackButton to="/home" label={t("common.home")} className="mb-8" />
       <h1 className="text-3xl font-black tracking-tight sm:text-4xl">
         {t("alerts.title")}
       </h1>

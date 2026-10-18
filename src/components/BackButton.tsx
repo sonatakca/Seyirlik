@@ -8,6 +8,14 @@ import { glassSegmentedToolbar } from "./ui/glassControlStyles";
 
 interface BackButtonProps {
   fallbackTo?: string;
+  /**
+   * Always go here instead of back through the app's history.
+   *
+   * For a page that is often the first thing opened (a notification lands on
+   * Alerts), where "back" can mean nothing in the app and the way out has to
+   * be a named place.
+   */
+  to?: string;
   className?: string;
   buttonClassName?: string;
   style?: CSSProperties;
@@ -98,6 +106,7 @@ export function NonPlayerHistoryTracker() {
 
 export function BackButton({
   fallbackTo = "/home",
+  to,
   className = "",
   buttonClassName = "",
   style,
@@ -115,6 +124,10 @@ export function BackButton({
   const hasLabel = trimmedLabel.length > 0;
 
   const handleClick = () => {
+    if (to) {
+      navigate(to);
+      return;
+    }
     const currentPath = getFullPath(location);
     const history = readAppRouteHistory();
 
