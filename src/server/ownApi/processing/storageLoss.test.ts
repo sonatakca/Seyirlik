@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deviceLossEvidence } from "./storageLoss";
+import { deviceLossEvidence, jobsToPauseOnLoss } from "./storageLoss";
 
 const job = (id: string, state: string) => ({ id, state });
 
@@ -22,5 +22,15 @@ describe("deviceLossEvidence", () => {
 
   it("is nothing in a process that does not run the encoder", () => {
     expect(deviceLossEvidence(false, [job("a", "running")])).toBeNull();
+  });
+
+  it("leaves an already-paused job with the reason it was paused for", () => {
+    expect(
+      jobsToPauseOnLoss([
+        job("held", "paused"),
+        job("b", "running"),
+        job("c", "queued"),
+      ]).map((entry) => entry.id),
+    ).toEqual(["b", "c"]);
   });
 });

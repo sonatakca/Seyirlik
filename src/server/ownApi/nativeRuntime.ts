@@ -75,7 +75,10 @@ import {
   workerLanes,
 } from "./tasks/workerRole";
 import { parseDeleteMissing, parseRescanMinutes } from "./scanner/scanSettings";
-import { deviceLossEvidence } from "./processing/storageLoss";
+import {
+  deviceLossEvidence,
+  jobsToPauseOnLoss,
+} from "./processing/storageLoss";
 import { createTaskRoutes } from "./tasks/taskRoutes";
 import {
   createProcessingJobStore,
@@ -837,7 +840,7 @@ export async function createNativeRuntime({
         await storageGuard.observeAvailability(false);
       }
       if (!processingWorker) return;
-      for (const job of active) {
+      for (const job of jobsToPauseOnLoss(active)) {
         await processingJobs.requestPause(
           job.id,
           storageGuard.health.state === "quarantined"

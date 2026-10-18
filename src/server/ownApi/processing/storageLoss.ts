@@ -24,3 +24,17 @@ export function deviceLossEvidence<Job extends { id: string; state: string }>(
   if (!processingWorker) return null;
   return activeJobs.find((job) => job.state === "running") ?? null;
 }
+
+/**
+ * The jobs a storage loss should pause: the ones not already paused.
+ *
+ * A paused job keeps the reason it was paused for. Re-pausing it used to
+ * overwrite that reason with "storage unavailable", and since the storage
+ * coming back resumes exactly the jobs it paused, a mount blip resumed jobs a
+ * person had paused by hand and jobs held by a quarantine.
+ */
+export function jobsToPauseOnLoss<Job extends { state: string }>(
+  activeJobs: readonly Job[],
+): Job[] {
+  return activeJobs.filter((job) => job.state !== "paused");
+}
