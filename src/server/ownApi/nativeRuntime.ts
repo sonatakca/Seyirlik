@@ -86,7 +86,11 @@ import {
 } from "./processing/jobStore";
 import { createProcessingRoutes } from "./processing/processingRoutes";
 import { createProcessingJobRunner } from "./processing/jobRunner";
-import { pruneLiveProgress } from "./processing/liveProgress";
+import {
+  createDatabaseLiveProgressStore,
+  pruneLiveProgress,
+  shareLiveProgress,
+} from "./processing/liveProgress";
 import {
   resolveTitleRoot,
   titleRootLayoutForKind,
@@ -1057,6 +1061,9 @@ export async function createNativeRuntime({
    * found it would animate a bar from a frozen speed as though the encode were
    * still going, so anything belonging to a job that is not active goes.
    */
+  // The encoder may be another machine (the helper laptop), so live samples
+  // also travel through the database for the API to read.
+  shareLiveProgress(createDatabaseLiveProgressStore(pool));
   void pruneLiveProgress(
     (await processingJobs.listActive()).map((job) => job.id),
   ).catch(() => undefined);

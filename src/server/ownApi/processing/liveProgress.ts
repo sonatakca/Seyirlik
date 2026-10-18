@@ -28,6 +28,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import type { DatabasePool } from "../database/databasePool";
 import path from "node:path";
 import type { ProcessingStage } from "./stages";
 import type {
@@ -206,14 +207,48 @@ function fileFor(processingJobId: string): string {
 }
 
 /**
+ * Where samples go so another machine can read them.
+ *
+ * The file above is only visible on the machine that wrote it. When encodes
+ * run on a different machine from the API (the helper laptop), the API reads
+ * the sample from here instead. Absent, everything stays on the local disk.
+ */
+export interface SharedLiveProgressStore {
+  write(snapshot: LiveProgressSnapshot): Promise<void>;
+  read(processingJobId: string): Promise<LiveProgressSnapshot | null>;
+  clear(processingJobId: string): Promise<void>;
+  /** Removes samples for every job not in this list. */
+  prune(activeJobIds: readonly string[]): Promise<void>;
+}
+
+let shared: SharedLiveProgressStore | null = null;
+const lastShared = new Map<string, { atMs: number; phase: string }>();
+
+/** How often a running job's sample reaches the shared store at most. */
+export const SHARED_LIVE_PROGRESS_INTERVAL_MS = 1_000;
+
+/** Called once at startup; null turns sharing off (tests). */
+export function shareLiveProgress(store: SharedLiveProgressStore | null): void {
+  shared = store;
+  lastShared.clear();
+}
+
+/**
  * Publishes the latest sample.
  *
  * Written to a temporary name and renamed, so a reader never sees half a
  * document. Failures are swallowed: this is telemetry, and an encode must not
  * stop because a temporary directory is full.
+ *
+ * The shared copy is throttled to one write a second, except that a new phase
+ * is written at once: the page has to change panels when the phase changes,
+ * not up to a second later. It is not awaited, so a slow database never slows
+ * an encoder down; the store refuses to replace a newer sample with an older
+ * one, so writes that overtake each other cannot go backwards.
  */
 export async function writeLiveProgress(
   snapshot: LiveProgressSnapshot,
+  nowMs: number = Date.now(),
 ): Promise<void> {
   try {
     const target = fileFor(snapshot.processingJobId);
@@ -224,9 +259,23 @@ export async function writeLiveProgress(
   } catch {
     // Telemetry only.
   }
+  if (!shared) return;
+  const last = lastShared.get(snapshot.processingJobId);
+  if (
+    last &&
+    last.phase === snapshot.phase &&
+    nowMs - last.atMs < SHARED_LIVE_PROGRESS_INTERVAL_MS
+  ) {
+    return;
+  }
+  lastShared.set(snapshot.processingJobId, {
+    atMs: nowMs,
+    phase: snapshot.phase,
+  });
+  void shared.write(snapshot).catch(() => undefined);
 }
 
-export async function readLiveProgress(
+async function readLocal(
   processingJobId: string,
 ): Promise<LiveProgressSnapshot | null> {
   try {
@@ -238,6 +287,25 @@ export async function readLiveProgress(
   }
 }
 
+/**
+ * The latest sample for a job: the local file when this machine is the one
+ * encoding, otherwise the shared copy. Whichever is newer wins, so a stale
+ * file left by an earlier run on this machine cannot hide a live encode
+ * running elsewhere.
+ */
+export async function readLiveProgress(
+  processingJobId: string,
+): Promise<LiveProgressSnapshot | null> {
+  const local = await readLocal(processingJobId);
+  if (local && liveProgressIsFresh(local)) return local;
+  const remote = shared
+    ? await shared.read(processingJobId).catch(() => null)
+    : null;
+  if (!remote) return local;
+  if (!local) return remote;
+  return remote.timestampMs >= local.timestampMs ? remote : local;
+}
+
 export async function clearLiveProgress(
   processingJobId: string,
 ): Promise<void> {
@@ -246,6 +314,54 @@ export async function clearLiveProgress(
   } catch {
     // Nothing to clear.
   }
+  lastShared.delete(processingJobId);
+  if (shared) await shared.clear(processingJobId).catch(() => undefined);
+}
+
+/** The shared store, in PostgreSQL (migration 037). */
+export function createDatabaseLiveProgressStore(
+  pool: DatabasePool,
+): SharedLiveProgressStore {
+  return {
+    async write(snapshot) {
+      await pool.query(
+        `INSERT INTO processing_live_progress
+           (processing_job_id, timestamp_ms, snapshot, updated_at)
+         VALUES ($1, $2, $3::jsonb, now())
+         ON CONFLICT (processing_job_id) DO UPDATE
+           SET timestamp_ms = EXCLUDED.timestamp_ms,
+               snapshot = EXCLUDED.snapshot,
+               updated_at = now()
+         WHERE processing_live_progress.timestamp_ms <= EXCLUDED.timestamp_ms`,
+        [
+          snapshot.processingJobId,
+          Math.round(snapshot.timestampMs),
+          JSON.stringify(snapshot),
+        ],
+      );
+    },
+    async read(processingJobId) {
+      const result = await pool.query<{ snapshot: LiveProgressSnapshot }>(
+        `SELECT snapshot FROM processing_live_progress
+          WHERE processing_job_id = $1`,
+        [processingJobId],
+      );
+      return result.rows[0]?.snapshot ?? null;
+    },
+    async clear(processingJobId) {
+      await pool.query(
+        `DELETE FROM processing_live_progress WHERE processing_job_id = $1`,
+        [processingJobId],
+      );
+    },
+    async prune(activeJobIds) {
+      await pool.query(
+        `DELETE FROM processing_live_progress
+          WHERE NOT (processing_job_id = ANY($1::uuid[]))`,
+        [activeJobIds],
+      );
+    },
+  };
 }
 
 /**
@@ -258,6 +374,7 @@ export async function clearLiveProgress(
 export async function pruneLiveProgress(
   activeJobIds: readonly string[],
 ): Promise<number> {
+  if (shared) await shared.prune(activeJobIds).catch(() => undefined);
   const keep = new Set(activeJobIds);
   let removed = 0;
   try {
