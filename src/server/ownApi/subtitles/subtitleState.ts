@@ -261,7 +261,14 @@ const TRANSITIONS: Record<SubtitleState, readonly SubtitleState[]> = {
     "superseded",
   ],
   selected: ["downloading", "needs-authentication", "failed", "superseded"],
-  downloading: ["validating", "needs-authentication", "failed", "superseded"],
+  /* `unavailable`: every chosen download held nothing for this episode. */
+  downloading: [
+    "validating",
+    "unavailable",
+    "needs-authentication",
+    "failed",
+    "superseded",
+  ],
   validating: ["installed", "failed", "superseded"],
   /*
    * Back to whichever step asked for the session. The state carries no memory

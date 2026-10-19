@@ -17,9 +17,10 @@ import {
   type SubtitleWant,
 } from "./subtitleState";
 import { validateSubtitle } from "./subtitlePayload";
-import type {
-  SubtitleInstallOutcome,
-  SubtitleStorage,
+import {
+  StorageFailure,
+  type SubtitleInstallOutcome,
+  type SubtitleStorage,
 } from "./subtitleStorage";
 
 export type SubtitleProgress = {
@@ -302,6 +303,9 @@ export async function runSubtitlePipeline(input: {
             failure: error.failure,
             reason: `The search stopped with ${error.failure}.`,
           };
+    // Inspecting beside a source that is not on the disk: say so, not "unknown".
+    if (error instanceof StorageFailure)
+      return { outcome: "error", failure: error.failure, reason: error.reason };
     return {
       outcome: "error",
       failure: "unknown",

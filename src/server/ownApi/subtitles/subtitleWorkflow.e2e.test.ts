@@ -902,6 +902,39 @@ describe("what a provider offers and what is accepted", () => {
   });
 
   /*
+   * The Sopranos, 2026-10-19: every chosen download was a pack without this
+   * episode. That is an absence, and it was being filed as failed/unknown.
+   */
+  it("calls it unavailable when every chosen download held nothing for this episode", async () => {
+    const provider = scriptedProvider({
+      search: {
+        outcome: "ok",
+        value: [
+          candidate({ candidateId: "a" }),
+          candidate({ candidateId: "b" }),
+        ],
+      },
+      download: { outcome: "empty" },
+    });
+    const result = await invoke(
+      handlersFor(world, [provider], steerableSessions()),
+      SUBTITLE_JOB_TYPES.run,
+    );
+    expect(result).toMatchObject({ state: "unavailable" });
+    expect(provider.calls.download).toBe(2);
+    expect(world.attempts.get(ATTEMPT_ID)!.failureClass).toBeNull();
+  });
+
+  it("says the media is missing when its source is not on the disk", async () => {
+    await rm(path.join(world.root, RELATIVE));
+    const result = await invoke(
+      handlersFor(world, [scriptedProvider({})], steerableSessions()),
+      SUBTITLE_JOB_TYPES.run,
+    );
+    expect(result).toMatchObject({ state: "failed", failure: "media-missing" });
+  });
+
+  /*
    * A login page served where a subtitle was promised is a fault, not an
    * absence: `unavailable` would say the provider has nothing, and this
    * provider has something wrong with it.

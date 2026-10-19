@@ -177,7 +177,7 @@ export function subtitleDigest(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-class StorageFailure extends Error {
+export class StorageFailure extends Error {
   readonly failure: SubtitleFailureClass;
   readonly reason: string;
   constructor(failure: SubtitleFailureClass, reason: string) {

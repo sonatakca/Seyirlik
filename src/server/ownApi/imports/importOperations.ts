@@ -97,6 +97,17 @@ export function classifyFsError(error: unknown): ImportOperationError {
     case "ENOSYS":
     case "EOPNOTSUPP":
       return new ImportOperationError("hardlink-unsupported", message);
+    case "ENOTSUP":
+      /*
+       * What the rclone mount of Google Drive at `D:` answers (WinFsp, 2026-10).
+       * Node spells it apart from `EOPNOTSUPP`. Narrowed to `link` like
+       * `EISDIR` below: it was why every subtitle write there failed as
+       * `unknown` instead of falling back to a plain create.
+       */
+      if (syscall === "link") {
+        return new ImportOperationError("hardlink-unsupported", message);
+      }
+      return new ImportOperationError("unknown", message);
     case "EISDIR":
       /*
        * What exFAT answers when asked for a hardlink: `EISDIR`, on two operands

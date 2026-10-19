@@ -291,7 +291,8 @@ export function createSubtitleService(dependencies: {
           }
           if (
             outcome.outcome === "unavailable" &&
-            work.attempt.state === "searching"
+            (work.attempt.state === "searching" ||
+              (work.attempt.state as SubtitleState) === "downloading")
           ) {
             await work.transaction(async () => {
               await move("unavailable");

@@ -21,6 +21,7 @@ import {
   ArchiveUnsupportedError,
   subtitleEntries,
   toUtf8,
+  type ArchiveEntry,
 } from "./subtitleArchive";
 import type {
   ProviderResult,
@@ -217,6 +218,55 @@ export function episodeOf(
     name,
   );
   return bare ? { season: packSeason, episode: Number(bare[1]) } : null;
+}
+
+/**
+ * The one file in a download that answers this candidate, or null.
+ *
+ * A film's download must hold exactly one subtitle: two are CD1 and CD2, and
+ * either alone is half a film. A season pack is filtered to this episode, and
+ * when it still holds several — the same episode timed for two releases — the
+ * one named for the candidate's release group is taken. Byte-identical copies
+ * are one file. Anything still ambiguous is refused rather than guessed.
+ */
+export function chooseEntry(
+  entries: readonly ArchiveEntry[],
+  candidate: Pick<SubtitleCandidate, "identity" | "releaseGroup">,
+): ArchiveEntry | null {
+  const identity = candidate.identity;
+  const season = identity?.season ?? null;
+  const matching =
+    season === null
+      ? entries
+      : entries.filter((entry) => {
+          const found = episodeOf(entry.name, season);
+          return (
+            found?.season === season && found.episode === identity!.episode
+          );
+        });
+  const distinct = matching.filter(
+    (entry, index) =>
+      matching.findIndex((other) => sameBytes(other.bytes, entry.bytes)) ===
+      index,
+  );
+  if (distinct.length === 1) return distinct[0]!;
+  if (season === null || distinct.length === 0 || !candidate.releaseGroup)
+    return null;
+  const group = candidate.releaseGroup.toLowerCase();
+  const named = distinct.filter(
+    (entry) =>
+      parseRelease(
+        entry.name.replace(/\.(srt|vtt)$/i, ""),
+      ).releaseGroup?.toLowerCase() === group,
+  );
+  return named.length === 1 ? named[0]! : null;
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
 }
 
 /* ------------------------------------------------------------------ http */
@@ -544,20 +594,9 @@ export function createTurkceAltyaziProvider(
           retryable: false,
         };
       }
-      const identity = candidate.identity;
-      const chosen =
-        identity?.season !== null && identity?.season !== undefined
-          ? entries.filter((entry) => {
-              const found = episodeOf(entry.name, identity.season!);
-              return (
-                found?.season === identity.season &&
-                found.episode === identity.episode
-              );
-            })
-          : entries;
+      const entry = chooseEntry(entries, candidate);
       // A film split over two files, or a pack without this episode, is not an answer.
-      if (chosen.length !== 1) return { outcome: "empty" };
-      const entry = chosen[0]!;
+      if (!entry) return { outcome: "empty" };
       const payload: SubtitlePayload = {
         bytes: toUtf8(entry.bytes, candidate.language),
         declaredFormat: null,
