@@ -102,6 +102,37 @@ The short version:
 - Byte-identical content is a `duplicate`: it satisfies the want, it is not a
   write, and it does not confer ownership.
 
+### A title whose source has been removed
+
+A processed title can lose its source ("Remove source", or the Drive
+auto-delete once its package is verified) and keep playing from its package.
+Its catalogue row stays active on purpose, and a sidecar beside where the source
+was is served on its own. So search, install, upload and retiming all work for
+it. The writer needs the **folder** the source lived in, not the source file:
+
+- Every folder on the way must exist, and none may be a link. At the source's
+  own name there may be nothing, or a regular file. Anything else is refused.
+  Containment and the same-directory rule for sidecars are unchanged.
+- The sidecar is named after the catalogue path, so it lands exactly where it
+  would have with the source present.
+- Sidecars beside an absent source are matched **by name**. Once a season's
+  sources are gone its `src/` folder holds sidecars and no video. Counting
+  videos would treat that as one film's folder and give each episode every
+  episode's translation, and would call the want already satisfied. The cost:
+  a hand-added movie subtitle named after a different release is not counted
+  for a removed source, so a search can add a second Turkish track beside it.
+- The install records the sidecar in `media_streams` at once, through the same
+  `attachExternalSubtitle` the upload uses (event `catalogue-attached`). This is
+  required, not a convenience. The scan reads a rendition-backed title from its
+  package and never rewrites its sidecar rows, so without this the subtitle is
+  never listed.
+- Retiming against another sidecar, or by a hand-given correction, works. An
+  audio track or an embedded subtitle is read out of the source, so asking for
+  one is refused as `source-removed`.
+
+Remove Source therefore does not wait for open subtitle wants: removing the
+source does not stop them being answered.
+
 A known consequence: **a subtitle that arrived with a download cannot currently
 be upgraded by this subsystem**, because the importer records no digest for it.
 Closing that is a change to the import pipeline, and is recorded there rather

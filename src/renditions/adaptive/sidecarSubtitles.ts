@@ -148,6 +148,13 @@ export function sidecarSubtitleIsCurrent(
  * holds, in a folder with a single video, and a shared folder matches subtitles
  * to the source by name instead. That is the only thing that can tell the two
  * apart there, and it is what the naming convention in such a folder is for.
+ *
+ * A source that is no longer there breaks the premise too. Once a processed
+ * title's source is removed only its sidecars stay behind, so a season's `src/`
+ * folder can hold thirteen `.tur.srt` files and no video at all — and counting
+ * videos would call that one film's folder and hand every episode all thirteen.
+ * The folder's video count says nothing about a source missing from it, so an
+ * absent source is matched by name, whatever is left beside it.
  */
 export async function discoverSidecarSubtitles(
   sourcePath: string,
@@ -178,7 +185,11 @@ export async function discoverSidecarSubtitles(
       SUPPORTED_VIDEO_EXTENSIONS.has(path.extname(name).toLowerCase()) &&
       !isDerivativeFileName(name),
   );
-  const directoryIsShared = videoSiblings.length > 1;
+  const sourceName = path.basename(sourcePath).toLowerCase();
+  const sourcePresent = entries.some(
+    (name) => name.toLowerCase() === sourceName,
+  );
+  const directoryIsShared = !sourcePresent || videoSiblings.length > 1;
   const belongsToSource = (name: string): boolean =>
     name.toLowerCase().startsWith(sourceStem.toLowerCase());
 

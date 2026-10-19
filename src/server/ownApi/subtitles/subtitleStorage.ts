@@ -255,12 +255,23 @@ export function createSubtitleStorage(
   }
 
   /**
-   * The media file an id names, proven to be a real file inside the root.
+   * Where the media file an id names lives, proven to be inside the root.
    *
    * The walk down the path exists to reject a symlink or junction *before*
    * following it. Checking the final target alone is not enough: a link
    * anywhere along the way redirects everything below it, and the containment
    * check would then be answered about the wrong place.
+   *
+   * **The file itself may be gone; its folder may not.** A processed title
+   * keeps only its package once its source is removed ("Remove source", or the
+   * Drive auto-delete), and its catalogue row stays active on purpose. Its
+   * sidecar still lives beside where the source was and is served from there
+   * on its own, so refusing here left every such title unable to get a
+   * subtitle at all. Whether the file *should* exist is the catalogue's
+   * question — every caller resolves a row it has already checked is not
+   * missing — so this answers only the one the disk can: is the place real,
+   * reachable without a link, and inside the root. Something other than a file
+   * at that name is still refused.
    */
   async function locateMedia(mediaFileId: string): Promise<string> {
     const root = await rootPath();
@@ -296,11 +307,19 @@ export function createSubtitleStorage(
     const chain = path.relative(root, target).split(path.sep);
     for (let index = 0; index < chain.length; index += 1) {
       walked = path.join(walked, chain[index] as string);
-      const entry = await lstat(walked).catch(() => null);
+      const last = index === chain.length - 1;
+      const entry = await lstat(walked).catch(
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        },
+      );
       if (entry === null) {
+        // A removed source. See above: its folder is what has to be there.
+        if (last) break;
         throw new StorageFailure(
           "media-missing",
-          "The media file is not there.",
+          "The media file's folder is not there.",
         );
       }
       if (entry.isSymbolicLink()) {
@@ -309,7 +328,6 @@ export function createSubtitleStorage(
           "A link on the way to the media file was refused.",
         );
       }
-      const last = index === chain.length - 1;
       if (last ? !entry.isFile() : !entry.isDirectory()) {
         throw new StorageFailure(
           "media-missing",

@@ -203,4 +203,23 @@ describe("sidecars in a folder shared by several sources", () => {
       "Dune.2021.2160p.WEB-DL.tr.srt",
     ]);
   });
+
+  /*
+   * A season whose sources have all been removed once their packages were
+   * whole: only the sidecars are left, so the folder looks like it holds no
+   * title at all, and the one-video rule would give every episode all of them.
+   */
+  it("matches by name when the source itself has been removed", async () => {
+    const found = await discoverSidecarSubtitles(
+      "/media/Series/House of the Dragon/Season 1/src/House of the Dragon - S01E02 - The Rogue Prince.mp4",
+      {
+        readDirectory: (async () =>
+          season.filter((name) => name.endsWith(".srt"))) as never,
+      },
+    );
+
+    expect(found.map((entry) => entry.fileName)).toEqual([
+      "House of the Dragon - S01E02 - The Rogue Prince.tr.srt",
+    ]);
+  });
 });

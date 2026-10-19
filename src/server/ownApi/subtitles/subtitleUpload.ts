@@ -15,14 +15,12 @@
  * packager and the player already read.
  */
 
-import path from "node:path";
-
-import {
-  discoverSidecarSubtitles,
-  type SidecarSubtitle,
-} from "../../../renditions/adaptive/sidecarSubtitles";
-import { UNKNOWN_LANGUAGE } from "../../../renditions/processing/languages";
+import { discoverSidecarSubtitles } from "../../../renditions/adaptive/sidecarSubtitles";
 import { toUtf8 } from "./subtitleArchive";
+import {
+  attachInstalledSidecar,
+  type SubtitleCatalogueAttachment,
+} from "./subtitleAttachment";
 import type { SubtitleRepository } from "./subtitleRepository";
 import {
   createSubtitleStorage,
@@ -61,34 +59,11 @@ export type SubtitleUploadResult =
       readonly reason: string;
     };
 
-/**
- * Records the sidecar against the media file so the player can offer it.
- *
- * Without this the bytes are correct, correctly named and completely invisible
- * until the next library scan: the player's track list is built from
- * `media_streams`, and only a scan writes external rows. Attaching one row is
- * the difference between a file having been filed and a subtitle working.
- */
-export interface SubtitleCatalogueAttachment {
-  attachExternalSubtitle(input: {
-    mediaFileId: string;
-    relativePath: string;
-    codec: string;
-    isText: boolean;
-    language: string | null;
-    isForced: boolean;
-  }): Promise<void>;
-}
+export type { SubtitleCatalogueAttachment };
 
 export interface SubtitleUploader {
   upload(request: SubtitleUploadRequest): Promise<SubtitleUploadResult>;
 }
-
-/** The codec name the catalogue uses for each installable sidecar format. */
-const CODEC_BY_FORMAT: Record<"srt" | "vtt", string> = {
-  srt: "subrip",
-  vtt: "webvtt",
-};
 
 export function createSubtitleUploader(dependencies: {
   libraryRoot: string;
@@ -103,7 +78,6 @@ export function createSubtitleUploader(dependencies: {
   discover?: typeof discoverSidecarSubtitles;
 }): SubtitleUploader {
   const { libraryRoot, repository } = dependencies;
-  const discover = dependencies.discover ?? discoverSidecarSubtitles;
 
   return {
     async upload(request) {
@@ -243,51 +217,22 @@ export function createSubtitleUploader(dependencies: {
     },
   };
 
-  /**
-   * The one row that lets the player list this track.
-   *
-   * Read back off the disk rather than assumed from what was just written: the
-   * discovery is what decides a sidecar's language and forced flag everywhere
-   * else, and a row this wrote from its own request would be the one row in the
-   * catalogue that disagreed with the next scan.
-   */
+  /** The one row that lets the player list this track. */
   async function attach(
     mediaFileId: string,
     relativeMedia: string,
     relativeSubtitle: string,
   ): Promise<boolean> {
     if (!dependencies.catalogue) return false;
-    const mediaDirectory = relativeMedia.split("/").slice(0, -1).join("/");
-    // Joined with the platform's separator: the catalogue stores POSIX paths and
-    // the media volume on the deployed host is `D:\media`.
-    const absoluteMedia = path.join(libraryRoot, ...relativeMedia.split("/"));
-    let found: SidecarSubtitle[];
-    try {
-      found = await discover(absoluteMedia);
-    } catch {
-      return false;
-    }
-    const name = relativeSubtitle.split("/").pop();
-    const sidecar = found.find((entry) => entry.fileName === name);
-    if (!sidecar) return false;
-    const format = name?.endsWith(".vtt") ? "vtt" : "srt";
-    try {
-      await dependencies.catalogue.attachExternalSubtitle({
-        mediaFileId,
-        relativePath: mediaDirectory
-          ? `${mediaDirectory}/${sidecar.fileName}`
-          : sidecar.fileName,
-        codec: CODEC_BY_FORMAT[format],
-        isText: true,
-        language:
-          sidecar.language === UNKNOWN_LANGUAGE ? null : sidecar.language,
-        isForced: sidecar.isForced,
-      });
-      return true;
-    } catch {
-      // The bytes are in place and correctly named; the next library scan
-      // records them. A failure here is not a failed upload.
-      return false;
-    }
+    return attachInstalledSidecar(
+      {
+        libraryRoot,
+        catalogue: dependencies.catalogue,
+        ...(dependencies.discover ? { discover: dependencies.discover } : {}),
+      },
+      mediaFileId,
+      relativeMedia,
+      relativeSubtitle,
+    );
   }
 }

@@ -1,5 +1,6 @@
 import type { DatabasePool } from "../database/databasePool";
 import type { PlaybackRefreshBoundary } from "../playback/playbackRefresh";
+import type { SubtitleCatalogueAttachment } from "./subtitleAttachment";
 import type { SubtitleConfig } from "./subtitleConfig";
 import { createSubtitleExecutionRepository } from "./subtitleExecution";
 import { createSubtitleJobHandlers, SUBTITLE_JOB_TYPES } from "./subtitleJobs";
@@ -52,6 +53,8 @@ export function createSubtitleRuntime(options: {
   providers?: readonly SubtitleProvider[];
   sessions?: ProviderSessionManager;
   playback?: PlaybackRefreshBoundary;
+  /** Records an installed sidecar so the player lists it without a scan. */
+  catalogue?: SubtitleCatalogueAttachment;
   /**
    * What syncing needs and searching does not: the catalogue's own view of a
    * file's tracks, and an FFmpeg to read the ones that are inside it. Absent on
@@ -81,6 +84,7 @@ export function createSubtitleRuntime(options: {
     providers,
     sessions,
     playback: options.playback,
+    ...(options.catalogue ? { catalogue: options.catalogue } : {}),
   });
   const sync = options.sync
     ? createSubtitleSyncService({

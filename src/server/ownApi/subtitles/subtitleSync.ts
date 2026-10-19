@@ -27,6 +27,7 @@
  * cannot be repaired by moving it, and the confidence figure is what says so.
  */
 
+import { lstat } from "node:fs/promises";
 import path from "node:path";
 
 import type {
@@ -303,6 +304,28 @@ export function createSubtitleSyncService(dependencies: {
         return refuse("target-empty", "That subtitle file holds no cues.");
       const targetIntervals = cueIntervals(cues);
 
+      /*
+       * A processed title can have had its source removed, leaving its package
+       * and its sidecars. A sidecar reference and a hand-given correction need
+       * nothing else; an audio track or an embedded subtitle is read out of the
+       * source, so asking for one of those says why rather than failing inside
+       * FFmpeg.
+       */
+      const needsSource =
+        !request.transform &&
+        (request.reference.kind === "audio" ||
+          !streams.some(
+            (stream) =>
+              stream.streamIndex === request.reference.streamIndex &&
+              stream.isExternal &&
+              stream.externalRelativePath !== null,
+          ));
+      if (needsSource && (await sourceIsGone(relativeMedia)))
+        return refuse(
+          "source-removed",
+          "This title's source video has been removed, so only another subtitle file can be the reference.",
+        );
+
       let proposal: AlignmentProposal;
       let referenceLabel: string;
 
@@ -479,6 +502,13 @@ export function createSubtitleSyncService(dependencies: {
       });
     },
   };
+
+  async function sourceIsGone(relativeMedia: string): Promise<boolean> {
+    return lstat(absolute(relativeMedia)).then(
+      () => false,
+      (error: NodeJS.ErrnoException) => error.code === "ENOENT",
+    );
+  }
 
   /**
    * The reference track's cues, from wherever that track lives.

@@ -1344,6 +1344,7 @@ export async function createNativeRuntime({
     providers: availableSubtitleProviders,
     sessions: subtitleSessions ?? subtitleVault?.manager,
     playback: playbackRefresh,
+    catalogue: scanStore,
     /*
      * Re-timing an existing subtitle needs two things searching for one does
      * not: the catalogue's own list of a file's tracks, which is what an

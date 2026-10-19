@@ -179,7 +179,7 @@ describe("installing a subtitle beside media", () => {
       });
     });
 
-    it("refuses when the media file is not there", async () => {
+    it("refuses when the media file's folder is not there", async () => {
       mediaRelative = "Movies/Missing/none.mkv";
       expect(await install()).toMatchObject({
         outcome: "error",
@@ -319,6 +319,108 @@ describe("installing a subtitle beside media", () => {
           "utf8",
         ),
       ).toContain("Merhaba dünya.");
+    });
+  });
+
+  /*
+   * The Sopranos, 2026-10-19: five episodes whose sources were removed once
+   * their packages were whole could never be given a subtitle, because this
+   * refused before a provider was asked. Their sidecars are served on their
+   * own; only the folder the source lived in has to be real.
+   */
+  describe("a title whose source has been removed", () => {
+    const season = ["Shows", "The Sopranos", "Season 1", "src"];
+    const episode = (n: number) =>
+      `The.Sopranos.S01E0${n}.1080p.BluRay.x264-UNIT3D`;
+
+    beforeEach(async () => {
+      await mkdir(path.join(root, ...season), { recursive: true });
+      mediaRelative = [...season, `${episode(1)}.mkv`].join("/");
+    });
+
+    it("writes the sidecar where the source was, named after it", async () => {
+      const result = await install();
+      expect(result).toMatchObject({
+        outcome: "installed",
+        relativePath: [...season, `${episode(1)}.tur.srt`].join("/"),
+      });
+      expect(
+        await readFile(path.join(root, ...season, `${episode(1)}.tur.srt`), {
+          encoding: "utf8",
+        }),
+      ).toBe(SRT);
+      const entries = await readdir(path.join(root, ...season));
+      expect(entries).toEqual([`${episode(1)}.tur.srt`]);
+    });
+
+    /*
+     * With every source gone the folder holds no video at all, and the rule
+     * that a lone video owns every subtitle beside it would have handed this
+     * episode the next one's translation — and called the want satisfied.
+     */
+    it("does not mistake another episode's sidecar for this one's", async () => {
+      await writeFile(path.join(root, ...season, `${episode(2)}.tur.srt`), SRT);
+      expect(await storage.inspect("media-1")).toEqual([]);
+      expect(await install()).toMatchObject({ outcome: "installed" });
+      expect(await storage.inspect("media-1")).toEqual([
+        expect.objectContaining({
+          relativePath: [...season, `${episode(1)}.tur.srt`].join("/"),
+        }),
+      ]);
+    });
+
+    it("still finds its own sidecar, so a want it answers is not repeated", async () => {
+      await writeFile(
+        path.join(root, ...season, `${episode(1)}.tr.srt`),
+        SRT.replace("Merhaba.", "Selam."),
+      );
+      expect(await install()).toMatchObject({
+        outcome: "error",
+        failure: "destination-occupied",
+      });
+    });
+
+    it("reads and rewrites a sidecar beside the absent source", async () => {
+      const first = await install();
+      if (first.outcome !== "installed") throw new Error(first.outcome);
+      expect(
+        new TextDecoder().decode(
+          await storage.read("media-1", first.relativePath),
+        ),
+      ).toBe(SRT);
+      const later = SRT.replace("00:00:01,000", "00:00:02,000");
+      expect(
+        await storage.rewrite({
+          mediaFileId: "media-1",
+          relativePath: first.relativePath,
+          bytes: new TextEncoder().encode(later),
+          expectedSha256: first.sha256,
+        }),
+      ).toMatchObject({ outcome: "installed" });
+    });
+
+    it("refuses something that is not a file at the source's name", async () => {
+      await mkdir(path.join(root, ...season, `${episode(1)}.mkv`));
+      expect(await install()).toMatchObject({
+        outcome: "error",
+        failure: "media-missing",
+      });
+    });
+
+    it("refuses a link at the source's name", async () => {
+      await writeFile(path.join(root, "elsewhere.mkv"), "video");
+      try {
+        await symlink(
+          path.join(root, "elsewhere.mkv"),
+          path.join(root, ...season, `${episode(1)}.mkv`),
+        );
+      } catch {
+        return; // No privilege to create one here; nothing to assert against.
+      }
+      expect(await install()).toMatchObject({
+        outcome: "error",
+        failure: "path-escape",
+      });
     });
   });
 

@@ -2,6 +2,10 @@ import {
   createPlaybackRefreshBoundary,
   type PlaybackRefreshBoundary,
 } from "../playback/playbackRefresh";
+import {
+  attachInstalledSidecar,
+  type SubtitleCatalogueAttachment,
+} from "./subtitleAttachment";
 import type { SubtitleConfig } from "./subtitleConfig";
 import type {
   SubtitleExecutionRepository,
@@ -87,6 +91,12 @@ export function createSubtitleService(dependencies: {
   providers: readonly SubtitleProvider[];
   sessions: ProviderSessionManager;
   playback?: PlaybackRefreshBoundary;
+  /**
+   * Where an installed sidecar is recorded so the player lists it at once.
+   * Without it a title whose source was removed never lists the subtitle: the
+   * scan reads such a title from its package and leaves its sidecar rows alone.
+   */
+  catalogue?: SubtitleCatalogueAttachment;
   storageFactory?: (options: SubtitleStorageOptions) => SubtitleStorage;
 }): SubtitleService {
   const playback = dependencies.playback ?? createPlaybackRefreshBoundary();
@@ -190,6 +200,21 @@ export function createSubtitleService(dependencies: {
                 duplicate: outcome.outcome === "duplicate",
               });
             });
+            // After the commit, like the refresh: neither can un-install it.
+            if (dependencies.catalogue) {
+              const attached = await attachInstalledSidecar(
+                {
+                  libraryRoot: dependencies.config.libraryRoot,
+                  catalogue: dependencies.catalogue,
+                },
+                work.want.mediaFileId,
+                work.relativePath,
+                outcome.relativePath,
+              );
+              await work
+                .event("catalogue-attached", { attached })
+                .catch(() => undefined);
+            }
             const refreshed = await playback.request({
               mediaFileId: work.want.mediaFileId,
               kind: "subtitles",

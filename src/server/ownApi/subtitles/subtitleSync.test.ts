@@ -301,6 +301,33 @@ describe("sync", () => {
     expect(result.outcome === "refused" && result.failure).toBe("target-empty");
   });
 
+  /*
+   * The harness's library root does not exist, which is exactly a title whose
+   * source has been removed: its sidecars are still readable through storage,
+   * but nothing can be read out of the video.
+   */
+  it("still times against another sidecar once the source is removed", async () => {
+    const { service } = harness();
+    expect((await service.sync(request)).outcome).toBe("applied");
+  });
+
+  it("says why it cannot listen to a source that has been removed", async () => {
+    const { service, written } = harness();
+    expect(
+      await service.sync({
+        ...request,
+        reference: { kind: "audio", streamIndex: 1 },
+      }),
+    ).toMatchObject({ outcome: "refused", failure: "source-removed" });
+    expect(
+      await service.sync({
+        ...request,
+        reference: { kind: "subtitle", streamIndex: 3 },
+      }),
+    ).toMatchObject({ outcome: "refused", failure: "source-removed" });
+    expect(written.size).toBe(0);
+  });
+
   it("refuses when the media file is gone", async () => {
     const { service } = harness();
     const gone = createSubtitleSyncService({
