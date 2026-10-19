@@ -215,6 +215,13 @@ export interface RenditionService {
 /** The default audio rendition of a ready package, as a decoder input. */
 export interface PackagedAudio {
   path: string;
+  /**
+   * The rendition's own HLS playlist, for the same reason as
+   * `PackagedVideo.playlistPath`: the audio is one fragmented MP4 too, and
+   * a reader that only needs its samples should not make FFmpeg walk every
+   * fragment through the Drive mount before the first one decodes.
+   */
+  playlistPath: string;
   durationSeconds: number;
 }
 
@@ -521,6 +528,10 @@ export function createRenditionService({
     if (!chosen) return null;
     return {
       path: path.join(ready.versionRoot, ...chosen.mediaPath.split("/")),
+      playlistPath: path.join(
+        ready.versionRoot,
+        ...chosen.playlistPath.split("/"),
+      ),
       durationSeconds: chosen.durationSeconds,
     };
   };
