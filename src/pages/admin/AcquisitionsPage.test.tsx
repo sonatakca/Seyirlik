@@ -13,6 +13,10 @@ const api = vi.hoisted(() => ({
   listBlocklist: vi.fn(),
   removeBlocklistEntry: vi.fn(),
   getDownloadProgress: vi.fn(),
+  pauseAcquisition: vi.fn(),
+  resumeAcquisition: vi.fn(),
+  moveAcquisition: vi.fn(),
+  setDownloadClientPaused: vi.fn(),
 }));
 
 vi.mock("../../lib/acquisitionsApi", () => api);
@@ -85,9 +89,11 @@ describe("the acquisitions page", () => {
     const headings = screen
       .getAllByRole("heading", { level: 2 })
       .map((node) => node.textContent);
+    // The downloading row is not in the client's queue in this read, so it
+    // is still being got ready.
     expect(headings).toEqual([
       "admin.acquisitions.bucket.needsAttention",
-      "admin.acquisitions.bucket.active",
+      "admin.acquisitions.preparing.heading",
       "admin.acquisitions.bucket.finished",
     ]);
   });
@@ -118,7 +124,7 @@ describe("the acquisitions page", () => {
 
     await screen.findByText("Dune");
     expect(screen.queryByText("admin.acquisitions.retry")).toBeNull();
-    expect(screen.getByText("admin.acquisitions.cancel")).toBeTruthy();
+    expect(screen.getByLabelText("admin.acquisitions.cancel")).toBeTruthy();
   });
 
   it("never offers to cancel a download that already finished", async () => {
@@ -127,13 +133,18 @@ describe("the acquisitions page", () => {
     ]);
     renderPage();
 
+    fireEvent.click(
+      await screen.findByText("admin.acquisitions.finished.show"),
+    );
     await screen.findByText("Dune");
-    expect(screen.queryByText("admin.acquisitions.cancel")).toBeNull();
+    expect(screen.queryByLabelText("admin.acquisitions.cancel")).toBeNull();
   });
 
   it("explains why the release was chosen, and what was passed over", async () => {
     renderPage();
-    fireEvent.click(await screen.findByText("Dune"));
+    fireEvent.click(
+      await screen.findByLabelText("admin.acquisitions.row.details"),
+    );
 
     await screen.findByText("admin.acquisitions.why");
     expect(screen.getByText(/HD-2160p/)).toBeTruthy();
@@ -146,7 +157,9 @@ describe("the acquisitions page", () => {
   it("says so plainly when no decision was recorded", async () => {
     api.getAcquisition.mockResolvedValue(detail({ decision: null }));
     renderPage();
-    fireEvent.click(await screen.findByText("Dune"));
+    fireEvent.click(
+      await screen.findByLabelText("admin.acquisitions.row.details"),
+    );
 
     expect(
       await screen.findByText("admin.acquisitions.noDecision"),
@@ -189,7 +202,9 @@ describe("the acquisitions page", () => {
     // The server does not send them; nothing here should invent a place for
     // them either.
     renderPage();
-    fireEvent.click(await screen.findByText("Dune"));
+    fireEvent.click(
+      await screen.findByLabelText("admin.acquisitions.row.details"),
+    );
     await screen.findByText("admin.acquisitions.why");
 
     const html = document.body.innerHTML;
@@ -311,7 +326,10 @@ describe("the acquisitions page", () => {
     const bar = await screen.findByRole("progressbar");
     expect(bar.getAttribute("aria-valuenow")).toBe("48");
     expect(screen.getByText(/12\.0 GB \/ 25\.0 GB · 48%/)).toBeTruthy();
-    expect(screen.getByText(/31\.0 MB\/s/).textContent).toBe(
+    // Once on the row, and once as the client's own speed above the list.
+    expect(
+      screen.getAllByText(/31\.0 MB\/s/).map((node) => node.textContent),
+    ).toContain(
       "31.0 MB/s · 7 admin.acquisitions.progress.minutes admin.acquisitions.progress.left",
     );
   });
@@ -333,11 +351,12 @@ describe("the acquisitions page", () => {
       ],
     });
     renderPage();
-    expect(
-      await screen.findByText(
-        "admin.acquisitions.progress.queued · admin.acquisitions.progress.position 2",
-      ),
-    ).toBeTruthy();
+    const handle = await screen.findByLabelText(
+      "admin.acquisitions.row.handle",
+    );
+    expect(handle.closest("li")!.textContent).toContain(
+      "admin.acquisitions.progress.queued",
+    );
   });
 
   it.each(["queued", "downloading"] as const)(
@@ -457,7 +476,7 @@ describe("the acquisitions page", () => {
       acquisition({ state: "downloaded" }),
     ]);
     renderPage();
-    await screen.findByText("Dune");
+    await screen.findByText("admin.acquisitions.finished.show");
     expect(api.getDownloadProgress).not.toHaveBeenCalled();
   });
 
@@ -472,5 +491,148 @@ describe("the acquisitions page", () => {
     renderPage();
     await screen.findByText("Dune");
     expect(screen.queryByText("admin.acquisitions.retry")).toBeNull();
+  });
+});
+
+describe("steering the download queue", () => {
+  const episode = (id: string, n: number): Acquisition =>
+    acquisition({
+      id,
+      state: "queued",
+      target: { kind: "episode", title: "The Sopranos", season: 1, episode: n },
+      releaseTitle: `The.Sopranos.S01E0${n}.1080p.BluRay.x265-d3g`,
+    });
+  const queued = (id: string, queuePosition: number, stage = "queued") => ({
+    acquisitionId: id,
+    stage,
+    percent: 0,
+    totalBytes: 5_500_000_000,
+    downloadedBytes: 0,
+    queuePosition,
+  });
+
+  beforeEach(() => {
+    api.listAcquisitions.mockResolvedValue([
+      episode("e1", 1),
+      episode("e2", 2),
+      episode("e3", 3),
+    ]);
+    api.getDownloadProgress.mockResolvedValue({
+      reachable: true,
+      paused: false,
+      speedBytesPerSecond: 6_000_000,
+      remainingBytes: 16_500_000_000,
+      freeBytes: 491_000_000_000,
+      progress: [
+        queued("e2", 1, "downloading"),
+        queued("e1", 2),
+        queued("e3", 3),
+      ],
+    });
+    api.moveAcquisition.mockResolvedValue(1);
+    api.pauseAcquisition.mockResolvedValue(undefined);
+    api.resumeAcquisition.mockResolvedValue(undefined);
+    api.setDownloadClientPaused.mockResolvedValue(undefined);
+  });
+
+  const rowsInOrder = () =>
+    screen
+      .getAllByLabelText("admin.acquisitions.row.handle")
+      .map((handle) =>
+        handle.closest("li")!.getAttribute("data-acquisition-id"),
+      );
+
+  it("names each download by title and episode, in the client's order", async () => {
+    renderPage();
+    await screen.findAllByText("S01E02");
+    expect(rowsInOrder()).toEqual(["e2", "e1", "e3"]);
+    expect(screen.getAllByText("The Sopranos")).toHaveLength(3);
+    // The release stays visible, under the name.
+    expect(
+      screen.getByText("The.Sopranos.S01E03.1080p.BluRay.x265-d3g"),
+    ).toBeTruthy();
+  });
+
+  it("says how the whole client is doing", async () => {
+    renderPage();
+    const bar = await screen.findByRole("region", {
+      name: "admin.acquisitions.client.label",
+    });
+    expect(bar.textContent).toContain("admin.acquisitions.client.downloading");
+    expect(bar.textContent).toContain("6.0 MB/s");
+    // The test translator returns keys, so the sizes are in the template.
+    expect(bar.textContent).toContain("admin.acquisitions.client.left");
+    expect(bar.textContent).toContain("admin.acquisitions.client.free");
+  });
+
+  it("moves a download to the top as the first place in the client's queue", async () => {
+    renderPage();
+    await screen.findAllByText("S01E03");
+    const third = screen
+      .getAllByLabelText("admin.acquisitions.row.toTop")
+      .at(2)!;
+    fireEvent.click(third);
+    await waitFor(() =>
+      expect(api.moveAcquisition).toHaveBeenCalledWith("e3", 1),
+    );
+  });
+
+  it("moves with the arrow keys from the handle", async () => {
+    renderPage();
+    await screen.findAllByText("S01E03");
+    const [first] = screen.getAllByLabelText("admin.acquisitions.row.handle");
+    fireEvent.keyDown(first!, { key: "ArrowDown" });
+    // e2 takes e1's place, which is the client's second.
+    await waitFor(() =>
+      expect(api.moveAcquisition).toHaveBeenCalledWith("e2", 2),
+    );
+  });
+
+  it("pauses one download, and resumes a paused one", async () => {
+    api.getDownloadProgress.mockResolvedValue({
+      reachable: true,
+      paused: false,
+      progress: [queued("e2", 1, "downloading"), queued("e1", 2, "paused")],
+    });
+    renderPage();
+    fireEvent.click(
+      await screen.findByLabelText("admin.acquisitions.row.pause"),
+    );
+    fireEvent.click(screen.getByLabelText("admin.acquisitions.row.resume"));
+    await waitFor(() => {
+      expect(api.pauseAcquisition).toHaveBeenCalledWith("e2");
+      expect(api.resumeAcquisition).toHaveBeenCalledWith("e1");
+    });
+  });
+
+  it("pauses and resumes the whole client", async () => {
+    renderPage();
+    fireEvent.click(
+      await screen.findByText("admin.acquisitions.client.pauseAll"),
+    );
+    await waitFor(() =>
+      expect(api.setDownloadClientPaused).toHaveBeenCalledWith(true),
+    );
+  });
+
+  it("asks before cancelling, since it deletes what has come down", async () => {
+    renderPage();
+    await screen.findAllByText("S01E01");
+    fireEvent.click(screen.getAllByLabelText("admin.acquisitions.cancel")[0]!);
+    expect(api.cancelAcquisition).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("admin.acquisitions.row.confirmYes"));
+    await waitFor(() =>
+      expect(api.cancelAcquisition).toHaveBeenCalledWith("e2"),
+    );
+  });
+
+  it("says when the client did not take a control", async () => {
+    api.pauseAcquisition.mockRejectedValue(new Error("http://x?apikey=1"));
+    renderPage();
+    fireEvent.click(
+      (await screen.findAllByLabelText("admin.acquisitions.row.pause"))[0]!,
+    );
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toBe("admin.acquisitions.notice.controlFailed");
   });
 });

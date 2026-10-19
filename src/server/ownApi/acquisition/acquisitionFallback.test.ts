@@ -170,6 +170,8 @@ function build(w: World) {
     reconcile: vi.fn(async () => ({ examined: 1, changed: 0 })),
     cancel: vi.fn(async () => undefined),
     blocklist: vi.fn(async () => true),
+    setPaused: vi.fn(async () => undefined),
+    move: vi.fn(async () => 0),
   };
 
   const fallback = createAcquisitionFallback({

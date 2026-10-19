@@ -9,7 +9,10 @@ import type {
   AcquisitionSummary,
   CreateAcquisitionInput,
 } from "./acquisitionRepository";
-import type { AcquisitionService } from "./acquisitionService";
+import {
+  AcquisitionControlError,
+  type AcquisitionService,
+} from "./acquisitionService";
 import type { IndexerRegistry } from "../indexers/indexerRegistry";
 import type { IndexerSearchService } from "../indexers/searchService";
 import type { IndexerRelease } from "../indexers/indexerTypes";
@@ -164,6 +167,8 @@ function harness(
     reconcile: vi.fn(async () => ({ examined: 0, changed: 0 })),
     cancel: vi.fn(async () => undefined),
     blocklist: vi.fn(async () => true),
+    setPaused: vi.fn(async () => undefined),
+    move: vi.fn(async () => 0),
     ...over.service,
   };
 
@@ -849,17 +854,19 @@ describe("live progress", () => {
           },
         ],
       })),
-      listHistory: vi.fn(async (): Promise<SabJob[]> => [
-        {
-          nzoId: "nzo-3",
-          name: unpacking.idempotencyKey,
-          state: "processing" as const,
-          statusText: "Extracting",
-          actionLine: "Unpacking: 3/7",
-          sizeBytes: 20 * GB,
-          source: "history" as const,
-        },
-      ]),
+      listHistory: vi.fn(
+        async (): Promise<SabJob[]> => [
+          {
+            nzoId: "nzo-3",
+            name: unpacking.idempotencyKey,
+            state: "processing" as const,
+            statusText: "Extracting",
+            actionLine: "Unpacking: 3/7",
+            sizeBytes: 20 * GB,
+            source: "history" as const,
+          },
+        ],
+      ),
     };
   }
 
@@ -882,6 +889,7 @@ describe("live progress", () => {
         downloadedBytes: 12 * GB,
         speedBytesPerSecond: 31_000_000,
         etaSeconds: 425,
+        queuePosition: 1,
       },
       {
         // Found by name, before its identifier was known.
@@ -1021,5 +1029,91 @@ describe("a newer download retires older failures", () => {
     const h = harness();
     await invoke(route(h, "POST", "/acquisitions"), { body: VALID_BODY });
     expect(h.repository.supersedeFailedFor).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("steering the download queue", () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+
+  it("holds and releases one download through the service", async () => {
+    const h = harness();
+    const paused = await invoke(
+      route(h, "POST", "/acquisitions/:acquisitionId/pause"),
+      {
+        params: { acquisitionId: id },
+      },
+    );
+    const resumed = await invoke(
+      route(h, "POST", "/acquisitions/:acquisitionId/resume"),
+      {
+        params: { acquisitionId: id },
+      },
+    );
+    expect([paused.status, resumed.status]).toEqual([204, 204]);
+    expect(h.service.setPaused).toHaveBeenNthCalledWith(1, id, true);
+    expect(h.service.setPaused).toHaveBeenNthCalledWith(2, id, false);
+  });
+
+  it("moves a download to a place counted from 1", async () => {
+    const h = harness([summary()], {
+      service: { move: vi.fn(async (_id: string, index: number) => index) },
+    });
+    const { status, payload } = await invoke(
+      route(h, "POST", "/acquisitions/:acquisitionId/move"),
+      { params: { acquisitionId: id }, body: { position: 3 } },
+    );
+    expect(status).toBe(200);
+    expect(h.service.move).toHaveBeenCalledWith(id, 2);
+    expect(payload?.data).toEqual({ position: 3 });
+  });
+
+  it("refuses a move without a place", async () => {
+    const h = harness();
+    await expect(
+      invoke(route(h, "POST", "/acquisitions/:acquisitionId/move"), {
+        params: { acquisitionId: id },
+        body: { position: 0 },
+      }),
+    ).rejects.toMatchObject({ statusCode: 422 });
+  });
+
+  it("says when the download is no longer in the queue", async () => {
+    const h = harness([summary()], {
+      service: {
+        setPaused: vi.fn(async () => {
+          throw new AcquisitionControlError("not-in-queue", "Not queued.");
+        }),
+      },
+    });
+    await expect(
+      invoke(route(h, "POST", "/acquisitions/:acquisitionId/pause"), {
+        params: { acquisitionId: id },
+      }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("reports an unreachable client without its message", async () => {
+    const h = harness([summary()], {
+      sab: {
+        pauseQueue: vi.fn(async () => {
+          throw new SabError("unavailable", "http://host/api?apikey=secret");
+        }),
+      },
+    });
+    const error = await invoke(
+      route(h, "POST", "/acquisitions/client/pause"),
+    ).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ statusCode: 503 });
+    expect(String((error as Error).message)).not.toContain("secret");
+  });
+
+  it("pauses and resumes the whole client", async () => {
+    const pauseQueue = vi.fn(async () => undefined);
+    const resumeQueue = vi.fn(async () => undefined);
+    const h = harness([summary()], { sab: { pauseQueue, resumeQueue } });
+    await invoke(route(h, "POST", "/acquisitions/client/pause"));
+    await invoke(route(h, "POST", "/acquisitions/client/resume"));
+    expect(pauseQueue).toHaveBeenCalledOnce();
+    expect(resumeQueue).toHaveBeenCalledOnce();
   });
 });

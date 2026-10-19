@@ -12,11 +12,22 @@ import type {
   AcquisitionState,
 } from "./acquisitionPresentation";
 
+/** What a download is for, in the catalogue's terms. */
+export interface AcquisitionTarget {
+  readonly kind: string;
+  readonly title: string;
+  /** The catalogue item, where there is one: for its artwork. */
+  readonly itemId?: string;
+  readonly year?: number;
+  readonly season?: number;
+  readonly episode?: number;
+}
+
 export interface Acquisition {
   readonly id: string;
   readonly state: AcquisitionState;
   readonly origin: string;
-  readonly target: { kind: string; title: string };
+  readonly target: AcquisitionTarget;
   readonly indexerId: string;
   readonly releaseTitle: string;
   readonly attempt: number;
@@ -174,8 +185,12 @@ export interface AcquisitionProgress {
   readonly totalBytes?: number;
   readonly downloadedBytes?: number;
   readonly speedBytesPerSecond?: number;
+  /**
+   * When SABnzbd expects this job to be done. For a waiting job that
+   * includes everything ahead of it.
+   */
   readonly etaSeconds?: number;
-  /** 1 is next. */
+  /** Place in the download client's queue; 1 is first. */
   readonly queuePosition?: number;
   /** The post-processing step, in the download client's words. */
   readonly detail?: string;
@@ -186,9 +201,51 @@ export interface DownloadProgress {
   readonly reachable: boolean;
   readonly paused: boolean;
   readonly speedBytesPerSecond?: number;
+  /** Still to come down, across the whole queue. */
+  readonly remainingBytes?: number;
+  /** Free space where the download client writes. */
+  readonly freeBytes?: number;
   readonly progress: AcquisitionProgress[];
 }
 
 export function getDownloadProgress(): Promise<DownloadProgress> {
   return ownApiClient.request<DownloadProgress>("/acquisitions/progress");
+}
+
+/** Holds one download in the download client's queue. */
+export function pauseAcquisition(id: string): Promise<unknown> {
+  return ownApiClient.request(`/acquisitions/${encodeURIComponent(id)}/pause`, {
+    method: "POST",
+    body: {},
+  });
+}
+
+export function resumeAcquisition(id: string): Promise<unknown> {
+  return ownApiClient.request(
+    `/acquisitions/${encodeURIComponent(id)}/resume`,
+    { method: "POST", body: {} },
+  );
+}
+
+/**
+ * Moves one download to a place in the download client's queue, counted from
+ * 1 as `queuePosition` is, and returns the place it was given.
+ */
+export async function moveAcquisition(
+  id: string,
+  position: number,
+): Promise<number> {
+  const result = await ownApiClient.request<{ position: number }>(
+    `/acquisitions/${encodeURIComponent(id)}/move`,
+    { method: "POST", body: { position } },
+  );
+  return result.position;
+}
+
+/** Stops or starts the whole download client. */
+export function setDownloadClientPaused(paused: boolean): Promise<unknown> {
+  return ownApiClient.request(
+    `/acquisitions/client/${paused ? "pause" : "resume"}`,
+    { method: "POST", body: {} },
+  );
 }

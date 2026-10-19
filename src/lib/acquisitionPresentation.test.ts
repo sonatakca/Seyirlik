@@ -9,7 +9,9 @@ import {
   formatSpeed,
   isWaitingOnSeyirlik,
   progressStep,
+  queueMoveFor,
   remedyFor,
+  targetLabel,
   type AcquisitionFailureClass,
   type AcquisitionState,
 } from "./acquisitionPresentation";
@@ -217,5 +219,62 @@ describe("saying sizes, speeds and time left", () => {
 
   it("refuses a retry wherever the release is blocklisted", () => {
     expect(actionsFor("failed", "missing-articles", true).canRetry).toBe(false);
+  });
+});
+
+describe("naming a download", () => {
+  it("names an episode by its code", () => {
+    expect(
+      targetLabel({
+        kind: "episode",
+        title: "The Sopranos",
+        season: 1,
+        episode: 3,
+      }),
+    ).toEqual({ title: "The Sopranos", episodeCode: "S01E03" });
+  });
+
+  it("names a season pack by its season", () => {
+    expect(
+      targetLabel({ kind: "season", title: "Ezel", season: 2, year: 2009 }),
+    ).toEqual({ title: "Ezel", season: 2 });
+  });
+
+  it("names a film by its year, when there is one", () => {
+    expect(targetLabel({ kind: "movie", title: "Dune", year: 2021 })).toEqual({
+      title: "Dune",
+      year: 2021,
+    });
+    expect(targetLabel({ kind: "movie", title: "Dune" })).toEqual({
+      title: "Dune",
+    });
+  });
+});
+
+describe("turning a drop into a place in the client's queue", () => {
+  // Places with gaps: the client holds jobs that are not Seyirlik's.
+  const before = [
+    { id: "a", queuePosition: 1 },
+    { id: "b", queuePosition: 3 },
+    { id: "c", queuePosition: 4 },
+  ];
+
+  it("takes the place of the row it now stands in for, moving up", () => {
+    expect(queueMoveFor(before, ["c", "a", "b"])).toEqual({
+      id: "c",
+      position: 1,
+    });
+  });
+
+  it("takes the place of the row it now stands in for, moving down", () => {
+    expect(queueMoveFor(before, ["b", "c", "a"])).toEqual({
+      id: "a",
+      position: 4,
+    });
+  });
+
+  it("does nothing for an unchanged order or a changed set", () => {
+    expect(queueMoveFor(before, ["a", "b", "c"])).toBeNull();
+    expect(queueMoveFor(before, ["a", "b"])).toBeNull();
   });
 });

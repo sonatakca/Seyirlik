@@ -133,6 +133,41 @@ History failures have a distinct `failed` progress stage. The page shows the
 failure immediately and refreshes the acquisition list, even before worker
 reconciliation. A failed job never fills a success bar or displays `0 / 0 · 100%`.
 
+## Steering the queue
+
+The Acquisitions page is the queue a person steers, not SABnzbd's own UI. SABnzbd
+names each job `seyirlik-<row id>`, because the name is the recovery handle
+above; the page names it by what it is for — title, then `S01E03`, the season
+or the year — with the release underneath. The job names in SABnzbd are left as
+they are.
+
+Four controls, each going through the server so that no SABnzbd identifier ever
+reaches a browser:
+
+- `POST /acquisitions/:id/pause` and `/resume` hold or release one job.
+- `POST /acquisitions/:id/move` with `{ position }` puts one job at a place in
+  SABnzbd's queue, counted from 1 as `queuePosition` is. SABnzbd's `switch`
+  removes the job and inserts it at that index; a move onto its own place is
+  skipped, since SABnzbd answers that with -1.
+- `POST /acquisitions/client/pause` and `/resume` stop or start the whole
+  downloader, as its own pause button does.
+
+The first three act only on a job that is in the queue, filed under Seyirlik's
+category and named with the row's key — the same ownership rule as
+cancellation — and answer 409 otherwise. The client switch is the one control
+that reaches other jobs, deliberately: it is the operator's switch for the
+downloader, and nothing is removed or reordered.
+
+The live progress endpoint now gives every queued job its place, a waiting
+job SABnzbd's cumulative estimate of when it will be done, and the queue's
+remaining bytes and free space. The page reorders by dragging (the processing
+queue's `useQueueSortable`), by the arrow keys on the handle, or with "move to
+the top".
+
+These controls reach whichever SABnzbd `SEYIRLIK_SABNZBD.baseUrl` names on the
+machine serving the API. They are only meaningful when that is the SABnzbd the
+heavy worker submits to.
+
 ## What is recorded
 
 Three tables. `acquisitions` is the row and its current state.

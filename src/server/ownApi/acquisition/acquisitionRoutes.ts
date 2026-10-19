@@ -31,6 +31,7 @@ import type {
   AcquisitionSummary,
 } from "./acquisitionRepository";
 import {
+  AcquisitionControlError,
   BLOCKLISTABLE_STATES,
   type AcquisitionService,
 } from "./acquisitionService";
@@ -73,7 +74,15 @@ interface AcquisitionDto {
   readonly id: string;
   readonly state: string;
   readonly origin: string;
-  readonly target: { kind: string; title: string };
+  readonly target: {
+    kind: string;
+    title: string;
+    /** The catalogue item it is for, where there is one: for its artwork. */
+    itemId?: string;
+    year?: number;
+    season?: number;
+    episode?: number;
+  };
   readonly indexerId: string;
   readonly releaseTitle: string;
   readonly attempt: number;
@@ -106,7 +115,20 @@ function toDto(
     id: summary.id,
     state: summary.state,
     origin: summary.origin,
-    target: { kind: summary.targetKind, title: summary.targetTitle },
+    target: {
+      kind: summary.targetKind,
+      title: summary.targetTitle,
+      ...(summary.targetItemId === undefined
+        ? {}
+        : { itemId: summary.targetItemId }),
+      ...(summary.targetYear === undefined ? {} : { year: summary.targetYear }),
+      ...(summary.targetSeason === undefined
+        ? {}
+        : { season: summary.targetSeason }),
+      ...(summary.targetEpisode === undefined
+        ? {}
+        : { episode: summary.targetEpisode }),
+    },
     indexerId: summary.indexerId,
     releaseTitle: summary.releaseTitle,
     attempt: summary.attempt,
@@ -146,8 +168,12 @@ interface ProgressDto {
   readonly totalBytes?: number;
   readonly downloadedBytes?: number;
   readonly speedBytesPerSecond?: number;
+  /**
+   * SABnzbd's estimate of when this job is done: for a waiting job, that
+   * includes everything ahead of it. Never while paused.
+   */
   readonly etaSeconds?: number;
-  /** 1 is next. Only while waiting. */
+  /** Place in SABnzbd's queue; 1 is first. Any job still in the queue. */
   readonly queuePosition?: number;
   /** The post-processing step, as SABnzbd words it. */
   readonly detail?: string;
@@ -203,10 +229,11 @@ function progressOf(
     ...(stage === "downloading" && speedBytesPerSecond
       ? { speedBytesPerSecond }
       : {}),
-    ...(stage === "downloading" && job.timeLeftSeconds !== undefined
+    ...((stage === "downloading" || stage === "queued") &&
+    job.timeLeftSeconds !== undefined
       ? { etaSeconds: job.timeLeftSeconds }
       : {}),
-    ...(stage === "queued" && job.queuePosition !== undefined
+    ...(job.source === "queue" && job.queuePosition !== undefined
       ? { queuePosition: job.queuePosition + 1 }
       : {}),
     ...(job.actionLine ? { detail: job.actionLine } : {}),
@@ -228,6 +255,35 @@ export interface CreateAcquisitionRoutesOptions {
    * episode. Without it a season with no other pack stays failed.
    */
   readonly episodesOf?: AcquisitionFallbackOptions["episodesOf"];
+}
+
+/**
+ * Runs a queue control and says, as an HTTP error, why it could not be done.
+ *
+ * SABnzbd's own message is not passed on for transport failures: like every
+ * SabError it never carries the URL, but "unreachable" is all the reader
+ * needs.
+ */
+async function control<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof AcquisitionControlError) {
+      throw error.kind === "not-found"
+        ? new OwnApiError("NOT_FOUND", error.message, 404)
+        : new OwnApiError("ACQUISITION_NOT_QUEUED", error.message, 409);
+    }
+    if (error instanceof SabError) {
+      throw error.kind === "rejected" || error.kind === "bad-request"
+        ? new OwnApiError("DOWNLOAD_CLIENT_REFUSED", error.message, 409)
+        : new OwnApiError(
+            "DOWNLOAD_CLIENT_UNAVAILABLE",
+            "The download client could not be reached.",
+            503,
+          );
+    }
+    throw error;
+  }
 }
 
 export function createAcquisitionRoutes({
@@ -351,6 +407,12 @@ export function createAcquisitionRoutes({
           ...(queue.paused || queue.speedBytesPerSecond === undefined
             ? {}
             : { speedBytesPerSecond: queue.speedBytesPerSecond }),
+          ...(queue.remainingBytes === undefined
+            ? {}
+            : { remainingBytes: queue.remainingBytes }),
+          ...(queue.freeBytes === undefined
+            ? {}
+            : { freeBytes: queue.freeBytes }),
           progress,
         });
       },
@@ -736,6 +798,88 @@ export function createAcquisitionRoutes({
           },
           202,
         );
+      },
+    },
+    {
+      /**
+       * Holds or releases one download in SABnzbd's queue.
+       *
+       * Only the job this acquisition owns, found by the same ownership rule
+       * cancellation uses; a client never names a SABnzbd identifier.
+       */
+      method: "POST",
+      path: "/acquisitions/:acquisitionId/pause",
+      access: "admin",
+      handle: async (context) => {
+        context.requirePrincipal();
+        const id = requireUuid(context.params.acquisitionId, "acquisitionId");
+        await control(() => service.setPaused(id, true));
+        sendNoContent(context.response);
+      },
+    },
+    {
+      method: "POST",
+      path: "/acquisitions/:acquisitionId/resume",
+      access: "admin",
+      handle: async (context) => {
+        context.requirePrincipal();
+        const id = requireUuid(context.params.acquisitionId, "acquisitionId");
+        await control(() => service.setPaused(id, false));
+        sendNoContent(context.response);
+      },
+    },
+    {
+      /**
+       * Moves one download to a place in SABnzbd's queue; 1 is first.
+       *
+       * The place is the queue's own, as `queuePosition` reports it, so a
+       * download can be put ahead of a job Seyirlik does not own. That job is
+       * not touched; it is only no longer ahead.
+       */
+      method: "POST",
+      path: "/acquisitions/:acquisitionId/move",
+      access: "admin",
+      handle: async (context) => {
+        context.requirePrincipal();
+        const id = requireUuid(context.params.acquisitionId, "acquisitionId");
+        const body = asObjectBody(await context.readJson(), ["position"]);
+        const position = optionalBodyInteger(body, "position", {
+          min: 1,
+          max: 100_000,
+        });
+        if (position === undefined) {
+          throw validationError("A queue position, from 1, is required.");
+        }
+        const placed = await control(() => service.move(id, position - 1));
+        sendData(context.response, context.requestId, {
+          position: placed + 1,
+        });
+      },
+    },
+    {
+      /**
+       * Stops or starts the whole download client, as its own pause button
+       * does. The one control that reaches jobs Seyirlik does not own, and on
+       * purpose: it is the operator's switch for the downloader, not a
+       * decision about any one job, and nothing is removed or reordered.
+       */
+      method: "POST",
+      path: "/acquisitions/client/pause",
+      access: "admin",
+      handle: async (context) => {
+        context.requirePrincipal();
+        await control(() => sab.pauseQueue());
+        sendNoContent(context.response);
+      },
+    },
+    {
+      method: "POST",
+      path: "/acquisitions/client/resume",
+      access: "admin",
+      handle: async (context) => {
+        context.requirePrincipal();
+        await control(() => sab.resumeQueue());
+        sendNoContent(context.response);
       },
     },
     {

@@ -51,6 +51,10 @@ export interface CreateAcquisitionInput {
 export interface AcquisitionSummary extends AcquisitionRecord {
   readonly targetTitle: string;
   readonly targetKind: string;
+  readonly targetItemId?: string;
+  readonly targetYear?: number;
+  readonly targetSeason?: number;
+  readonly targetEpisode?: number;
   readonly origin: string;
   readonly failureClass?: string;
   readonly failureDetail?: string;
@@ -141,6 +145,10 @@ interface Row {
   failure_detail: string | null;
   target_title: string;
   target_kind: string;
+  target_item_id: string | null;
+  target_year: number | null;
+  target_season: number | null;
+  target_episode: number | null;
   origin: string;
   created_at: Date;
   updated_at: Date;
@@ -148,8 +156,8 @@ interface Row {
 
 const COLUMNS = `id, state, indexer_id, release_guid, release_title,
   idempotency_key, external_id, attempt, download_path, size_bytes,
-  failure_class, failure_detail, target_title, target_kind, origin,
-  created_at, updated_at`;
+  failure_class, failure_detail, target_title, target_kind, target_item_id,
+  target_year, target_season, target_episode, origin, created_at, updated_at`;
 
 function toSummary(row: Row): AcquisitionSummary {
   const size = row.size_bytes === null ? undefined : Number(row.size_bytes);
@@ -168,6 +176,14 @@ function toSummary(row: Row): AcquisitionSummary {
     ...(row.failure_detail ? { failureDetail: row.failure_detail } : {}),
     targetTitle: row.target_title,
     targetKind: row.target_kind,
+    ...(row.target_item_id === null
+      ? {}
+      : { targetItemId: row.target_item_id }),
+    ...(row.target_year === null ? {} : { targetYear: row.target_year }),
+    ...(row.target_season === null ? {} : { targetSeason: row.target_season }),
+    ...(row.target_episode === null
+      ? {}
+      : { targetEpisode: row.target_episode }),
     origin: row.origin,
     createdAtMs: row.created_at.getTime(),
     updatedAtMs: row.updated_at.getTime(),

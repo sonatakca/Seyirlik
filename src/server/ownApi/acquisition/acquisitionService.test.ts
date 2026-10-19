@@ -555,3 +555,74 @@ describe("blocklisting", () => {
     },
   );
 });
+
+describe("steering its own job in the queue", () => {
+  function steerable(jobs: SabJob[]) {
+    const sab = {
+      ...makeSab({ jobs }),
+      pauseJob: vi.fn(async () => undefined),
+      resumeJob: vi.fn(async () => undefined),
+      moveJob: vi.fn(async (_id: string, index: number) => index),
+    };
+    return sab;
+  }
+  const own: SabJob = {
+    nzoId: "nzo-own",
+    name: KEY,
+    category: "seyirlik",
+    state: "queued",
+    source: "queue",
+  };
+  const other: SabJob = {
+    nzoId: "nzo-other",
+    name: "Someone.Elses.Job",
+    category: "movies",
+    state: "queued",
+    source: "queue",
+  };
+
+  it("holds and releases the job it owns, found by identifier", async () => {
+    const { store } = makeStore({ state: "queued", externalId: "nzo-own" });
+    const sab = steerable([other, own]);
+    const svc = service(store, sab);
+    await svc.setPaused("acq-1", true);
+    await svc.setPaused("acq-1", false);
+    expect(sab.pauseJob).toHaveBeenCalledWith("nzo-own", undefined);
+    expect(sab.resumeJob).toHaveBeenCalledWith("nzo-own", undefined);
+  });
+
+  it("refuses a job whose identifier now names something it does not own", async () => {
+    // The row remembers an identifier SABnzbd has since given to another job.
+    const { store } = makeStore({ state: "queued", externalId: "nzo-other" });
+    const sab = steerable([other]);
+    await expect(
+      service(store, sab).setPaused("acq-1", true),
+    ).rejects.toMatchObject({ kind: "not-in-queue" });
+    expect(sab.pauseJob).not.toHaveBeenCalled();
+  });
+
+  it("refuses a download that has left the queue", async () => {
+    const { store } = makeStore({ state: "processing", externalId: "nzo-own" });
+    const sab = steerable([{ ...own, source: "history", state: "processing" }]);
+    await expect(service(store, sab).move("acq-1", 0)).rejects.toMatchObject({
+      kind: "not-in-queue",
+    });
+    expect(sab.moveJob).not.toHaveBeenCalled();
+  });
+
+  it("moves the job, keeping the place inside the queue", async () => {
+    const { store } = makeStore({ state: "queued" });
+    const sab = steerable([other, own]);
+    const svc = service(store, sab);
+    expect(await svc.move("acq-1", 0)).toBe(0);
+    expect(await svc.move("acq-1", 99)).toBe(1);
+    expect(sab.moveJob).toHaveBeenLastCalledWith("nzo-own", 1, undefined);
+  });
+
+  it("leaves a job already in place alone", async () => {
+    const { store } = makeStore({ state: "queued" });
+    const sab = steerable([{ ...own, queuePosition: 0 }, other]);
+    expect(await service(store, sab).move("acq-1", 0)).toBe(0);
+    expect(sab.moveJob).not.toHaveBeenCalled();
+  });
+});
