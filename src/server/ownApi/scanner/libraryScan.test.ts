@@ -401,6 +401,44 @@ describe("scanLibraryTree — series", () => {
   });
 
   /*
+   * Imported files are named by number alone. The scan still has to name the
+   * episode, but it must say the name is a stand-in, so it never replaces the
+   * provider's title on an episode the catalogue already knows.
+   */
+  it("marks a title it had to invent, and only that one", async () => {
+    const fileSystem = createFileSystem({
+      Series: ["The Sopranos/"],
+      "Series/The Sopranos": ["Season 1/"],
+      "Series/The Sopranos/Season 1": [
+        "src/",
+        "The Sopranos - S01E02/",
+        "The Sopranos - S01E04 - Meadowlands.mkv",
+      ],
+      "Series/The Sopranos/Season 1/src": ["The Sopranos - S01E01.mkv"],
+      "Series/The Sopranos/Season 1/The Sopranos - S01E02": [".seyirlik/"],
+      "Series/The Sopranos/Season 1/The Sopranos - S01E02/.seyirlik": [
+        "package.json",
+      ],
+    });
+
+    const result = await scanLibraryTree({
+      fileSystem,
+      rootPath: "Series",
+      kind: "series",
+    });
+
+    const episodes = byKind(result.items, "episode");
+    const byNumber = (n: number) =>
+      episodes.find((episode) => episode.indexNumber === n);
+    expect(byNumber(1)).toMatchObject({
+      title: "Episode 1",
+      titleIsPlaceholder: true,
+    });
+    expect(byNumber(4)?.title).toBe("Meadowlands");
+    expect(byNumber(4)?.titleIsPlaceholder).toBeUndefined();
+  });
+
+  /*
    * Everything in a real show folder that is not an episode.
    *
    * `trailers/` and `Backdrops/` are extra directories, a `*-thumb.jpg` and a

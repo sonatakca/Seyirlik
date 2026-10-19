@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ChevronDown, Check, ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
 import { formatTemplate } from "../../lib/format";
 import type {
@@ -7,15 +7,38 @@ import type {
   PlaybackQueueSeason,
 } from "../../lib/playbackQueue";
 import type { MediaItem } from "../../lib/types";
+import { PlayerEpisodeRow } from "./PlayerEpisodeRow";
 import {
   QueueItemButton,
   type PlayerQueueTranslate,
 } from "./PlayerQueueItemButton";
 
+/*
+ * The list fades into the panel's edges rather than being cut by them, so a
+ * row half out of view reads as "more this way" instead of as clipped.
+ */
+const EPISODE_LIST_FADE_GRADIENT =
+  "linear-gradient(to bottom, transparent 0, #000 12px, #000 calc(100% - 36px), transparent 100%)";
+const EPISODE_LIST_FADE = {
+  maskImage: EPISODE_LIST_FADE_GRADIENT,
+  WebkitMaskImage: EPISODE_LIST_FADE_GRADIENT,
+} as const;
+
 interface PlayerQueuePanelProps {
   queue: PlaybackQueue;
   compact?: boolean;
   onPlayItem?: (item: MediaItem) => void;
+}
+
+/** The short form a season chip shows: its number, or its name for specials. */
+function getSeasonChipLabel(
+  season: PlaybackQueueSeason,
+  t: PlayerQueueTranslate,
+) {
+  if (season.seasonNumber !== null && season.seasonNumber > 0) {
+    return String(season.seasonNumber);
+  }
+  return season.name ?? t("player.seasonSelect");
 }
 
 function getSeasonLabel(season: PlaybackQueueSeason, t: PlayerQueueTranslate) {
@@ -43,7 +66,6 @@ export function PlayerQueuePanel({
   const seasons = queue.seasons ?? [];
   const defaultSeasonId = queue.currentSeasonId ?? seasons[0]?.id ?? "";
   const [selectedSeasonId, setSelectedSeasonId] = useState(defaultSeasonId);
-  const [isSeasonMenuOpen, setIsSeasonMenuOpen] = useState(false);
   const [isCollectionScrollable, setIsCollectionScrollable] = useState(false);
   const [canScrollCollectionLeft, setCanScrollCollectionLeft] = useState(false);
   const [canScrollCollectionRight, setCanScrollCollectionRight] =
@@ -57,10 +79,10 @@ export function PlayerQueuePanel({
   const panelWidthClass = compact
     ? queue.kind === "collection"
       ? "sm:w-fit sm:max-w-md"
-      : "sm:w-72 sm:max-w-[calc(100vw-2rem)]"
+      : "sm:w-[23rem] sm:max-w-[calc(100vw-2rem)]"
     : queue.kind === "collection"
       ? "sm:w-fit sm:max-w-2xl"
-      : "sm:w-80 sm:max-w-[calc(100vw-2rem)]";
+      : "sm:w-[27rem] sm:max-w-[calc(100vw-2rem)]";
 
   useEffect(() => {
     setSelectedSeasonId(defaultSeasonId);
@@ -159,7 +181,12 @@ export function PlayerQueuePanel({
       return;
     }
 
-    scrollContainer.scrollTop += elementRect.top - containerRect.top;
+    // Part of the episode before stays in view, so the list reads as a
+    // place in the season rather than starting at the current episode.
+    scrollContainer.scrollTop +=
+      elementRect.top -
+      containerRect.top -
+      Math.round(elementRect.height * 0.4);
   }, [queue.kind, queue.currentItemId, selectedSeasonId, visibleItems.length]);
 
   const scrollCollection = (direction: "left" | "right") => {
@@ -201,11 +228,104 @@ export function PlayerQueuePanel({
     }, 220);
   };
 
+  if (queue.kind === "series") {
+    return (
+      <div
+        className={`fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom)+4.25rem)] z-[70] flex max-h-[calc(100dvh-6rem)] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[rgba(14,14,16,0.94)] text-white shadow-[0_28px_90px_rgba(0,0,0,0.75)] backdrop-blur-2xl sm:absolute sm:inset-x-auto sm:bottom-[5.25rem] sm:right-0 ${panelWidthClass}`}
+      >
+        <div className="shrink-0 px-4 pb-3 pt-4">
+          <div className="flex items-end justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[0.68rem] font-black uppercase tracking-[0.2em] text-[var(--accent)]">
+                {getQueueTitle(queue, t)}
+              </p>
+              {queue.title ? (
+                <p className="mt-1 truncate text-lg font-black leading-tight text-white">
+                  {queue.title}
+                </p>
+              ) : null}
+            </div>
+            <p className="shrink-0 pb-0.5 text-xs font-bold tabular-nums text-white/45">
+              {formatTemplate(t("player.queueEpisodeCount"), {
+                count: visibleItems.length,
+              })}
+            </p>
+          </div>
+
+          {seasons.length > 1 ? (
+            <div className="mt-3 flex items-center gap-2">
+              <span
+                id="player-season-label"
+                className="shrink-0 text-[0.68rem] font-black uppercase tracking-[0.16em] text-white/45"
+              >
+                {t("player.seasonSelect")}
+              </span>
+              <div
+                role="tablist"
+                aria-labelledby="player-season-label"
+                className="player-queue-scroll -my-1 flex min-w-0 gap-1.5 overflow-x-auto py-1"
+              >
+                {seasons.map((season) => {
+                  const isSelected = season.id === selectedSeason?.id;
+                  const isPlaying = season.id === queue.currentSeasonId;
+                  return (
+                    <button
+                      key={season.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={isSelected}
+                      aria-label={getSeasonLabel(season, t)}
+                      onClick={() => setSelectedSeasonId(season.id)}
+                      className={`relative flex h-8 min-w-8 shrink-0 items-center justify-center rounded-full px-2.5 text-sm font-black tabular-nums transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
+                        isSelected
+                          ? "bg-white text-zinc-950"
+                          : "bg-white/[0.07] text-white/70 hover:bg-white/[0.13] hover:text-white"
+                      }`}
+                    >
+                      {getSeasonChipLabel(season, t)}
+                      {isPlaying && !isSelected ? (
+                        <span
+                          aria-hidden="true"
+                          className="absolute bottom-1 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-[var(--accent)]"
+                        />
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : selectedSeason ? (
+            <p className="mt-2 text-xs font-bold text-white/55">
+              {getSeasonLabel(selectedSeason, t)}
+            </p>
+          ) : null}
+        </div>
+
+        <div
+          ref={episodeScrollRef}
+          className="player-queue-scroll min-h-0 flex-1 space-y-1 overflow-y-auto border-t border-white/[0.07] px-2 pb-7 pt-3 sm:max-h-[min(30rem,calc(100dvh-16rem))]"
+          style={EPISODE_LIST_FADE}
+        >
+          {visibleItems.map((item) => (
+            <div key={item.Id} data-queue-item-id={item.Id}>
+              <PlayerEpisodeRow
+                item={item}
+                isCurrent={item.Id === queue.currentItemId}
+                t={t}
+                onPlayItem={onPlayItem}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className={`fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom)+4.25rem)] z-[70] overflow-visible rounded-2xl border border-white/10 bg-[rgba(18,18,20,0.96)] p-4 pr-2 text-white shadow-[0_24px_90px_rgba(0,0,0,0.72)] backdrop-blur-2xl sm:absolute sm:inset-x-auto sm:bottom-[5.25rem] sm:right-0 ${panelWidthClass}`}
     >
-      {queue.kind === "collection" && isCollectionScrollable ? (
+      {isCollectionScrollable ? (
         <>
           <button
             type="button"
@@ -228,122 +348,34 @@ export function PlayerQueuePanel({
           </button>
         </>
       ) : null}
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-xs font-black uppercase tracking-[0.18em] text-[var(--accent)]">
-          {getQueueTitle(queue, t)}
-        </p>
+      <p className="text-xs font-black uppercase tracking-[0.18em] text-[var(--accent)]">
+        {getQueueTitle(queue, t)}
+      </p>
 
-        {queue.kind === "series" && seasons.length > 0 ? (
-          <label className="sr-only" htmlFor="player-season-select">
-            {t("player.seasonSelect")}
-          </label>
-        ) : null}
-      </div>
-
-      {queue.kind === "series" && seasons.length > 0 ? (
-        <div className="relative mt-3">
-          <button
-            id="player-season-select"
-            type="button"
-            onClick={() => setIsSeasonMenuOpen((open) => !open)}
-            aria-haspopup="listbox"
-            aria-expanded={isSeasonMenuOpen}
-            className="flex w-full items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.08] px-3 py-2 text-left text-sm font-black text-white outline-none transition hover:border-white/20 hover:bg-white/[0.12] focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]"
-          >
-            <span className="truncate">
-              {selectedSeason
-                ? getSeasonLabel(selectedSeason, t)
-                : t("player.seasonSelect")}
-            </span>
-
-            <ChevronDown
-              className={`h-4 w-4 shrink-0 text-white/60 transition-transform ${
-                isSeasonMenuOpen ? "rotate-180" : ""
-              }`}
-            />
-          </button>
-
-          {isSeasonMenuOpen ? (
-            <div
-              role="listbox"
-              aria-labelledby="player-season-select"
-              className="absolute left-0 right-0 top-[calc(100%+0.5rem)] z-[90] max-h-56 overflow-y-auto rounded-xl border border-white/10 bg-zinc-950/95 p-1 shadow-[0_18px_60px_rgba(0,0,0,0.65)] backdrop-blur-2xl"
-            >
-              {seasons.map((season) => {
-                const isSelected = season.id === selectedSeason?.id;
-
-                return (
-                  <button
-                    key={season.id}
-                    type="button"
-                    role="option"
-                    aria-selected={isSelected}
-                    onClick={() => {
-                      setSelectedSeasonId(season.id);
-                      setIsSeasonMenuOpen(false);
-                    }}
-                    className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm font-bold transition ${
-                      isSelected
-                        ? "bg-[var(--accent)]/18 text-[var(--accent)]"
-                        : "text-white/80 hover:bg-white/[0.08] hover:text-white"
-                    }`}
-                  >
-                    <span className="truncate">
-                      {getSeasonLabel(season, t)}
-                    </span>
-
-                    {isSelected ? <Check className="h-4 w-4 shrink-0" /> : null}
-                  </button>
-                );
-              })}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {queue.kind === "collection" ? (
-        <div className="mt-3">
-          <div
-            ref={collectionScrollRef}
-            className={`media-scroll flex w-max max-w-full gap-3 overflow-y-hidden pb-2 pt-1 ${
-              isCollectionScrollable ? "overflow-x-auto" : "overflow-x-hidden"
-            }`}
-          >
-            {visibleItems.map((item) => (
-              <div
-                key={item.Id}
-                data-queue-item-id={item.Id}
-                className="shrink-0"
-              >
-                <QueueItemButton
-                  item={item}
-                  isCurrent={item.Id === queue.currentItemId}
-                  variant="collection"
-                  t={t}
-                  onPlayItem={onPlayItem}
-                />
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : (
+      <div className="mt-3">
         <div
-          ref={episodeScrollRef}
-          className="player-queue-scroll mt-3 max-h-[min(25rem,calc(100dvh-14rem))] space-y-2 overflow-y-auto pr-2"
+          ref={collectionScrollRef}
+          className={`media-scroll flex w-max max-w-full gap-3 overflow-y-hidden pb-2 pt-1 ${
+            isCollectionScrollable ? "overflow-x-auto" : "overflow-x-hidden"
+          }`}
         >
           {visibleItems.map((item) => (
-            <div key={item.Id} data-queue-item-id={item.Id}>
+            <div
+              key={item.Id}
+              data-queue-item-id={item.Id}
+              className="shrink-0"
+            >
               <QueueItemButton
                 item={item}
                 isCurrent={item.Id === queue.currentItemId}
-                variant="episode"
+                variant="collection"
                 t={t}
                 onPlayItem={onPlayItem}
               />
             </div>
           ))}
         </div>
-      )}
+      </div>
     </div>
   );
 }

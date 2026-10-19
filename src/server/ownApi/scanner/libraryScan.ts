@@ -100,6 +100,15 @@ export interface ScannedItem {
    */
   renditionBacked?: boolean;
   /**
+   * The name gave no title, so `title` is a stand-in ("Episode 4").
+   *
+   * Imported files are named by number alone, and a stand-in must never
+   * replace a title the catalogue already holds: every scan did exactly that,
+   * resetting each episode's provider title to "Episode N" ten minutes after
+   * the metadata refresh wrote it.
+   */
+  titleIsPlaceholder?: boolean;
+  /**
    * The folder holding that package, when there is one.
    *
    * Only a movie's package directory can be recovered from its `sourceKey`; an
@@ -827,6 +836,7 @@ async function scanEpisodeFiles(
       sourceKey: episodeKey,
       kind: "episode",
       title: parsed.title,
+      ...(parsed.episodeTitle ? {} : { titleIsPlaceholder: true }),
       sortTitle: `${String(seasonNumber).padStart(4, "0")}-${String(
         episodeNumber ?? 0,
       ).padStart(5, "0")}`,
@@ -889,6 +899,7 @@ async function scanEpisodeFiles(
       sourceKey: episodeKey,
       kind: "episode",
       title: parsed.title,
+      ...(parsed.episodeTitle ? {} : { titleIsPlaceholder: true }),
       sortTitle: `${String(seasonNumber).padStart(4, "0")}-${String(
         episodeNumber ?? 0,
       ).padStart(5, "0")}`,

@@ -495,6 +495,7 @@ export const tr = {
   "player.nextUp": "Sıradaki",
   "player.playbackQueue": "Liste",
   "player.queueEpisodes": "Bölümler",
+  "player.queueEpisodeCount": "{count} bölüm",
   "player.queueCollection": "Koleksiyon",
   "player.seasonSelect": "Sezon",
   "player.nowPlaying": "Şu anda oynuyor",

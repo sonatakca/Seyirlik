@@ -47,6 +47,8 @@ export interface UpsertItemInput {
   parentIndexNumber: number | undefined;
   /** Field names the reconciler must not overwrite because an admin edited them. */
   lockedFields: string[];
+  /** `title` is a stand-in; it names a new item but never replaces a title. */
+  titleIsPlaceholder?: boolean;
 }
 
 export interface UpsertFileInput {
@@ -220,6 +222,7 @@ export async function reconcileLibraryScan({
       indexNumber: scanned.indexNumber,
       parentIndexNumber: scanned.parentIndexNumber,
       lockedFields: existing?.lockedFields ?? [],
+      ...(scanned.titleIsPlaceholder ? { titleIsPlaceholder: true } : {}),
     });
 
     itemIdBySourceKey.set(scanned.sourceKey, itemId);

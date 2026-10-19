@@ -497,6 +497,7 @@ export const en = {
   "player.nextUp": "Next up",
   "player.playbackQueue": "List",
   "player.queueEpisodes": "Episodes",
+  "player.queueEpisodeCount": "{count} episodes",
   "player.queueCollection": "Collection",
   "player.seasonSelect": "Season",
   "player.nowPlaying": "Now playing",
