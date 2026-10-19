@@ -7,11 +7,16 @@ import {
   type SubtitleCatalogueAttachment,
 } from "./subtitleAttachment";
 import type { SubtitleConfig } from "./subtitleConfig";
+import type { SubtitleFitter } from "./subtitleFit";
 import type {
   SubtitleExecutionRepository,
   SubtitleWork,
 } from "./subtitleExecution";
-import { runSubtitlePipeline, type SubtitleProgress } from "./subtitlePipeline";
+import {
+  runSubtitlePipeline,
+  type SubtitleFitSummary,
+  type SubtitleProgress,
+} from "./subtitlePipeline";
 import type {
   ProviderSessionManager,
   ScoredCandidate,
@@ -97,6 +102,16 @@ export function createSubtitleService(dependencies: {
    * scan reads such a title from its package and leaves its sidecar rows alone.
    */
   catalogue?: SubtitleCatalogueAttachment;
+  /**
+   * A way to measure downloads against the title's own audio, so the best
+   * fitting of several candidates is installed. Null for a title with no audio
+   * to read; absent on a deployment without FFmpeg.
+   */
+  fit?: (target: {
+    mediaFileId: string;
+    relativePath: string;
+    signal: AbortSignal;
+  }) => Promise<SubtitleFitter | null>;
   storageFactory?: (options: SubtitleStorageOptions) => SubtitleStorage;
 }): SubtitleService {
   const playback = dependencies.playback ?? createPlaybackRefreshBoundary();
@@ -168,6 +183,7 @@ export function createSubtitleService(dependencies: {
             outcome: "installed" | "duplicate";
             relativePath: string;
             sha256: string;
+            fit?: SubtitleFitSummary;
           }) => {
             await work.transaction(async () => {
               if (outcome.outcome === "installed") {
@@ -187,9 +203,11 @@ export function createSubtitleService(dependencies: {
                   sizeBytes: i.sizeBytes,
                   cueCount: i.cueCount,
                   providerId: work.selected?.candidate.providerId ?? null,
-                  syncState: work.selected?.candidate.hashMatched
-                    ? "assumed-in-sync"
-                    : "unknown",
+                  // Matched on the file itself, or measured on its audio.
+                  syncState:
+                    work.selected?.candidate.hashMatched || outcome.fit?.trusted
+                      ? "assumed-in-sync"
+                      : "unknown",
                 });
               }
               // Duplicate content satisfies the want, but does not confer ownership.
@@ -198,6 +216,18 @@ export function createSubtitleService(dependencies: {
               await work.repository.deactivateWant(work.want.id);
               await work.event("installed", {
                 duplicate: outcome.outcome === "duplicate",
+                // Flat, as events are: what the audio said about this file.
+                ...(outcome.fit
+                  ? {
+                      fitMeasured: outcome.fit.measured,
+                      fitConfidence: Number(outcome.fit.confidence.toFixed(3)),
+                      fitRate: Number(outcome.fit.rate.toFixed(6)),
+                      fitOffsetSeconds: Number(
+                        outcome.fit.offsetSeconds.toFixed(3),
+                      ),
+                      fitRetimed: outcome.fit.retimed,
+                    }
+                  : {}),
               });
             });
             // After the commit, like the refresh: neither can un-install it.
@@ -244,6 +274,16 @@ export function createSubtitleService(dependencies: {
           }
           if (work.attempt.state === "selected") await move("downloading");
           await work.event("search-started");
+          // Never the reason a search fails: without audio it ranks by metadata.
+          const fitter = dependencies.fit
+            ? await dependencies
+                .fit({
+                  mediaFileId: work.want.mediaFileId,
+                  relativePath: work.relativePath,
+                  signal: work.signal,
+                })
+                .catch(() => null)
+            : null;
           const outcome = await runSubtitlePipeline({
             mediaFileId: work.want.mediaFileId,
             query: work.query,
@@ -257,6 +297,7 @@ export function createSubtitleService(dependencies: {
             timeoutMs: dependencies.config.timeoutMs,
             replace: work.replace,
             signal: work.signal,
+            ...(fitter ? { fit: fitter } : {}),
             ...(work.attempt.state === "downloading" && work.selected
               ? { resumeCandidate: work.selected }
               : {}),

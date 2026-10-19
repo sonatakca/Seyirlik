@@ -27,7 +27,7 @@
  * cannot be repaired by moving it, and the confidence figure is what says so.
  */
 
-import { lstat } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 
 import type {
@@ -57,6 +57,7 @@ import {
 } from "./subtitleCues";
 import type { SubtitleRepository } from "./subtitleRepository";
 import { subtitleDigest, type SubtitleStorage } from "./subtitleStorage";
+import type { TitleReferences } from "./subtitleReferences";
 
 /**
  * How sure the alignment has to be before anything is written.
@@ -197,6 +198,12 @@ export function createSubtitleSyncService(dependencies: {
     mediaFileId: string,
   ) => SubtitleStorage;
   playback?: PlaybackRefreshBoundary;
+  /**
+   * The package's audio and its copies of the video's own subtitles. Preferred
+   * to the source even while it exists (the same print, a fraction of the
+   * reading), and the only way to retime against either once it is removed.
+   */
+  references?: TitleReferences;
 }): SubtitleSyncService {
   const { libraryRoot, ffmpegPath, catalogue, repository } = dependencies;
 
@@ -304,28 +311,6 @@ export function createSubtitleSyncService(dependencies: {
         return refuse("target-empty", "That subtitle file holds no cues.");
       const targetIntervals = cueIntervals(cues);
 
-      /*
-       * A processed title can have had its source removed, leaving its package
-       * and its sidecars. A sidecar reference and a hand-given correction need
-       * nothing else; an audio track or an embedded subtitle is read out of the
-       * source, so asking for one of those says why rather than failing inside
-       * FFmpeg.
-       */
-      const needsSource =
-        !request.transform &&
-        (request.reference.kind === "audio" ||
-          !streams.some(
-            (stream) =>
-              stream.streamIndex === request.reference.streamIndex &&
-              stream.isExternal &&
-              stream.externalRelativePath !== null,
-          ));
-      if (needsSource && (await sourceIsGone(relativeMedia)))
-        return refuse(
-          "source-removed",
-          "This title's source video has been removed, so only another subtitle file can be the reference.",
-        );
-
       let proposal: AlignmentProposal;
       let referenceLabel: string;
 
@@ -353,7 +338,7 @@ export function createSubtitleSyncService(dependencies: {
             "That reference subtitle is not here.",
           );
         await request.progress?.("Reading the reference subtitle");
-        let referenceIntervals: SpeechInterval[];
+        let referenceIntervals: SpeechInterval[] | null;
         try {
           referenceIntervals = await readReferenceSubtitle(
             reference,
@@ -367,6 +352,11 @@ export function createSubtitleSyncService(dependencies: {
             "That reference subtitle could not be read.",
           );
         }
+        if (referenceIntervals === null)
+          return refuse(
+            "source-removed",
+            "That subtitle was inside the removed source video and its package holds no copy of it.",
+          );
         if (referenceIntervals.length === 0)
           return refuse(
             "reference-empty",
@@ -382,11 +372,31 @@ export function createSubtitleSyncService(dependencies: {
         );
         if (!reference)
           return refuse("reference-missing", "That audio track is not here.");
+        // The package's rendition of this track, else the source's own.
+        const audio =
+          (await dependencies.references
+            ?.audio({
+              mediaFileId: request.mediaFileId,
+              relativePath: relativeMedia,
+              sourceStreamIndex: reference.streamIndex,
+            })
+            .catch(() => null)) ??
+          ((await sourceIsGone(relativeMedia))
+            ? null
+            : {
+                path: absolute(relativeMedia),
+                streamIndex: reference.streamIndex,
+              });
+        if (!audio)
+          return refuse(
+            "source-removed",
+            "This title's source video has been removed and its package has no audio to listen to.",
+          );
         await request.progress?.("Listening to the audio");
         const envelope = await readAudioEnvelope({
           ffmpegPath,
-          inputPath: absolute(relativeMedia),
-          streamIndex: reference.streamIndex,
+          inputPath: audio.path,
+          streamIndex: audio.streamIndex,
           ...(request.signal ? { signal: request.signal } : {}),
         });
         await request.progress?.("Matching the subtitle against the speech");
@@ -511,34 +521,47 @@ export function createSubtitleSyncService(dependencies: {
   }
 
   /**
-   * The reference track's cues, from wherever that track lives.
+   * The reference track's cues, from wherever that track lives, or null when
+   * it lived only inside a source that is gone.
    *
-   * A sidecar is read straight off the disk; an embedded one goes through the
-   * same FFmpeg conversion the player uses to show it. Deliberately the same
-   * call — a reference that disagreed with what the viewer sees would align the
-   * subtitle to a timeline nobody watches.
+   * A sidecar is read straight off the disk. A track that was inside the video
+   * is read from the package's WebVTT copy when there is one — the file the
+   * player shows, so the subtitle is aligned to the timeline the viewer sees —
+   * and otherwise through the same FFmpeg conversion the player uses on the
+   * source.
    */
   async function readReferenceSubtitle(
     reference: MediaStreamRow,
     storage: SubtitleStorage,
     mediaFileId: string,
     relativeMedia: string,
-  ): Promise<SpeechInterval[]> {
-    const text =
-      reference.isExternal && reference.externalRelativePath
-        ? new TextDecoder("utf-8").decode(
-            toUtf8(
-              await storage.read(mediaFileId, reference.externalRelativePath),
-              reference.language ?? "und",
-            ),
-          )
-        : (
-            await extractSubtitleAsWebVtt(
-              absolute(relativeMedia),
-              reference.streamIndex,
-              ffmpegPath,
-            )
-          ).toString("utf8");
-    return cueIntervals(documentCues(parseSubtitleDocument(text)));
+  ): Promise<SpeechInterval[] | null> {
+    const intervals = (text: string) =>
+      cueIntervals(documentCues(parseSubtitleDocument(text)));
+    if (reference.isExternal && reference.externalRelativePath)
+      return intervals(
+        new TextDecoder("utf-8").decode(
+          toUtf8(
+            await storage.read(mediaFileId, reference.externalRelativePath),
+            reference.language ?? "und",
+          ),
+        ),
+      );
+    const packaged = (
+      (await dependencies.references
+        ?.embeddedSubtitles({ mediaFileId, relativePath: relativeMedia })
+        .catch(() => [])) ?? []
+    ).find((subtitle) => subtitle.streamIndex === reference.streamIndex);
+    if (packaged) return intervals(await readFile(packaged.path, "utf8"));
+    if (await sourceIsGone(relativeMedia)) return null;
+    return intervals(
+      (
+        await extractSubtitleAsWebVtt(
+          absolute(relativeMedia),
+          reference.streamIndex,
+          ffmpegPath,
+        )
+      ).toString("utf8"),
+    );
   }
 }

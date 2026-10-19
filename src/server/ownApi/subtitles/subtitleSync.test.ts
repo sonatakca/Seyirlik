@@ -4,6 +4,10 @@ import type {
   MediaStreamRow,
 } from "../catalogue/catalogueRepository";
 import { createSubtitleSyncService } from "./subtitleSync";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import type { TitleReferences } from "./subtitleReferences";
 import type { SubtitleStorage } from "./subtitleStorage";
 import { subtitleDigest } from "./subtitleStorage";
 
@@ -104,6 +108,7 @@ function harness(
     [ENGLISH]: cues(400),
     [TURKISH]: cues(400, 14.5),
   },
+  references?: TitleReferences,
 ) {
   const written = new Map<string, string>();
   const recordRetiming = vi.fn(async () => {});
@@ -150,6 +155,7 @@ function harness(
       recordRetiming,
     },
     storageFactory: () => storage,
+    ...(references ? { references } : {}),
   });
   return { service, storage, written, recordRetiming, files };
 }
@@ -326,6 +332,44 @@ describe("sync", () => {
       }),
     ).toMatchObject({ outcome: "refused", failure: "source-removed" });
     expect(written.size).toBe(0);
+  });
+
+  it("times against the package's copy of a subtitle that was inside the removed source", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "seyirlik-sync-"));
+    const packaged = path.join(dir, "subtitle-3.vtt");
+    await writeFile(packaged, cues(400, 0, "vtt"));
+    const references: TitleReferences = {
+      audio: vi.fn(async () => null),
+      embeddedSubtitles: vi.fn(async () => [
+        { streamIndex: 3, language: "spa", path: packaged },
+      ]),
+    };
+    const { service, written } = harness(undefined, references);
+    const result = await service.sync({
+      ...request,
+      reference: { kind: "subtitle", streamIndex: 3 },
+    });
+    expect(result.outcome).toBe("applied");
+    expect(written.get(TURKISH)).toContain("00:00:30,000 -->");
+  });
+
+  it("asks the package for the audio track it was asked to listen to", async () => {
+    const references: TitleReferences = {
+      audio: vi.fn(async () => null),
+      embeddedSubtitles: vi.fn(async () => []),
+    };
+    const { service } = harness(undefined, references);
+    expect(
+      await service.sync({
+        ...request,
+        reference: { kind: "audio", streamIndex: 1 },
+      }),
+    ).toMatchObject({ outcome: "refused", failure: "source-removed" });
+    expect(references.audio).toHaveBeenCalledWith({
+      mediaFileId: MEDIA_FILE_ID,
+      relativePath: RELATIVE_MEDIA,
+      sourceStreamIndex: 1,
+    });
   });
 
   it("refuses when the media file is gone", async () => {

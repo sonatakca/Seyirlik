@@ -1,5 +1,6 @@
 import {
   providersFor,
+  type SubtitlePayload,
   sessionIsExpired,
   type ProviderResult,
   type ProviderSession,
@@ -18,6 +19,12 @@ import {
 } from "./subtitleState";
 import { validateSubtitle } from "./subtitlePayload";
 import {
+  fitNeedsRetiming,
+  retimeToFit,
+  type SubtitleFit,
+  type SubtitleFitter,
+} from "./subtitleFit";
+import {
   StorageFailure,
   type SubtitleInstallOutcome,
   type SubtitleStorage,
@@ -33,8 +40,22 @@ export type SubtitleProgress = {
   completed: number;
   total: number;
 };
+/** What the audio said about the installed subtitle, for the attempt's record. */
+export interface SubtitleFitSummary {
+  /** How many downloaded candidates were measured before choosing. */
+  readonly measured: number;
+  readonly confidence: number;
+  readonly rate: number;
+  readonly offsetSeconds: number;
+  readonly trusted: boolean;
+  /** True when the cues were moved onto the audio before installing. */
+  readonly retimed: boolean;
+}
 export type SubtitlePipelineResult =
-  | (SubtitleInstallOutcome & { selection?: ScoredCandidate })
+  | (SubtitleInstallOutcome & {
+      selection?: ScoredCandidate;
+      fit?: SubtitleFitSummary;
+    })
   | { outcome: "existing" }
   /** Nothing usable was offered. `reason` says what the last candidate lacked. */
   | { outcome: "unavailable"; reason?: string }
@@ -83,6 +104,12 @@ async function bounded<T>(
   }
 }
 
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i++) if (left[i] !== right[i]) return false;
+  return true;
+}
+
 /** Server-only orchestration. The caller supplies a catalogue ID, never a destination. */
 export async function runSubtitlePipeline(input: {
   mediaFileId: string;
@@ -104,6 +131,16 @@ export async function runSubtitlePipeline(input: {
   progress?: (event: SubtitleProgress) => void | Promise<void>;
   resumeCandidate?: ScoredCandidate;
   selected?: (candidate: ScoredCandidate) => Promise<void>;
+  /**
+   * Measures each download against the title's own audio. With it, several
+   * candidates are downloaded and the best-fitting one is installed, moved onto
+   * the audio when it is measurably off. Without it, or once the audio cannot
+   * be read, the first candidate that downloads cleanly is installed, as the
+   * metadata ranked it.
+   */
+  fit?: SubtitleFitter;
+  /** How many valid downloads to measure before choosing. */
+  fitCandidates?: number;
 }): Promise<SubtitlePipelineResult> {
   if (
     !Number.isFinite(input.timeoutMs) ||
@@ -216,7 +253,21 @@ export async function runSubtitlePipeline(input: {
     }
     const ordered = orderCandidates(candidates);
     const seen = new Set<string>();
-    for (let i = 0; i < ordered.length; i++) {
+    /*
+     * Downloads worth choosing between. Without a fitter the first is the
+     * answer, exactly as before; with one, up to `fitCandidates` are measured
+     * against the audio and the best fit wins. A candidate the audio could not
+     * be read for keeps its metadata rank.
+     */
+    const limit = input.fit ? Math.max(1, input.fitCandidates ?? 5) : 1;
+    let fitter = input.fit;
+    const downloaded: {
+      selected: ScoredCandidate;
+      payload: SubtitlePayload;
+      fit: SubtitleFit | null;
+    }[] = [];
+    let lastSelected: ScoredCandidate | undefined;
+    for (let i = 0; i < ordered.length && downloaded.length < limit; i++) {
       const selected = ordered[i]!;
       const key = JSON.stringify([
         selected.candidate.providerId,
@@ -229,6 +280,7 @@ export async function runSubtitlePipeline(input: {
       )!;
       try {
         await input.selected?.(selected);
+        lastSelected = selected;
         await phase("downloading", i, ordered.length);
         const result = await providerCall(provider, (session, signal) =>
           provider.download(selected.candidate, session, signal),
@@ -254,24 +306,25 @@ export async function runSubtitlePipeline(input: {
         }
         await phase("validating", 1, 1);
         if (input.signal?.aborted) return { outcome: "cancelled" };
-        await phase("installing", 0, 1);
-        const installed = await input.storage.install({
-          mediaFileId: input.mediaFileId,
-          language: want.language,
-          flags: selected.candidate,
-          payload: result.value,
-          replace: input.replace === true,
-          ...(input.signal ? { signal: input.signal } : {}),
-        });
+        // The same bytes from another listing measure the same; keep the first.
         if (
-          installed.outcome === "installed" ||
-          installed.outcome === "duplicate"
+          downloaded.some((entry) =>
+            sameBytes(entry.payload.bytes, result.value.bytes),
+          )
         )
-          await phase("installing", 1, 1);
-        return installed.outcome === "installed" ||
-          installed.outcome === "duplicate"
-          ? { ...installed, selection: selected }
-          : installed;
+          continue;
+        let fit: SubtitleFit | null = null;
+        if (fitter) {
+          try {
+            fit = await fitter.measure(result.value.bytes);
+          } catch {
+            if (input.signal?.aborted) return { outcome: "cancelled" };
+            // No audio to listen to: rank by metadata alone from here on.
+            fitter = undefined;
+          }
+        }
+        downloaded.push({ selected, payload: result.value, fit });
+        if (!fitter) break;
       } catch (error) {
         if (error instanceof CallFailure && error.failure === "cancelled")
           throw error;
@@ -280,6 +333,61 @@ export async function runSubtitlePipeline(input: {
             ? (error.failure as SubtitleFailureClass)
             : "provider-error";
       }
+    }
+    const chosen = downloaded.reduce<(typeof downloaded)[number] | undefined>(
+      (best, entry) =>
+        best === undefined ||
+        (entry.fit !== null &&
+          (best.fit === null ||
+            entry.fit.proposal.confidence > best.fit.proposal.confidence))
+          ? entry
+          : best,
+      undefined,
+    );
+    if (chosen) {
+      if (input.signal?.aborted) return { outcome: "cancelled" };
+      // The checkpoint names what is installed, so a resume downloads that one.
+      if (chosen.selected !== lastSelected)
+        await input.selected?.(chosen.selected);
+      const retimed = chosen.fit !== null && fitNeedsRetiming(chosen.fit);
+      const payload: SubtitlePayload = retimed
+        ? {
+            ...chosen.payload,
+            bytes: retimeToFit(chosen.payload.bytes, chosen.fit!),
+          }
+        : chosen.payload;
+      await phase("installing", 0, 1);
+      const installed = await input.storage.install({
+        mediaFileId: input.mediaFileId,
+        language: want.language,
+        flags: chosen.selected.candidate,
+        payload,
+        replace: input.replace === true,
+        ...(input.signal ? { signal: input.signal } : {}),
+      });
+      if (
+        installed.outcome !== "installed" &&
+        installed.outcome !== "duplicate"
+      )
+        return installed;
+      await phase("installing", 1, 1);
+      return {
+        ...installed,
+        selection: chosen.selected,
+        ...(chosen.fit
+          ? {
+              fit: {
+                measured: downloaded.filter((entry) => entry.fit !== null)
+                  .length,
+                confidence: chosen.fit.proposal.confidence,
+                rate: chosen.fit.proposal.rate,
+                offsetSeconds: chosen.fit.proposal.offsetSeconds,
+                trusted: chosen.fit.trusted,
+                retimed,
+              },
+            }
+          : {}),
+      };
     }
     if (input.signal?.aborted) return { outcome: "cancelled" };
     if (pendingAuth)

@@ -137,6 +137,12 @@ export interface PackagedSubtitle {
   title?: string;
   isDefault: boolean;
   isForced: boolean;
+  /**
+   * True when it was packaged from a subtitle file beside the source rather
+   * than from a track inside it. Only a track inside the video is known to be
+   * timed for this video, which is what makes it a reference to align against.
+   */
+  fromSidecar: boolean;
   /** The converted file, absolute. */
   path: string;
 }
@@ -209,6 +215,8 @@ export interface RenditionService {
    */
   findPackagedAudio(
     media: PlaybackResolvedMedia,
+    /** The source audio stream wanted; the default rendition when absent or not packaged. */
+    sourceStreamIndex?: number,
   ): Promise<PackagedAudio | null>;
 }
 
@@ -513,18 +521,26 @@ export function createRenditionService({
       ...(rendition.title ? { title: rendition.title } : {}),
       isDefault: rendition.isDefault,
       isForced: rendition.isForced,
+      fromSidecar: rendition.sidecarFingerprint !== undefined,
       path: path.join(ready.versionRoot, ...rendition.subtitlePath.split("/")),
     }));
   };
 
   const findPackagedAudio: RenditionService["findPackagedAudio"] = async (
     media,
+    sourceStreamIndex,
   ) => {
     const ready = await readyPackageFor(media);
     if (!ready) return null;
     const renditions = ready.metadata.audioRenditions;
     const chosen =
-      renditions.find((rendition) => rendition.isDefault) ?? renditions[0];
+      (sourceStreamIndex === undefined
+        ? undefined
+        : renditions.find(
+            (rendition) => rendition.sourceStreamIndex === sourceStreamIndex,
+          )) ??
+      renditions.find((rendition) => rendition.isDefault) ??
+      renditions[0];
     if (!chosen) return null;
     return {
       path: path.join(ready.versionRoot, ...chosen.mediaPath.split("/")),

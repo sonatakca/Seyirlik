@@ -2,6 +2,9 @@ import type { DatabasePool } from "../database/databasePool";
 import type { PlaybackRefreshBoundary } from "../playback/playbackRefresh";
 import type { SubtitleCatalogueAttachment } from "./subtitleAttachment";
 import type { SubtitleConfig } from "./subtitleConfig";
+import { readFile } from "node:fs/promises";
+import { createSubtitleFitter } from "./subtitleFit";
+import type { TitleReferences } from "./subtitleReferences";
 import { createSubtitleExecutionRepository } from "./subtitleExecution";
 import { createSubtitleJobHandlers, SUBTITLE_JOB_TYPES } from "./subtitleJobs";
 import type {
@@ -65,6 +68,12 @@ export function createSubtitleRuntime(options: {
     catalogue: SubtitleSyncCatalogue;
     ffmpegPath: string;
   };
+  /**
+   * What a title can be timed against — its package's audio and original
+   * subtitles, or the source's before it is packaged — so a search installs the
+   * candidate that fits best and a retiming never needs the source.
+   */
+  references?: TitleReferences;
 }) {
   if (!options.config) return undefined;
   const providers = options.providers ?? [];
@@ -85,6 +94,33 @@ export function createSubtitleRuntime(options: {
     sessions,
     playback: options.playback,
     ...(options.catalogue ? { catalogue: options.catalogue } : {}),
+    ...(options.references && options.sync
+      ? {
+          fit: async ({ mediaFileId, relativePath, signal }) => {
+            const references = options.references!;
+            const target = { mediaFileId, relativePath };
+            const [audio, embedded] = await Promise.all([
+              references.audio(target).catch(() => null),
+              references.embeddedSubtitles(target).catch(() => []),
+            ]);
+            const subtitles = (
+              await Promise.all(
+                embedded.map((subtitle) =>
+                  readFile(subtitle.path, "utf8").catch(() => null),
+                ),
+              )
+            ).filter((text): text is string => text !== null);
+            return audio || subtitles.length > 0
+              ? createSubtitleFitter({
+                  ffmpegPath: options.sync!.ffmpegPath,
+                  audio,
+                  subtitles,
+                  signal,
+                })
+              : null;
+          },
+        }
+      : {}),
   });
   const sync = options.sync
     ? createSubtitleSyncService({
@@ -110,6 +146,7 @@ export function createSubtitleRuntime(options: {
               repository.managedDigest(id, relative),
           }),
         ...(options.playback ? { playback: options.playback } : {}),
+        ...(options.references ? { references: options.references } : {}),
       })
     : undefined;
   return {

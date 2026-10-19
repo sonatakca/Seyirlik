@@ -465,6 +465,18 @@ describe("TürkçeAltyazı download", () => {
     );
   });
 
+  it("treats a one-line refusal of the file as this candidate failing, not the session", async () => {
+    const { provider } = fakeSite((url) =>
+      url.pathname === "/ind"
+        ? html("İlginç hatalar oluştu!")
+        : html(subPage({ description: "" })),
+    );
+    expect(await provider.download(candidate, null)).toMatchObject({
+      outcome: "error",
+      retryable: false,
+    });
+  });
+
   it("refuses a candidate id it did not issue", async () => {
     const { provider, requests } = fakeSite(() => html(""));
     const result = await provider.download(

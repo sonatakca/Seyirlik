@@ -573,6 +573,19 @@ export function createTurkceAltyaziProvider(
       });
       if (!file.ok) return file.result;
       const type = file.response.headers.get("content-type") ?? "";
+      /*
+       * A bare sentence rather than a page is the site refusing this one file
+       * ("İlginç hatalar oluştu!", 25 bytes, for every single-episode Sopranos
+       * upload tried anonymously while its season packs downloaded fine). That
+       * is this candidate failing, not the session: calling it authentication
+       * would park a search the next candidate can answer.
+       */
+      if (/text\/html/i.test(type) && file.body.length < 512)
+        return {
+          outcome: "error",
+          reason: "TürkçeAltyazı could not serve this file.",
+          retryable: false,
+        };
       if (/text\/html/i.test(type))
         return {
           outcome: "needs-authentication",

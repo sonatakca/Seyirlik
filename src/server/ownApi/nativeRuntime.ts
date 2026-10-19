@@ -200,6 +200,7 @@ import {
   disabledSubtitleJobTypes,
 } from "./subtitles/subtitleRuntime";
 import { createSubtitleRoutes } from "./subtitles/subtitleRoutes";
+import type { TitleReferences } from "./subtitles/subtitleReferences";
 import { createSubtitleUploader } from "./subtitles/subtitleUpload";
 import { createProviderSessionVault } from "./subtitles/providerSessionVault";
 import {
@@ -1353,6 +1354,68 @@ export async function createNativeRuntime({
      * so a deployment without them mounts no sync routes at all.
      */
     sync: { catalogue, ffmpegPath: ffmpegPath ?? "ffmpeg" },
+    /*
+     * What a subtitle is timed against, from the package first: its audio
+     * rendition (the same print as the source, read through its playlist in
+     * about twenty seconds over the Drive mount, where a DTS source can take
+     * minutes) and its copies of the video's own text subtitles. The source
+     * only for a title not packaged yet: processing removes it.
+     */
+    references: (() => {
+      const located = async (mediaFileId: string, relativePath: string) => {
+        const file = await catalogue.getFileById(mediaFileId);
+        if (!file || file.relativePath !== relativePath) return null;
+        const root = path.resolve(mediaRoot);
+        const sourcePath = path.resolve(root, ...relativePath.split("/"));
+        if (!sourcePath.startsWith(root + path.sep)) return null;
+        return {
+          file,
+          sourcePath,
+          media: {
+            mediaId: file.id,
+            filePath: sourcePath,
+            size: Number(file.sizeBytes),
+            mtimeMs: Number(file.mtimeMs),
+          },
+        };
+      };
+      return {
+        audio: async ({ mediaFileId, relativePath, sourceStreamIndex }) => {
+          const found = await located(mediaFileId, relativePath);
+          if (!found) return null;
+          const packaged = await renditions
+            .findPackagedAudio(found.media, sourceStreamIndex)
+            .catch(() => null);
+          if (packaged) return { path: packaged.playlistPath, streamIndex: 0 };
+          const present = await stat(found.sourcePath).then(
+            (stats) => stats.isFile(),
+            () => false,
+          );
+          if (!present) return null;
+          const audio = (await catalogue.listStreams(found.file.id)).filter(
+            (stream) => stream.kind === "audio" && !stream.isExternal,
+          );
+          const chosen =
+            audio.find((stream) => stream.streamIndex === sourceStreamIndex) ??
+            audio.find((stream) => stream.isDefault) ??
+            audio[0];
+          return chosen
+            ? { path: found.sourcePath, streamIndex: chosen.streamIndex }
+            : null;
+        },
+        embeddedSubtitles: async ({ mediaFileId, relativePath }) => {
+          const found = await located(mediaFileId, relativePath);
+          if (!found || !renditions.findPackagedSubtitles) return [];
+          return (await renditions.findPackagedSubtitles(found.media))
+            .filter((subtitle) => !subtitle.fromSidecar)
+            .map((subtitle) => ({
+              streamIndex: subtitle.streamIndex,
+              language: subtitle.language ?? null,
+              path: subtitle.path,
+            }));
+        },
+      } satisfies TitleReferences;
+    })(),
   });
 
   /*

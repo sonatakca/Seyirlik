@@ -126,9 +126,12 @@ it. The writer needs the **folder** the source lived in, not the source file:
   required, not a convenience. The scan reads a rendition-backed title from its
   package and never rewrites its sidecar rows, so without this the subtitle is
   never listed.
-- Retiming against another sidecar, or by a hand-given correction, works. An
-  audio track or an embedded subtitle is read out of the source, so asking for
-  one is refused as `source-removed`.
+- Retiming works against every kind of reference. An audio track is read from
+  the package's rendition of that track, and a subtitle that was inside the
+  video from the package's WebVTT copy (`TitleReferences`). Only a track the
+  package never kept, such as an image subtitle, is refused as
+  `source-removed`. The package is preferred even while the source exists:
+  it is the same print, and much less to read over the Drive mount.
 
 Remove Source therefore does not wait for open subtitle wants: removing the
 source does not stop them being answered.
@@ -137,6 +140,41 @@ A known consequence: **a subtitle that arrived with a download cannot currently
 be upgraded by this subsystem**, because the importer records no digest for it.
 Closing that is a change to the import pipeline, and is recorded there rather
 than worked around here.
+
+### Choosing the candidate that fits
+
+The scorer ranks candidates by what providers say: identity, frame rate,
+release group. That metadata often cannot decide. TürkçeAltyazı carries The
+Sopranos S01 as one translation timed four ways, and nothing on the site tells
+which timing matches this file. So a search downloads up to five valid
+candidates (`fitCandidates`). It measures each against the title's own audio
+with the same `alignSpeech` that retiming uses, and installs the best fit:
+
+- The references are the package's: its default audio rendition, read through
+  its playlist (about twenty seconds over the Drive mount), and its WebVTT
+  copies of any text subtitles that were inside the video. A packaged sidecar
+  is not a reference, because nothing says it was timed for this video. A
+  title not packaged yet uses the source's default audio track instead.
+  `confidence` compares across audio and subtitle references, so the best of
+  them decides. They are read once per search; each further candidate is
+  arithmetic.
+- A fit at or above `MINIMUM_SYNC_CONFIDENCE` that is measurably off (offset
+  over 0.15 s, or any rate change) is moved onto the audio before it is written.
+  The installation is then recorded `assumed-in-sync`.
+- Byte-identical downloads are measured once. The checkpoint names the
+  candidate that was installed, so a resumed attempt downloads that one.
+- With no audio to read, or once reading it fails, the first valid download
+  wins, ranked by metadata alone. The audio never becomes the reason a search
+  fails.
+- The `installed` event carries `fitMeasured`, `fitConfidence`, `fitRate`,
+  `fitOffsetSeconds` and `fitRetimed`.
+
+On S01 measured by hand, the pick this makes is pack 375975 for E01–E04, and
+pack 320688 for E06. UNIT3D's E06 drifts to a second late by the end.
+
+A short HTML answer to a download (TürkçeAltyazı's `İlginç hatalar oluştu!`)
+is that one file failing, not the session expiring. It no longer parks the
+attempt in `needs-authentication` while other candidates could answer it.
 
 ## The states an attempt can be in
 

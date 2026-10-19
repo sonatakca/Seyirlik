@@ -79,6 +79,7 @@ function build(options: {
             language: "tur",
             isDefault: false,
             isForced: false,
+            fromSidecar: true,
             path: path.join(MEDIA_ROOT, "packaged-turkish.vtt"),
           },
         ],
