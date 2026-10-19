@@ -221,6 +221,19 @@ export interface PackagedAudio {
 /** The highest video rendition of a ready package, as a decoder input. */
 export interface PackagedVideo {
   path: string;
+  /**
+   * The rendition's own HLS playlist: the same media, with its fragment index
+   * already written out as byte ranges.
+   *
+   * A rendition is one fragmented MP4, and FFmpeg's MP4 demuxer finds a
+   * fragmented file's fragments by visiting every one of them before it
+   * decodes a frame — around 1,500 seeks for an hour of two-second fragments.
+   * On a local disk that is nothing. Through the Drive mount every seek is a
+   * ranged download, and opening one episode took two and a half minutes.
+   * The playlist names every fragment's offset in a single small read, so a
+   * reader that only needs the frames should open this instead.
+   */
+  playlistPath: string;
   width: number;
   height: number;
   durationSeconds: number;
@@ -462,6 +475,10 @@ export function createRenditionService({
     if (!best) return null;
     return {
       path: path.join(ready.versionRoot, ...best.mediaPath.split("/")),
+      playlistPath: path.join(
+        ready.versionRoot,
+        ...best.playlistPath.split("/"),
+      ),
       width: best.width,
       height: best.height,
       durationSeconds: best.durationSeconds,

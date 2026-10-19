@@ -832,6 +832,10 @@ describe("findPackagedVideo", () => {
       /\/video\/720p\.mp4$/,
     );
     expect((await stat(video!.path)).isFile()).toBe(true);
+    expect(video?.playlistPath.split(path.sep).join("/")).toMatch(
+      /720p.*\.m3u8$/,
+    );
+    expect((await stat(video!.playlistPath)).isFile()).toBe(true);
   });
 
   it("names nothing for a title with no adaptive package", async () => {
