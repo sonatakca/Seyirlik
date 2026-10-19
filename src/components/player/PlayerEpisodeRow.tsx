@@ -31,8 +31,8 @@ function partialProgress(item: MediaItem): number {
  * and title, then a line of what happens in it. The still is the episode's own
  * frame (stored as a thumb, never a poster), falling back to the series
  * poster, so a list of a show's episodes is never a column of empty boxes.
- * The still is shown as it is; which episode is playing is said by the row's
- * background alone.
+ * The still is shown as it is, and every row reads the same: which episode
+ * is playing is said by the row's background alone.
  */
 export function PlayerEpisodeRow({
   item,
@@ -133,13 +133,7 @@ export function PlayerEpisodeRow({
           id={metaId}
           className="flex items-center gap-1.5 text-[0.64rem] font-black uppercase tracking-[0.14em] text-white/45"
         >
-          {isCurrent ? (
-            <span className="text-[var(--accent)]">
-              {t("player.nowPlaying")}
-            </span>
-          ) : number ? (
-            <span>{number}</span>
-          ) : null}
+          {number ? <span>{number}</span> : null}
           {runtime ? (
             <>
               <span aria-hidden="true" className="text-white/25">
