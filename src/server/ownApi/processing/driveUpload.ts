@@ -14,6 +14,7 @@
  * package is published — and it writes progress onto the job row, which the
  * page already reads.
  */
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 import type { DatabasePool } from "../database/databasePool";
 import type { StoredDriveUpload } from "./driveUploadStatus";
@@ -25,6 +26,11 @@ export interface DriveRcConfig {
   mountRoot: string;
   user?: string;
   pass?: string;
+  /**
+   * Whether a source is deleted once its package is verified on Drive. On
+   * unless the JSON says `"deleteSource": false`.
+   */
+  deleteSource: boolean;
 }
 
 /**
@@ -51,6 +57,7 @@ export function driveRcConfigFromEnvironment(
       mountRoot: parsed.mountRoot,
       ...(typeof parsed.user === "string" ? { user: parsed.user } : {}),
       ...(typeof parsed.pass === "string" ? { pass: parsed.pass } : {}),
+      deleteSource: parsed.deleteSource !== false,
     };
   } catch {
     return null;
@@ -72,9 +79,23 @@ export interface RcTransfer {
   speedAvg?: number;
 }
 
+/** One file as Drive itself holds it, from `operations/list`. */
+export interface RcRemoteFile {
+  /** Relative to the remote's root, `/`-separated, as queue entries are. */
+  Path: string;
+  Size: number;
+}
+
 export interface DriveRcClient {
   queue(): Promise<RcQueueEntry[]>;
   transferring(): Promise<RcTransfer[]>;
+  /**
+   * Every file under `directory` (a `/`-separated path under the remote's
+   * root, no trailing `/`) as Drive lists it — not as the mount's cache sees
+   * it, which is the whole point: a file can be whole in the cache and still
+   * absent from Drive.
+   */
+  listRemote(directory: string): Promise<RcRemoteFile[]>;
 }
 
 export function createDriveRcClient(
@@ -87,11 +108,18 @@ export function createDriveRcClient(
       `${config.user}:${config.pass ?? ""}`,
     ).toString("base64")}`;
   }
-  const call = async <T>(command: string): Promise<T> => {
+  const call = async <T>(
+    command: string,
+    body?: Record<string, unknown>,
+    timeoutMs = 5_000,
+  ): Promise<T> => {
     const response = await fetchImpl(`${config.url}/${command}`, {
       method: "POST",
-      headers,
-      signal: AbortSignal.timeout(5_000),
+      headers: body
+        ? { ...headers, "Content-Type": "application/json" }
+        : headers,
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) {
       throw new Error(`rclone ${command} answered ${response.status}`);
@@ -106,6 +134,37 @@ export function createDriveRcClient(
     async transferring() {
       const result = await call<{ transferring?: RcTransfer[] }>("core/stats");
       return result.transferring ?? [];
+    },
+    async listRemote(directory) {
+      /*
+       * The mount's own remote, as rclone names it (`gdrive{6Cm8i}:Folder`
+       * when the mount was given flags of its own). Asked rather than
+       * configured, so it cannot drift from what is actually mounted. More
+       * than one would make "the" remote a guess, and a guess is not what a
+       * deletion may rest on.
+       */
+      const { vfses } = await call<{ vfses?: string[] }>("vfs/list", {});
+      if (!vfses || vfses.length !== 1) {
+        throw new Error(
+          `rclone serves ${vfses?.length ?? 0} mounts, so the remote to check cannot be told apart.`,
+        );
+      }
+      const result = await call<{ list?: RcRemoteFile[] }>(
+        "operations/list",
+        {
+          fs: vfses[0],
+          remote: directory,
+          opt: {
+            recurse: true,
+            filesOnly: true,
+            noModTime: true,
+            noMimeType: true,
+          },
+        },
+        // A Drive listing walks one request per folder.
+        60_000,
+      );
+      return result.list ?? [];
     },
   };
 }
@@ -131,6 +190,27 @@ export function mountPrefixFor(
     return null;
   }
   return `${relative.split(paths.sep).join("/")}/`;
+}
+
+/**
+ * The same, trying each name the mount goes by.
+ *
+ * In network mode a realpath under `D:\` comes back as the volume's UNC
+ * name (`\\seyirlik\drive\…`), and since the library root is resolved that
+ * way every job queued by the import sweep carries a UNC title root. Compared
+ * against `D:\` alone those matched nothing, and their uploads went untracked.
+ */
+export async function mountPrefixForAny(
+  mountRoot: string,
+  directory: string,
+  resolve: (target: string) => Promise<string> = realpath,
+): Promise<string | null> {
+  const direct = mountPrefixFor(mountRoot, directory);
+  if (direct) return direct;
+  const resolved = await resolve(mountRoot).catch(() => null);
+  return resolved && resolved !== mountRoot
+    ? mountPrefixFor(resolved, directory)
+    : null;
 }
 
 /** How long new queue entries are still taken as this package's own. */
@@ -207,6 +287,7 @@ export function nextDriveUpload(
     filesUploading: uploading,
     startedAtMs: previous.startedAtMs,
     updatedAtMs: nowMs,
+    ...(previous.deleteSource ? { deleteSource: true } : {}),
     ...(bytesPerSecond > 0 && !finished
       ? {
           bytesPerSecond,
@@ -280,6 +361,7 @@ export function createDriveUploadTracker({
   store,
   now = Date.now,
   pollMs = DRIVE_UPLOAD_POLL_MS,
+  resolvePath = realpath,
   onFinished,
 }: {
   config: DriveRcConfig;
@@ -287,6 +369,7 @@ export function createDriveUploadTracker({
   store: DriveUploadStore;
   now?: () => number;
   pollMs?: number;
+  resolvePath?: (target: string) => Promise<string>;
   onFinished?: (processingJobId: string, upload: StoredDriveUpload) => void;
 }): DriveUploadTracker {
   const tracked = new Map<
@@ -372,11 +455,16 @@ export function createDriveUploadTracker({
 
   return {
     async track({ processingJobId, directory, totalBytes }) {
-      const prefix = mountPrefixFor(config.mountRoot, directory);
+      const prefix = await mountPrefixForAny(
+        config.mountRoot,
+        directory,
+        resolvePath,
+      );
       if (!prefix) return false;
       const at = now();
       const upload: StoredDriveUpload = {
         prefix,
+        ...(config.deleteSource ? { deleteSource: true } : {}),
         state: "uploading",
         totalBytes,
         uploadedBytes: 0,

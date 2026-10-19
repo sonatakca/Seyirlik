@@ -39,7 +39,26 @@ export interface StoredDriveUpload extends DriveUploadStatus {
   prefix: string;
   /** Queue entries that belong to this package, fixed after the first reads. */
   members?: string[];
+  /**
+   * Set when tracking began on a helper that deletes sources: once uploaded,
+   * this package's source is removed if Drive is verified to hold all of it.
+   * Uploads tracked before that existed never carry it, so no source is ever
+   * removed after the fact.
+   */
+  deleteSource?: boolean;
+  /** What became of the source, once decided. Absent: not decided yet. */
+  source?: SourceCleanupOutcome;
 }
+
+/**
+ * The source's fate after its package reached Drive. `kept` is final: a
+ * refusal names what made the source still needed, and the operator decides
+ * from there.
+ */
+export type SourceCleanupOutcome =
+  | { state: "deleted"; atMs: number; freedBytes: number }
+  | { state: "absent"; atMs: number }
+  | { state: "kept"; atMs: number; reason: string };
 
 /** The status without the server-only fields, for the API. */
 export function publicDriveUpload(
@@ -49,6 +68,8 @@ export function publicDriveUpload(
   const {
     prefix: _prefix,
     members: _members,
+    deleteSource: _deleteSource,
+    source: _source,
     ...status
   } = stored as unknown as StoredDriveUpload;
   return status;

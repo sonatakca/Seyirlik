@@ -101,6 +101,11 @@ import {
   driveRcConfigFromEnvironment,
 } from "./processing/driveUpload";
 import {
+  createDatabaseSourceCleanupStore,
+  createSourceCleanup,
+  packageGapsOnDrive,
+} from "./processing/sourceCleanup";
+import {
   createDatabaseLiveProgressStore,
   pruneLiveProgress,
   shareLiveProgress,
@@ -1093,31 +1098,84 @@ export async function createNativeRuntime({
   const driveRc = processingWorker
     ? driveRcConfigFromEnvironment(environment)
     : null;
-  const driveUploads = driveRc
-    ? createDriveUploadTracker({
-        config: driveRc,
-        client: createDriveRcClient(driveRc),
-        store: createDatabaseDriveUploadStore(pool),
-        onFinished: (processingJobId, upload) => {
-          const minutes = Math.max(
-            1,
-            Math.round(
-              ((upload.finishedAtMs ?? upload.updatedAtMs) -
-                upload.startedAtMs) /
-                60_000,
-            ),
-          );
-          void processingJobs
-            .appendEvent({
-              processingJobId,
-              stage: "complete",
-              message: `Uploaded to Google Drive in about ${minutes} min.`,
-            })
-            .catch(() => undefined);
-        },
+  const driveRcClient = driveRc ? createDriveRcClient(driveRc) : null;
+
+  /*
+   * The enqueuer as the machine that encodes sees it: its own mount, scratch
+   * and encoder. The import sweep queues work through it, and a source is
+   * removed through it once its package is on Drive.
+   */
+  const workerEnqueuer = processingWorker
+    ? createProcessingEnqueuer({
+        catalogue,
+        store: processingJobs,
+        queue,
+        mediaRoot: path.resolve(mediaRoot),
+        workRoot: storageRoles.jobsRoot,
+        ffprobePath:
+          ffprobePath ?? environment.SEYIRLIK_FFPROBE_PATH ?? "ffprobe",
+        hardware: createHardwareDetector(
+          ffmpegPath ?? environment.SEYIRLIK_FFMPEG_PATH ?? "ffmpeg",
+        ),
+        storageGuard,
       })
-    : undefined;
+    : null;
+
+  /*
+   * Where uploads are followed and the helper deletes sources, a source goes
+   * once Drive is checked to hold its whole package. See `sourceCleanup.ts`.
+   */
+  const sourceCleanup =
+    driveRc?.deleteSource && driveRcClient && workerEnqueuer
+      ? createSourceCleanup({
+          jobs: processingJobs,
+          enqueuer: workerEnqueuer,
+          store: createDatabaseSourceCleanupStore(pool),
+          verifyOnDrive: (titleRoot, manifest) =>
+            packageGapsOnDrive({
+              client: driveRcClient,
+              mountRoot: driveRc.mountRoot,
+              titleRoot,
+              manifest,
+            }),
+          mayDelete: async () =>
+            storageGuard.mayStartWork() && (await storageWatchdog.poll()),
+        })
+      : undefined;
+
+  const driveUploads =
+    driveRc && driveRcClient
+      ? createDriveUploadTracker({
+          config: {
+            ...driveRc,
+            // Only mark uploads for deletion where something will act on it.
+            deleteSource: sourceCleanup !== undefined,
+          },
+          client: driveRcClient,
+          store: createDatabaseDriveUploadStore(pool),
+          onFinished: (processingJobId, upload) => {
+            const minutes = Math.max(
+              1,
+              Math.round(
+                ((upload.finishedAtMs ?? upload.updatedAtMs) -
+                  upload.startedAtMs) /
+                  60_000,
+              ),
+            );
+            void processingJobs
+              .appendEvent({
+                processingJobId,
+                stage: "complete",
+                message: `Uploaded to Google Drive in about ${minutes} min.`,
+              })
+              .catch(() => undefined)
+              .then(() => sourceCleanup?.afterUpload(processingJobId, upload));
+          },
+        })
+      : undefined;
   if (driveUploads) void driveUploads.resume().catch(() => undefined);
+  // Uploads that finished while no worker was left to decide their source.
+  if (sourceCleanup) void sourceCleanup.resume().catch(() => undefined);
 
   void pruneLiveProgress(
     (await processingJobs.listActive()).map((job) => job.id),
@@ -1368,28 +1426,15 @@ export async function createNativeRuntime({
   /*
    * Imported films and episodes, queued for processing once the library scan
    * has registered them — through the same enqueuer the processing buttons
-   * use, run here by the machine that encodes. Its own mount is the one the
-   * encode reads, its own scratch is the one the job spends, and its encoder
-   * is the one the job records. The first pass after a start is also the
-   * backfill: every committed import file nothing has decided on yet.
+   * use, run here by the machine that encodes (`workerEnqueuer`). The first
+   * pass after a start is also the backfill: every committed import file
+   * nothing has decided on yet.
    */
   const queueImportedProcessing =
-    importing && importConfig?.autoProcess && processingWorker
+    importing && importConfig?.autoProcess && workerEnqueuer
       ? createImportProcessingSweep({
           store: createImportProcessingStore(pool),
-          enqueueAll: createProcessingEnqueuer({
-            catalogue,
-            store: processingJobs,
-            queue,
-            mediaRoot: path.resolve(mediaRoot),
-            workRoot: storageRoles.jobsRoot,
-            ffprobePath:
-              ffprobePath ?? environment.SEYIRLIK_FFPROBE_PATH ?? "ffprobe",
-            hardware: createHardwareDetector(
-              ffmpegPath ?? environment.SEYIRLIK_FFMPEG_PATH ?? "ffmpeg",
-            ),
-            storageGuard,
-          }).enqueueAll,
+          enqueueAll: workerEnqueuer.enqueueAll,
           libraryRoots: definitions
             .filter(
               (entry) => entry.kind === "movies" || entry.kind === "series",

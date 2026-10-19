@@ -6,6 +6,7 @@ import { runMigrations } from "../database/migrationRunner";
 import { createDatabaseDriveUploadStore } from "./driveUpload";
 import type { StoredDriveUpload } from "./driveUploadStatus";
 import { createProcessingJobStore } from "./jobStore";
+import { createDatabaseSourceCleanupStore } from "./sourceCleanup";
 
 /*
  * What a finished attempt keeps on its row: the phase history and the upload
@@ -25,6 +26,7 @@ integration("phase history and Drive upload on the job row", () => {
   });
   const jobs = createProcessingJobStore(pool);
   const uploads = createDatabaseDriveUploadStore(pool);
+  const cleanups = createDatabaseSourceCleanupStore(pool);
   let job = "";
 
   const upload = (state: StoredDriveUpload["state"]): StoredDriveUpload => ({
@@ -100,6 +102,35 @@ integration("phase history and Drive upload on the job row", () => {
     ]);
     await uploads.write(job, upload("uploaded"));
     expect(await uploads.listUnfinished()).toEqual([]);
+  });
+
+  it("waits to decide a source only for an upload that asked for it", async () => {
+    // Uploads tracked before sources were removed automatically never are.
+    await uploads.write(job, upload("uploaded"));
+    expect(await cleanups.listAwaiting()).toEqual([]);
+
+    await uploads.write(job, { ...upload("uploading"), deleteSource: true });
+    expect(await cleanups.listAwaiting()).toEqual([]);
+
+    await uploads.write(job, { ...upload("uploaded"), deleteSource: true });
+    expect(await cleanups.listAwaiting()).toEqual([job]);
+  });
+
+  it("records the outcome beside the upload, and stops waiting for it", async () => {
+    const before = (await jobs.get(job))!.updatedAt;
+    await cleanups.record(job, {
+      state: "deleted",
+      atMs: 3_000,
+      freedBytes: 6e9,
+    });
+    const record = await jobs.get(job);
+    expect(record?.driveUpload).toEqual({
+      ...upload("uploaded"),
+      deleteSource: true,
+      source: { state: "deleted", atMs: 3_000, freedBytes: 6e9 },
+    });
+    expect(record?.updatedAt).toEqual(before);
+    expect(await cleanups.listAwaiting()).toEqual([]);
   });
 
   it("starts a new attempt without the previous attempt's history or upload", async () => {

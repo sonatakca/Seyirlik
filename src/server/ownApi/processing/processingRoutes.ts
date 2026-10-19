@@ -1,4 +1,4 @@
-import { stat, unlink } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import { OwnApiError } from "../ownApiHandler";
 import { sendData } from "../api/envelope";
@@ -13,10 +13,6 @@ import {
   validationError,
 } from "../api/validation";
 import { isPathInsideRoot } from "../../pathSecurity";
-import {
-  describeMissingPackageAssets,
-  missingPackageAssets,
-} from "./packageAssets";
 import type { CatalogueRepository } from "../catalogue/catalogueRepository";
 import type { JobQueue } from "../tasks/jobQueue";
 import {
@@ -24,7 +20,6 @@ import {
   type HardwareReport,
 } from "../../../renditions/hardware/detect";
 import { ADAPTIVE_PROFILE_VERSION } from "../../../renditions/adaptive/profile";
-import { readTitlePackageManifest } from "../../../renditions/adaptive/publishTitle";
 import {
   type ProcessingJobRecord,
   type ProcessingJobStore,
@@ -34,7 +29,7 @@ import {
   PROCESSING_JOB_TYPE,
   createProcessingEnqueuer,
 } from "./processingEnqueue";
-import { createPackageIndex, manifestIdentity } from "./packageIndex";
+import { createPackageIndex } from "./packageIndex";
 import {
   packageTargetsFor,
   projectCatalogue,
@@ -870,13 +865,9 @@ export function createProcessingRoutes({
     {
       /**
        * Deletes the source file of a title whose package already holds every
-       * rendition it would ever be given.
-       *
-       * The bytes are gone for good, so nothing the page believes is taken on
-       * trust: the source is re-fingerprinted, the ladder is re-decided from
-       * it, and every file the package claims is checked before the source is
-       * unlinked. A page can be looking at a preview minutes old, and in that
-       * time the file can have been replaced or the package half-removed.
+       * rendition it would ever be given. The checks are the enqueuer's
+       * `removeSource`, shared with the helper that removes sources after
+       * their package reaches Drive.
        */
       method: "POST",
       path: "/processing/source/delete",
@@ -907,123 +898,26 @@ export function createProcessingRoutes({
           );
         }
 
-        const located = await locateSource(itemId, mediaFileId);
-        const active = await store.findActiveForFile(located.file.id);
-        if (active) {
-          throw new OwnApiError(
-            "PROCESSING_JOB_EXISTS",
-            "This file has a processing job that has not finished, and that job is still reading it.",
-            409,
-          );
-        }
-
-        const stats = await statSource(located.file, located.absolutePath);
-        if (!stats) {
-          /*
-           * The state being asked for is already the state on disk. Reporting
-           * that is more useful than failing: a double submission, or a page
-           * that lost the response, must not read as a problem.
-           */
-          // The source is physically absent. Record that independently
-          // from the catalogue identity, which rendition playback still needs.
-          sourcePresence.set(located.file.id, {
-            available: false,
-            checkedAt: Date.now(),
-          });
-          invalidateCatalogueView(located.file.id);
-          sendData(context.response, context.requestId, {
-            deleted: false,
-            alreadyAbsent: true,
-            freedBytes: 0,
-          });
-          return;
-        }
-        if (!stats.isFile()) {
-          throw new OwnApiError(
-            "SOURCE_NOT_A_FILE",
-            "The source path is not a regular file.",
-            409,
-          );
-        }
-
-        /*
-         * The package's real location, which for an episode is its own folder
-         * inside the season rather than the season folder itself. Removing a
-         * source is the one action here that cannot be taken back, so it must
-         * be checking the package that actually belongs to these bytes.
-         */
-        const titleRoot = await enqueuer.titleRootFor(
-          itemId,
-          located.absolutePath,
-        );
-        const manifest = await readTitlePackageManifest(titleRoot).catch(
-          () => undefined,
-        );
-        if (!manifest) {
-          throw new OwnApiError(
-            "PROCESSING_PACKAGE_INCOMPLETE",
-            "This title's package manifest could not be read, so its renditions cannot be confirmed.",
-            409,
-          );
-        }
-        const missing = await missingPackageAssets(titleRoot, manifest);
-        if (missing.length > 0) {
-          packageIndex.noteDamage(located.file.id, {
-            manifestId: manifestIdentity(manifest),
-            rungs: [
-              ...new Set(
-                missing
-                  .map((asset) => asset.qualityHeight)
-                  .filter((height): height is number => height !== undefined),
-              ),
-            ],
-            elsewhere: missing.some(
-              (asset) => asset.qualityHeight === undefined,
-            ),
-          });
-          throw new OwnApiError(
-            "PROCESSING_PACKAGE_INCOMPLETE",
-            `This title's package is incomplete on disk, so its source is still the only whole copy: ${describeMissingPackageAssets(missing)}.`,
-            409,
-          );
-        }
-
-        /*
-         * Then the questions the files cannot answer: whether these are still
-         * the bytes the package was built from, and whether today's ladder
-         * would give the title a rung it does not have.
-         */
-        const { existing } = await analyse(itemId, mediaFileId);
-        if (
-          !existing.present ||
-          !existing.sourceMatches ||
-          !existing.profileMatches ||
-          existing.missingRungs.length > 0
-        ) {
-          throw new OwnApiError(
-            "PROCESSING_PACKAGE_INCOMPLETE",
-            "This title still needs its source: its package is missing renditions, was built from different bytes, or was built by an older profile.",
-            409,
-          );
-        }
-
-        await unlink(located.absolutePath);
+        const removal = await enqueuer.removeSource(itemId, mediaFileId, {
+          onDamage: (fileId, damage) => packageIndex.noteDamage(fileId, damage),
+        });
 
         /*
          * Keep the media-file identity for rendition authorization, but record
-         * that its original bytes no longer exist. The next overview therefore
-         * cannot advertise "Remove Source" again.
+         * that its original bytes no longer exist — whether this request removed
+         * them or found them already gone. The next overview therefore cannot
+         * advertise "Remove Source" again.
          */
-        sourcePresence.set(located.file.id, {
+        sourcePresence.set(removal.file.id, {
           available: false,
           checkedAt: Date.now(),
         });
-        invalidateCatalogueView(located.file.id);
+        invalidateCatalogueView(removal.file.id);
 
         sendData(context.response, context.requestId, {
-          deleted: true,
-          alreadyAbsent: false,
-          freedBytes: stats.size,
+          deleted: removal.deleted,
+          alreadyAbsent: removal.alreadyAbsent,
+          freedBytes: removal.freedBytes,
         });
       },
     },

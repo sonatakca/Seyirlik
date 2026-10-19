@@ -6,6 +6,7 @@ import {
   MEMBERSHIP_WINDOW_MS,
   MINIMUM_TRACKING_MS,
   mountPrefixFor,
+  mountPrefixForAny,
   nextDriveUpload,
   type DriveRcClient,
   type DriveUploadStore,
@@ -76,6 +77,44 @@ describe("where a title sits under the Drive mount", () => {
   it("refuses a folder that is not on the mount", () => {
     expect(mountPrefixFor("D:\\", "C:\\Seyirlik\\work\\scratch")).toBeNull();
     expect(mountPrefixFor("D:\\", "D:\\")).toBeNull();
+  });
+
+  /*
+   * Every job the import sweep queued on 2026-10-19 carried a title root under
+   * the volume's UNC name, because the library root is a realpath. Against
+   * `D:\` alone none of them matched, and 22 uploads went unwatched.
+   */
+  it("knows the mount by its UNC name as well as its drive letter", async () => {
+    const resolve = vi.fn(async () => "\\\\seyirlik\\drive\\");
+    expect(
+      await mountPrefixForAny(
+        "D:\\",
+        "\\\\seyirlik\\drive\\media\\Series\\The Sopranos\\Season 3\\The Sopranos - S03E08",
+        resolve,
+      ),
+    ).toBe("media/Series/The Sopranos/Season 3/The Sopranos - S03E08/");
+    expect(
+      await mountPrefixForAny(
+        "D:\\",
+        "D:\\media\\Movies\\The Empire Strikes Back (1980)",
+        resolve,
+      ),
+    ).toBe(TITLE);
+    expect(
+      await mountPrefixForAny("D:\\", "\\\\other\\share\\media\\X", resolve),
+    ).toBeNull();
+  });
+
+  it("finds nothing when the mount cannot be resolved", async () => {
+    expect(
+      await mountPrefixForAny(
+        "D:\\",
+        "\\\\seyirlik\\drive\\media\\X",
+        async () => {
+          throw Object.assign(new Error("gone"), { code: "ENOENT" });
+        },
+      ),
+    ).toBeNull();
   });
 });
 
@@ -151,7 +190,10 @@ describe("one reading of the upload queue", () => {
 });
 
 describe("the tracker", () => {
-  function harness(readings: Array<[RcQueueEntry[], RcTransfer[]]>) {
+  function harness(
+    readings: Array<[RcQueueEntry[], RcTransfer[]]>,
+    deleteSource = false,
+  ) {
     let at = 0;
     let index = 0;
     const writes: StoredDriveUpload[] = [];
@@ -162,6 +204,7 @@ describe("the tracker", () => {
         index += 1;
         return result;
       },
+      listRemote: async () => [],
     };
     const store: DriveUploadStore = {
       write: vi.fn(async (_id: string, upload: StoredDriveUpload) => {
@@ -171,11 +214,12 @@ describe("the tracker", () => {
     };
     const finished = vi.fn();
     const tracker = createDriveUploadTracker({
-      config: { url: "http://127.0.0.1:5573", mountRoot: "D:\\" },
+      config: { url: "http://127.0.0.1:5573", mountRoot: "D:\\", deleteSource },
       client,
       store,
       now: () => at,
       pollMs: 60_000_000,
+      resolvePath: async () => "\\\\seyirlik\\drive\\",
       onFinished: finished,
     });
     return {
@@ -226,6 +270,41 @@ describe("the tracker", () => {
         "job-1",
         expect.objectContaining({ state: "uploaded" }),
       );
+      // Nothing asked for a deletion, so nothing will act on one.
+      expect(h.writes.some((write) => write.deleteSource)).toBe(false);
+      h.tracker.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a deletion request on every reading, through to the last", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness(
+        [
+          [QUEUE, TRANSFERS],
+          [[], []],
+          [[], []],
+        ],
+        true,
+      );
+      await h.tracker.track({
+        processingJobId: "job-1",
+        directory: "D:\\media\\Movies\\The Empire Strikes Back (1980)",
+        totalBytes: 33_235_270_203,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      for (let i = 0; i < 2; i += 1) {
+        h.advance(MINIMUM_TRACKING_MS);
+        await vi.advanceTimersByTimeAsync(60_000_000);
+      }
+      expect(h.writes.length).toBeGreaterThan(1);
+      expect(h.writes.every((write) => write.deleteSource === true)).toBe(true);
+      expect(h.finished).toHaveBeenCalledWith(
+        "job-1",
+        expect.objectContaining({ state: "uploaded", deleteSource: true }),
+      );
       h.tracker.stop();
     } finally {
       vi.useRealTimers();
@@ -249,7 +328,17 @@ describe("configuration and the public shape", () => {
       mountRoot: "D:\\",
       user: "u",
       pass: "p",
+      deleteSource: true,
     });
+    expect(
+      driveRcConfigFromEnvironment({
+        SEYIRLIK_DRIVE_RC: JSON.stringify({
+          url: "http://127.0.0.1:5573",
+          mountRoot: "D:\\",
+          deleteSource: false,
+        }),
+      })?.deleteSource,
+    ).toBe(false);
     expect(driveRcConfigFromEnvironment({})).toBeNull();
     expect(
       driveRcConfigFromEnvironment({ SEYIRLIK_DRIVE_RC: "not json" }),
@@ -258,10 +347,16 @@ describe("configuration and the public shape", () => {
 
   it("never sends the folder path to the page", () => {
     const status = publicDriveUpload({
-      ...started({ members: [`${TITLE}video/2160p.mp4`] }),
+      ...started({
+        members: [`${TITLE}video/2160p.mp4`],
+        deleteSource: true,
+        source: { state: "kept", atMs: 1, reason: "D:\\media\\x" },
+      }),
     } as unknown as Record<string, unknown>);
     expect(status).not.toHaveProperty("prefix");
     expect(status).not.toHaveProperty("members");
+    expect(status).not.toHaveProperty("deleteSource");
+    expect(status).not.toHaveProperty("source");
     expect(status?.totalBytes).toBe(33_235_270_203);
   });
 });
