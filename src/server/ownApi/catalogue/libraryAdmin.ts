@@ -247,16 +247,25 @@ export function createLibraryAdminRepository(
   db: DatabaseExecutor,
   options: {
     /**
-     * Whether a stored image's file is still there. Generated storage is
-     * rebuilt rather than backed up, so a row can outlive its file — which
-     * reads as a title with no poster.
+     * Whether a stored image can still be drawn: its file, or a cached
+     * variant of it. Generated storage is rebuilt rather than backed up, so a
+     * row can outlive both — which reads as a title with no poster.
      */
-    artworkExists?: (storageKey: string) => Promise<boolean>;
+    artworkExists?: (image: {
+      storageKey: string;
+      contentHash: string;
+    }) => Promise<boolean>;
   } = {},
 ) {
   const present = async (row: TitleRow) =>
     row.coverKey !== null &&
-    (options.artworkExists ? await options.artworkExists(row.coverKey) : true);
+    row.coverTag !== null &&
+    (options.artworkExists
+      ? await options.artworkExists({
+          storageKey: row.coverKey,
+          contentHash: row.coverTag,
+        })
+      : true);
   const toTitles = (rows: TitleRow[]) =>
     Promise.all(rows.map(async (row) => toTitle(row, await present(row))));
 

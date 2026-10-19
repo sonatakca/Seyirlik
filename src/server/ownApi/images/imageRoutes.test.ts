@@ -19,7 +19,7 @@ const STORED_IMAGE = {
   storageKey: "ab/cd/hash-original.jpg",
 };
 
-function buildRoutes() {
+function buildRoutes({ originalOnDisk = false } = {}) {
   const getVariant = vi.fn(async (_image: unknown, maxWidth: number) => ({
     contentHash: `hash-w${maxWidth}`,
     contentType: "image/webp",
@@ -44,7 +44,10 @@ function buildRoutes() {
     // Resolving to a path that does not exist makes serveImage throw
     // IMAGE_NOT_FOUND after the width has been negotiated, which is all these
     // tests need to observe.
-    resolve: (storageKey: string) => `/nonexistent/${storageKey}`,
+    resolve: (storageKey: string) =>
+      originalOnDisk && !storageKey.startsWith("variants/")
+        ? import.meta.filename
+        : `/nonexistent/${storageKey}`,
   } as unknown as ImageStorage;
 
   const catalogue = {
@@ -136,11 +139,22 @@ describe("image routes", () => {
   });
 
   it("serves the original when no width is requested", async () => {
-    const { routes, getVariant } = buildRoutes();
+    const { routes, getVariant } = buildRoutes({ originalOnDisk: true });
 
     await callRoute(itemImageRoute(routes), "");
 
     expect(getVariant).not.toHaveBeenCalled();
+  });
+
+  it("serves the widest variant when the original's file is gone", async () => {
+    const { routes, getVariant } = buildRoutes();
+
+    await callRoute(itemImageRoute(routes), "");
+
+    expect(getVariant).toHaveBeenCalledWith(
+      expect.anything(),
+      MAX_ARTWORK_WIDTH,
+    );
   });
 
   it("renders a placed logo into a transparent card layer", async () => {

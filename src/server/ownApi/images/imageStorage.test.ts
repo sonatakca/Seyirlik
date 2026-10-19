@@ -241,6 +241,54 @@ describe("image storage", () => {
     ).resolves.toMatchObject({ width: 520, format: "webp" });
   });
 
+  it("draws from cached variants once the original file is gone", async () => {
+    const mediaRoot = path.join(imageRoot, "media");
+    const titleRoot = "Series/The Sopranos";
+    await mkdir(path.join(mediaRoot, titleRoot), { recursive: true });
+    const storage = createImageStorage({ imageRoot, mediaRoot });
+    const cover = await storage.storeTitleArtwork(
+      await sharp({
+        create: { width: 1000, height: 1500, channels: 3, background: "#7c2d12" },
+      })
+        .jpeg()
+        .toBuffer(),
+      "image/jpeg",
+      titleRoot,
+      "cover",
+    );
+    const small = await storage.getVariant(cover, 160);
+    const large = await storage.getVariant(cover, 900);
+    // The title folder went missing; generated storage did not.
+    await rm(path.join(mediaRoot, titleRoot), { recursive: true });
+
+    // A cached width is still that width; another is the nearest cached one,
+    // served as it is rather than re-derived from a copy.
+    await expect(storage.getVariant(cover, 160)).resolves.toEqual(small);
+    await expect(storage.getVariant(cover, 320)).resolves.toEqual(large);
+    await expect(storage.getVariant(cover, 1920)).resolves.toEqual(large);
+    await expect(storage.hasSource(cover)).resolves.toBe(true);
+    await expect(
+      sharp(await storage.readSource(cover)).metadata(),
+    ).resolves.toMatchObject({ width: 900, format: "webp" });
+  });
+
+  it("has no source when neither the original nor a variant remains", async () => {
+    const storage = createImageStorage({ imageRoot });
+    const stored = await storage.store(
+      await sharp({
+        create: { width: 200, height: 300, channels: 3, background: "#000" },
+      })
+        .png()
+        .toBuffer(),
+      "image/png",
+    );
+    await rm(storage.resolve(stored.storageKey));
+
+    await expect(storage.hasSource(stored)).resolves.toBe(false);
+    await expect(storage.readSource(stored)).rejects.toThrow();
+    await expect(storage.getVariant(stored, 160)).rejects.toThrow();
+  });
+
   it("rasterizes a placed logo and its shadow into a transparent card layer", async () => {
     const storage = createImageStorage({ imageRoot });
     const logo = await sharp({

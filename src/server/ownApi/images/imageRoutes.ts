@@ -1,7 +1,10 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { OwnApiError } from "../ownApiHandler";
-import { clampArtworkWidth } from "../../../lib/artworkSizes";
+import {
+  MAX_ARTWORK_WIDTH,
+  clampArtworkWidth,
+} from "../../../lib/artworkSizes";
 import {
   CARD_LOGO_OVERLAY_VARIANT,
   type LogoLayout,
@@ -141,8 +144,16 @@ export function createImageRoutes({
       return;
     }
 
-    const requestedImage = maxWidth
-      ? await imageStorage.getVariant(image, maxWidth).catch(() => image)
+    // The full-size request for an image whose original file is gone gets its
+    // widest cached variant instead of a 404.
+    const width =
+      maxWidth ||
+      ((await stat(imageStorage.resolve(image.storageKey)).catch(() => null))
+        ?.isFile()
+        ? 0
+        : MAX_ARTWORK_WIDTH);
+    const requestedImage = width
+      ? await imageStorage.getVariant(image, width).catch(() => image)
       : image;
     await serveImage(context, requestedImage);
   }

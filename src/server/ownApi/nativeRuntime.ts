@@ -1806,11 +1806,7 @@ export async function createNativeRuntime({
     ...createWantedRoutes(pool, tmdb),
     ...createLibraryAdminRoutes({
       repository: createLibraryAdminRepository(pool, {
-        artworkExists: (storageKey) =>
-          stat(imageStorage.resolve(storageKey)).then(
-            (stats) => stats.isFile(),
-            () => false,
-          ),
+        artworkExists: (image) => imageStorage.hasSource(image),
       }),
       tmdb,
       queue,

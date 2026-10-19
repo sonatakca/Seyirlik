@@ -117,6 +117,8 @@ function fakeStorage(overrides: Partial<ImageStorage> = {}): ImageStorage {
       contentType: "image/webp",
       sizeBytes: 10,
     }),
+    readSource: async () => Buffer.alloc(0),
+    hasSource: async () => true,
     remove: async () => undefined,
     ...overrides,
   };

@@ -90,6 +90,17 @@ export interface ImageStorage {
     layout: LogoLayout,
     maxWidth: number,
   ): Promise<StoredImageBytes>;
+  /**
+   * The bytes an image is drawn from: its original file or, when that file is
+   * gone, the largest cached variant of it.
+   */
+  readSource(
+    image: Pick<StoredImageBytes, "contentHash" | "storageKey">,
+  ): Promise<Buffer>;
+  /** Whether `readSource` has anything to read. */
+  hasSource(
+    image: Pick<StoredImageBytes, "contentHash" | "storageKey">,
+  ): Promise<boolean>;
   remove(storageKey: string): Promise<void>;
 }
 
@@ -355,19 +366,17 @@ export function createImageStorage({
     maxWidth: number,
   ): Promise<StoredImageBytes> {
     const width = normalizedVariantWidth(maxWidth);
-    const variantHash = createHash("sha256")
-      .update(`webp-v1:${image.contentHash}:${width}`)
-      .digest("hex");
-    const storageKey = `variants/v1/${variantHash.slice(0, 2)}/${variantHash.slice(2, 4)}/${variantHash}-w${width}.webp`;
+    const existing = await cachedVariant(image.contentHash, width);
+    if (existing) return existing;
+    const { variantHash, storageKey } = variantKey(image.contentHash, width);
     const absolutePath = path.join(root, storageKey);
-    const existing = await stat(absolutePath).catch(() => null);
-    if (existing?.isFile()) {
-      return {
-        contentHash: variantHash,
-        contentType: "image/webp",
-        sizeBytes: existing.size,
-        storageKey,
-      };
+
+    // An original that is gone leaves its cached variants behind. Serve the
+    // nearest one as it is rather than deriving a new width from it, so no
+    // variant is ever filled with a copy of a copy.
+    if (!(await isFile(resolveStorageKey(image.storageKey)))) {
+      const standIn = await nearestCachedVariant(image.contentHash, width);
+      if (standIn) return standIn;
     }
 
     await mkdir(path.dirname(absolutePath), { recursive: true });
@@ -457,8 +466,7 @@ export function createImageStorage({
     await mkdir(path.dirname(absolutePath), { recursive: true });
     const temporaryPath = `${absolutePath}.${process.pid}.${Date.now()}.tmp`;
     try {
-      const sourceBytes = await readFile(resolveStorageKey(image.storageKey));
-      const source = sharp(sourceBytes, { limitInputPixels: MAX_IMAGE_PIXELS });
+      const source = sharp(await readSource(image), { limitInputPixels: MAX_IMAGE_PIXELS });
       const metadata = await source.metadata();
       if (!metadata.width || !metadata.height) {
         throw new Error("The logo has no size.");
@@ -512,6 +520,67 @@ export function createImageStorage({
         };
       }
       throw error;
+    }
+  }
+
+  function variantKey(contentHash: string, width: number) {
+    const variantHash = createHash("sha256")
+      .update(`webp-v1:${contentHash}:${width}`)
+      .digest("hex");
+    return {
+      variantHash,
+      storageKey: `variants/v1/${variantHash.slice(0, 2)}/${variantHash.slice(2, 4)}/${variantHash}-w${width}.webp`,
+    };
+  }
+
+  async function isFile(absolutePath: string): Promise<boolean> {
+    return (await stat(absolutePath).catch(() => null))?.isFile() ?? false;
+  }
+
+  async function cachedVariant(
+    contentHash: string,
+    width: number,
+  ): Promise<StoredImageBytes | null> {
+    const { variantHash, storageKey } = variantKey(contentHash, width);
+    const existing = await stat(path.join(root, storageKey)).catch(() => null);
+    return existing?.isFile()
+      ? {
+          contentHash: variantHash,
+          contentType: "image/webp",
+          sizeBytes: existing.size,
+          storageKey,
+        }
+      : null;
+  }
+
+  /**
+   * The cached variant closest to `width`: the narrowest at least as wide,
+   * else the widest there is. Generated storage keeps variants after their
+   * original is lost — the library moved, a title folder never came back —
+   * and they are the same picture, already chosen.
+   */
+  async function nearestCachedVariant(
+    contentHash: string,
+    width: number = MAX_ARTWORK_WIDTH,
+  ): Promise<StoredImageBytes | null> {
+    const wider = ARTWORK_VARIANT_WIDTHS.filter((w) => w >= width);
+    const narrower = ARTWORK_VARIANT_WIDTHS.filter((w) => w < width).reverse();
+    for (const candidate of [...wider, ...narrower]) {
+      const variant = await cachedVariant(contentHash, candidate);
+      if (variant) return variant;
+    }
+    return null;
+  }
+
+  async function readSource(
+    image: Pick<StoredImageBytes, "contentHash" | "storageKey">,
+  ): Promise<Buffer> {
+    try {
+      return await readFile(resolveStorageKey(image.storageKey));
+    } catch (error) {
+      const standIn = await nearestCachedVariant(image.contentHash);
+      if (!standIn) throw error;
+      return readFile(path.join(root, standIn.storageKey));
     }
   }
 
@@ -583,6 +652,12 @@ export function createImageStorage({
       variantRequests.set(key, request);
       return request;
     },
+
+    readSource,
+
+    hasSource: async (image) =>
+      (await isFile(resolveStorageKey(image.storageKey))) ||
+      (await nearestCachedVariant(image.contentHash)) !== null,
 
     remove: async (storageKey) => {
       await unlink(resolveStorageKey(storageKey)).catch(() => undefined);

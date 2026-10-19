@@ -1,5 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import sharp from "sharp";
@@ -63,6 +70,8 @@ describe("share cards", () => {
       repository,
       imageStorage: {
         resolve: (key: string) => path.join(root, key),
+        readSource: (image: { storageKey: string }) =>
+          readFile(path.join(root, image.storageKey)),
       } as unknown as ImageStorage,
       catalogue: { getPrimaryFile: async () => null },
       mediaRoot: root,
