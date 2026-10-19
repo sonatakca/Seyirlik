@@ -104,6 +104,26 @@ async function bounded<T>(
   }
 }
 
+/**
+ * Within this much confidence two fits are the same fit. The same translation
+ * timed for several releases scores identically against the audio (The
+ * Sopranos S02E05: three packs at 0.772), and confidence alone would then pick
+ * by download order, not by which one is already on time.
+ */
+const CONFIDENCE_TIE = 0.01;
+
+/** More confident, or as confident and needing less correction. */
+function fitsBetter(candidate: SubtitleFit, incumbent: SubtitleFit): boolean {
+  const difference =
+    candidate.proposal.confidence - incumbent.proposal.confidence;
+  if (Math.abs(difference) > CONFIDENCE_TIE) return difference > 0;
+  // A rate error, expressed as the seconds it drifts by over an hour.
+  const correction = (fit: SubtitleFit) =>
+    Math.abs(fit.proposal.offsetSeconds) +
+    Math.abs(fit.proposal.rate - 1) * 3600;
+  return correction(candidate) < correction(incumbent);
+}
+
 function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
   if (left.length !== right.length) return false;
   for (let i = 0; i < left.length; i++) if (left[i] !== right[i]) return false;
@@ -338,8 +358,7 @@ export async function runSubtitlePipeline(input: {
       (best, entry) =>
         best === undefined ||
         (entry.fit !== null &&
-          (best.fit === null ||
-            entry.fit.proposal.confidence > best.fit.proposal.confidence))
+          (best.fit === null || fitsBetter(entry.fit, best.fit)))
           ? entry
           : best,
       undefined,

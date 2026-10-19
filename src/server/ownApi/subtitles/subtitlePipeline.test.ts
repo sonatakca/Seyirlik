@@ -357,6 +357,21 @@ describe("choosing by the audio", () => {
     });
   });
 
+  it("prefers the timing that is already on time when two fit equally well", async () => {
+    const { input, measure } = measured({
+      1: fit(0.772, 1.3),
+      2: fit(0.772, 0.8),
+      3: fit(0.768, -0.1),
+    });
+    const result = await runSubtitlePipeline({ ...input, fit: { measure } });
+    expect(input.storage.install).toHaveBeenCalledWith(
+      expect.objectContaining({
+        flags: expect.objectContaining({ candidateId: "c3" }),
+      }),
+    );
+    expect(result).toMatchObject({ fit: { retimed: false } });
+  });
+
   it("moves a trusted fit onto the audio before installing it", async () => {
     const { input, measure } = measured({ 1: fit(0.7, 2) });
     const result = await runSubtitlePipeline({ ...input, fit: { measure } });

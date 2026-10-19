@@ -161,6 +161,9 @@ with the same `alignSpeech` that retiming uses, and installs the best fit:
 - A fit at or above `MINIMUM_SYNC_CONFIDENCE` that is measurably off (offset
   over 0.15 s, or any rate change) is moved onto the audio before it is written.
   The installation is then recorded `assumed-in-sync`.
+- Fits within 0.01 confidence of each other are a tie. The same translation
+  timed for several releases scores the same; the one needing the smallest
+  correction wins, so a file already on time is not rewritten.
 - Byte-identical downloads are measured once. The checkpoint names the
   candidate that was installed, so a resumed attempt downloads that one.
 - With no audio to read, or once reading it fails, the first valid download
