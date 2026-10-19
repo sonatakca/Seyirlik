@@ -62,6 +62,30 @@ describe("the layout the library already uses", () => {
     ).toBe("Dune (2021)/src/Dune (2021).mkv");
   });
 
+  it("files into the folder the title already owns", () => {
+    expect(
+      relativeOf(
+        planMediaDestination(
+          {
+            ...EPISODE,
+            title: "Lilyhammer",
+            episodeTitle: undefined,
+            folder: "Lilyhammer (2012)",
+          },
+          "x.mkv",
+        ),
+      ),
+    ).toBe("Lilyhammer (2012)/Season 1/src/Lilyhammer - S01E01.mkv");
+    expect(
+      relativeOf(
+        planMediaDestination(
+          { ...DUNE, folder: "Dune (2021) [Director's Cut]" },
+          "dune.mkv",
+        ),
+      ),
+    ).toBe("Dune (2021) [Director's Cut]/src/Dune (2021).mkv");
+  });
+
   it("keeps a film with no year in a folder of its own", () => {
     const target: DestinationTarget = { kind: "movie", title: "Koyaanisqatsi" };
     expect(titleDirectory(target)).toBe("Koyaanisqatsi");

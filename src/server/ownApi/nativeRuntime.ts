@@ -215,6 +215,7 @@ import type {
 import type { PlaybackRefreshBoundary } from "./playback/playbackRefresh";
 import { createImportRepository } from "./imports/importRepository";
 import { createImportService } from "./imports/importService";
+import { ownedFolderForItem } from "./imports/importFolder";
 import { createImportOperations } from "./imports/importOperations";
 import { createNodeReadFileSystem } from "./imports/importFileSystem";
 import {
@@ -1297,6 +1298,13 @@ export async function createNativeRuntime({
             targetFor: async (importId) => {
               const record = await repository.get(importId);
               if (!record) return null;
+              const folder = record.targetItemId
+                ? await ownedFolderForItem(
+                    pool,
+                    record.targetItemId,
+                    record.libraryRoot,
+                  )
+                : undefined;
               return {
                 kind: record.targetKind as "movie" | "season" | "episode",
                 title: record.targetTitle,
@@ -1312,6 +1320,9 @@ export async function createNativeRuntime({
                 ...(record.targetEpisode === undefined
                   ? {}
                   : { episode: record.targetEpisode }),
+                // The folder the item is already keyed to, so the scan finds
+                // the same title rather than making a second one.
+                ...(folder ? { folder } : {}),
               };
             },
             policy: {

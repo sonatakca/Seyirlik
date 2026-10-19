@@ -67,6 +67,12 @@ export interface DestinationTarget {
   /** The last episode of a file that holds a run of them. */
   readonly endEpisode?: number;
   readonly episodeTitle?: string;
+  /**
+   * The folder the title already owns in the library, when it has one.
+   * Its catalogue item is keyed to that folder, so filing anywhere else makes
+   * the next scan create a second title.
+   */
+  readonly folder?: string;
 }
 
 export interface PlannedDestination {
@@ -166,9 +172,10 @@ export function canonicalStem(target: DestinationTarget): string {
 
 /** The folder that owns the title, relative to the library root. */
 export function titleDirectory(target: DestinationTarget): string {
-  const title = safeSegment(target.title);
+  const title = safeSegment(target.folder ?? "") || safeSegment(target.title);
   if (!title) return "";
   if (target.kind === "movie") {
+    if (target.folder) return title;
     return target.year ? safeSegment(`${title} (${target.year})`) : title;
   }
   if (target.season === undefined) return "";
