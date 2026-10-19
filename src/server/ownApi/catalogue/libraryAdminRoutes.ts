@@ -83,6 +83,24 @@ export function createLibraryAdminRoutes(options: {
     },
     {
       /**
+       * A removal's deletion, which goes on after `/remove` has answered: the
+       * catalogue lets go at once, the bytes can take minutes on a Drive mount.
+       */
+      method: "GET",
+      path: "/library/removals/:itemId",
+      access: "admin",
+      handle: async (context) => {
+        context.requirePrincipal();
+        const status = options.removal.status(
+          requireUuid(context.params.itemId, "itemId"),
+        );
+        if (!status)
+          throw new OwnApiError("NOT_FOUND", "No such removal.", 404);
+        sendData(context.response, context.requestId, status);
+      },
+    },
+    {
+      /**
        * Irreversible. The body must repeat the title, so a request cannot be
        * produced by a stray click or a replayed id alone.
        */

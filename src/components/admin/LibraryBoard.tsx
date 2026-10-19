@@ -23,6 +23,7 @@ import {
 import { releaseSearchUrl } from "../../lib/wantedApi";
 import { downloadInventory } from "../../lib/inventoryExport";
 import { RemoveTitleDialog } from "./RemoveTitleDialog";
+import { onTitleRemoved } from "./titleRemovalProgress";
 import { TitlePoster } from "./TitlePoster";
 import { Tooltip } from "../ui/Tooltip";
 import { TitleSeasons } from "./TitleSeasons";
@@ -143,6 +144,21 @@ export function LibraryBoard({ refreshKey = 0 }: { refreshKey?: number }) {
     }
   };
   const actions = useTitleActions(reload);
+
+  // The row goes as soon as the catalogue lets go, however the dialog was left.
+  useEffect(
+    () =>
+      onTitleRemoved((itemId) => {
+        setOpen((current) => (current === itemId ? null : current));
+        setTitles((current) => ({
+          movie: current.movie?.filter((title) => title.id !== itemId) ?? null,
+          series:
+            current.series?.filter((title) => title.id !== itemId) ?? null,
+          book: current.book?.filter((title) => title.id !== itemId) ?? null,
+        }));
+      }),
+    [],
+  );
 
   /*
    * Once per visit: a matched title with no readable cover gets its TMDB
@@ -526,21 +542,7 @@ export function LibraryBoard({ refreshKey = 0 }: { refreshKey?: number }) {
       )}
 
       {removing ? (
-        <RemoveTitleDialog
-          title={removing}
-          onClose={() => setRemoving(null)}
-          onRemoved={(report) => {
-            setRemoving(null);
-            setOpen(null);
-            actions.setNotice({
-              tone: report.leftovers.length ? "error" : "ok",
-              text: report.leftovers.length
-                ? `${t("library.removedWithLeftovers")} ${report.leftovers.join(", ")}`
-                : `${t("library.removed")} ${report.title}`,
-            });
-            void reload();
-          }}
-        />
+        <RemoveTitleDialog title={removing} onClose={() => setRemoving(null)} />
       ) : null}
     </section>
   );

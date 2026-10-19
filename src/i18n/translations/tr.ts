@@ -228,6 +228,18 @@ export const tr = {
   "library.removeType": "Onaylamak için başlığı yazın:",
   "library.removeConfirm": "Kalıcı olarak kaldır",
   "library.removing": "Kaldırılıyor…",
+  "library.removeHide": "Arka planda sürdür",
+  "library.removalRunning": "Kaldırılıyor:",
+  "library.removalCommitting": "Kütüphaneden çıkarılıyor…",
+  "library.removalDeleting": "Kütüphaneden çıkarıldı. Dosyaları siliniyor:",
+  "library.removalDeletingFiles":
+    "Kütüphaneden çıkarıldı. Dosyaları siliniyor…",
+  "library.removalDeleted": "Silinen dosyalar:",
+  "library.removalUnknown":
+    "Kütüphaneden çıkarıldı. Dosyaların silinmesini sunucu kendisi tamamlayacak.",
+  "library.removalInterrupted":
+    "Kaldırma sırasında sunucu yeniden başladı. Başlık hâlâ listedeyse, tamamlamak için yeniden kaldırın.",
+  "library.removalFailedTitle": "Kaldırılamadı:",
   "library.cancel": "Vazgeç",
   "library.removed": "Kaldırıldı:",
   "library.removedWithLeftovers":

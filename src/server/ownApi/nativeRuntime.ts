@@ -1695,6 +1695,26 @@ export async function createNativeRuntime({
     }
   };
 
+  const titleRemoval = createTitleRemoval({
+    pool,
+    mediaRoot,
+    renditionRoot,
+    stateRoot: renditionStateRoot,
+    removeImage: (storageKey) => imageStorage.remove(storageKey),
+    ...(acquisition
+      ? {
+          cancelAcquisition: (acquisitionId: string) =>
+            acquisition.service.cancel(acquisitionId),
+        }
+      : {}),
+  });
+  // A deploy in the middle of a removal leaves its folder staged; finish it.
+  void titleRemoval
+    .sweepInterrupted()
+    .catch((error: unknown) =>
+      console.error("title.removal.sweep_failed", { error }),
+    );
+
   const routes: RouteDefinition[] = [
     ...createCatalogueRoutes({
       service: catalogueService,
@@ -1810,19 +1830,7 @@ export async function createNativeRuntime({
       }),
       tmdb,
       queue,
-      removal: createTitleRemoval({
-        pool,
-        mediaRoot,
-        renditionRoot,
-        stateRoot: renditionStateRoot,
-        removeImage: (storageKey) => imageStorage.remove(storageKey),
-        ...(acquisition
-          ? {
-              cancelAcquisition: (acquisitionId: string) =>
-                acquisition.service.cancel(acquisitionId),
-            }
-          : {}),
-      }),
+      removal: titleRemoval,
     }),
     ...(acquisition
       ? createAcquisitionRoutes({

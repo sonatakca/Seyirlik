@@ -24,6 +24,7 @@ import {
 import { refreshItemMetadata } from "../../lib/mediaApi";
 import { releaseSearchUrl } from "../../lib/wantedApi";
 import { RemoveTitleDialog } from "../../components/admin/RemoveTitleDialog";
+import { onTitleRemoved } from "../../components/admin/titleRemovalProgress";
 import { TitleSeasons } from "../../components/admin/TitleSeasons";
 import { TitlePoster } from "../../components/admin/TitlePoster";
 import {
@@ -91,6 +92,15 @@ export function TitlePage() {
       cancelled = true;
     };
   }, [itemId]);
+
+  // Leaves for the list once this title is gone, but only while it is open.
+  useEffect(
+    () =>
+      onTitleRemoved((removed) => {
+        if (removed === itemId) navigate("/admin/library", { replace: true });
+      }),
+    [itemId, navigate],
+  );
 
   useEffect(() => {
     setPageTitle(`${detail?.title ?? t("library.title")} · Seyirlik`, {
@@ -430,11 +440,7 @@ export function TitlePage() {
       ) : null}
 
       {removing ? (
-        <RemoveTitleDialog
-          title={detail}
-          onClose={() => setRemoving(false)}
-          onRemoved={() => navigate("/admin/library", { replace: true })}
-        />
+        <RemoveTitleDialog title={detail} onClose={() => setRemoving(false)} />
       ) : null}
     </div>
   );

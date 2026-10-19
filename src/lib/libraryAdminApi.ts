@@ -3,7 +3,7 @@
  * nothing to play yet. Browse pages never see a title without a source; this
  * is where those are managed.
  */
-import { ownApiClient } from "../api/ownApi/client";
+import { OwnApiClientError, ownApiClient } from "../api/ownApi/client";
 
 export type LibraryTitleKind = "movie" | "series" | "book";
 
@@ -71,6 +71,12 @@ export interface TitleRemovalReport {
   itemId: string;
   title: string;
   folder: string | null;
+  /**
+   * `removing` until the catalogue lets go, `deleting` while the files go,
+   * `done`; `failed` stopped before anything was deleted.
+   */
+  state: "removing" | "deleting" | "done" | "failed";
+  failure?: "not-found" | "confirmation" | "busy" | "unsafe" | "error";
   filesRemoved: number;
   downloadsCancelled: number;
   leftovers: string[];
@@ -102,6 +108,21 @@ export function removeLibraryTitle(
     `/library/titles/${encodeURIComponent(itemId)}/remove`,
     { method: "POST", body: { confirmTitle } },
   );
+}
+
+/** A removal's file deletion; null once the server no longer knows of it. */
+export async function getTitleRemoval(
+  itemId: string,
+): Promise<TitleRemovalReport | null> {
+  try {
+    return await ownApiClient.request<TitleRemovalReport>(
+      `/library/removals/${encodeURIComponent(itemId)}`,
+      { background: true },
+    );
+  } catch (error) {
+    if (error instanceof OwnApiClientError && error.status === 404) return null;
+    throw error;
+  }
 }
 
 /** Looks for subtitles for a film, or for every episode file of a show or season. */

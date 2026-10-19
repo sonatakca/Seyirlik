@@ -8,6 +8,10 @@ import {
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { LibraryTitle } from "../../lib/libraryAdminApi";
+import {
+  getNotifications,
+  resetNotificationsForTests,
+} from "../../lib/notifications/notificationStore";
 import { LibraryBoard } from "./LibraryBoard";
 
 const api = vi.hoisted(() => ({
@@ -64,6 +68,7 @@ const title = (over: Partial<LibraryTitle>): LibraryTitle => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetNotificationsForTests();
   api.listLibraryTitles.mockImplementation(async (kind: string) =>
     kind === "book"
       ? []
@@ -196,6 +201,7 @@ it("removes a title only once its name is typed", async () => {
     itemId: "held",
     title: "Held",
     folder: "Movies/Held (2000)",
+    state: "done",
     filesRemoved: 1,
     downloadsCancelled: 0,
     leftovers: [],
@@ -216,7 +222,50 @@ it("removes a title only once its name is typed", async () => {
   await waitFor(() =>
     expect(api.removeLibraryTitle).toHaveBeenCalledWith("held", "Held"),
   );
-  expect(await screen.findByText("library.removed Held")).toBeTruthy();
+  // The dialog closes, the row goes, and the corner card says so.
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(screen.queryByText("Held")).toBeNull();
+  expect(getNotifications()[0]).toMatchObject({
+    tone: "success",
+    title: "library.removed Held",
+  });
+});
+
+it("hands a slow removal to the corner card when the dialog is closed", async () => {
+  let answer!: (value: unknown) => void;
+  api.removeLibraryTitle.mockReturnValue(
+    new Promise((resolve) => (answer = resolve)),
+  );
+  renderBoard();
+  const row = (await screen.findByText("Held")).closest("li")!;
+  fireEvent.click(within(row).getByRole("button", { name: /library\.remove/ }));
+  const dialog = screen.getByRole("alertdialog");
+  fireEvent.change(within(dialog).getByRole("textbox"), {
+    target: { value: "Held" },
+  });
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "library.removeConfirm" }),
+  );
+  fireEvent.click(
+    await within(dialog).findByRole("button", { name: "library.removeHide" }),
+  );
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(getNotifications()[0]).toMatchObject({
+    tone: "progress",
+    title: "library.removalRunning Held",
+  });
+  answer({
+    itemId: "held",
+    title: "Held",
+    folder: null,
+    state: "done",
+    filesRemoved: 1,
+    downloadsCancelled: 0,
+    leftovers: [],
+  });
+  await waitFor(() => expect(screen.queryByText("Held")).toBeNull());
+  expect(getNotifications()).toHaveLength(1);
+  expect(getNotifications()[0]).toMatchObject({ tone: "success" });
 });
 
 it("starts a subtitle search for a whole title", async () => {

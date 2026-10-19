@@ -228,6 +228,17 @@ export const en = {
   "library.removeType": "Type the title to confirm:",
   "library.removeConfirm": "Remove permanently",
   "library.removing": "Removing…",
+  "library.removeHide": "Continue in background",
+  "library.removalRunning": "Removing",
+  "library.removalCommitting": "Taking it out of the library…",
+  "library.removalDeleting": "Out of the library. Deleting its files:",
+  "library.removalDeletingFiles": "Out of the library. Deleting its files…",
+  "library.removalDeleted": "Files deleted:",
+  "library.removalUnknown":
+    "Out of the library. The server finishes deleting its files on its own.",
+  "library.removalInterrupted":
+    "The server restarted during the removal. If the title is still listed, remove it again to finish.",
+  "library.removalFailedTitle": "Not removed:",
   "library.cancel": "Cancel",
   "library.removed": "Removed",
   "library.removedWithLeftovers":
