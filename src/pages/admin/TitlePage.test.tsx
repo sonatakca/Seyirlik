@@ -60,6 +60,7 @@ const detail = (
   pendingSubtitles: [],
   files: 1,
   trickplayFiles: 0,
+  pendingTrickplay: 0,
   artwork: { coverTag: null, logoTag: null, logoLayout: null, missing: true },
   mediaFileId: "f",
   fileName: "Dune.2021.mkv",
@@ -275,6 +276,7 @@ it("uploads to the episode a file belongs to, under the list's one policy", asyn
               pendingSubtitles: [],
               files: 1,
               trickplayFiles: 0,
+              pendingTrickplay: 0,
             },
           ],
         },
@@ -309,4 +311,20 @@ it("uploads to the episode a file belongs to, under the list's one policy", asyn
       { language: "eng", forced: false, replace: false },
     ),
   );
+});
+
+it("refreshes itself while open, so a change shows without a reload", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    renderAt();
+    await screen.findByText("Dune");
+    api.getLibraryTitle.mockResolvedValue(detail({ title: "Dune: Part Two" }));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(api.getLibraryTitle).toHaveBeenLastCalledWith(ID, {
+      background: true,
+    });
+    expect(await screen.findByText("Dune: Part Two")).toBeTruthy();
+  } finally {
+    vi.useRealTimers();
+  }
 });

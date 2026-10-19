@@ -20,6 +20,8 @@ export interface HoldingFacts {
   pendingSubtitles: string[];
   files: number;
   trickplayFiles: number;
+  /** Playable titles whose trickplay is queued or being generated. */
+  pendingTrickplay: number;
 }
 
 export interface LibraryTitle extends HoldingFacts {
@@ -93,9 +95,13 @@ export async function listLibraryTitles(
   return items;
 }
 
-export function getLibraryTitle(itemId: string): Promise<LibraryTitleDetail> {
+export function getLibraryTitle(
+  itemId: string,
+  { background = false } = {},
+): Promise<LibraryTitleDetail> {
   return ownApiClient.request<LibraryTitleDetail>(
     `/library/titles/${encodeURIComponent(itemId)}`,
+    background ? { background } : undefined,
   );
 }
 
@@ -365,7 +371,7 @@ export interface EpisodeStage {
   /** The file's own step; `tone` while there is no file to speak of. */
   file: { tone: HoldingTone } | { held: "unprocessed" | "processing" | "processed" };
   turkish: "found" | "searching" | "none";
-  trickplay: boolean;
+  trickplay: "found" | "queued" | "none";
   /** Processed, with Turkish subtitles and trickplay: nothing left to do. */
   complete: boolean;
 }
@@ -381,6 +387,7 @@ export function episodeStage(
     | "subtitleLanguages"
     | "pendingSubtitles"
     | "trickplayFiles"
+    | "pendingTrickplay"
   >,
   wanted: boolean,
 ): EpisodeStage {
@@ -388,7 +395,7 @@ export function episodeStage(
     return {
       file: { tone: toneOf(episode, wanted) },
       turkish: "none",
-      trickplay: false,
+      trickplay: "none",
       complete: false,
     };
   }
@@ -405,12 +412,18 @@ export function episodeStage(
     : episode.pendingSubtitles.includes("tur")
       ? "searching"
       : "none";
-  const trickplay = episode.trickplayFiles > 0;
+  const trickplay =
+    episode.trickplayFiles > 0
+      ? "found"
+      : episode.pendingTrickplay > 0
+        ? "queued"
+        : "none";
   return {
     file: { held },
     turkish,
     trickplay,
-    complete: held === "processed" && turkish === "found" && trickplay,
+    complete:
+      held === "processed" && turkish === "found" && trickplay === "found",
   };
 }
 

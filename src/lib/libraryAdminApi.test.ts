@@ -10,6 +10,7 @@ const facts = (extra: Partial<HoldingFacts> = {}) => ({
   subtitleLanguages: [] as string[],
   pendingSubtitles: [] as string[],
   trickplayFiles: 0,
+  pendingTrickplay: 0,
   ...extra,
 });
 
@@ -20,7 +21,7 @@ describe("episodeStage", () => {
     ).toEqual({
       file: { tone: "downloading" },
       turkish: "none",
-      trickplay: false,
+      trickplay: "none",
       complete: false,
     });
     expect(episodeStage(facts(), true).file).toEqual({ tone: "wanted" });
@@ -31,15 +32,18 @@ describe("episodeStage", () => {
     expect(episodeStage(facts({ ...held, trickplayFiles: 1 }), true)).toMatchObject({
       file: { held: "processed" },
       turkish: "none",
-      trickplay: true,
+      trickplay: "found",
       complete: false,
     });
     expect(
       episodeStage(facts({ ...held, subtitleLanguages: ["eng", "tur"] }), true),
-    ).toMatchObject({ turkish: "found", trickplay: false, complete: false });
+    ).toMatchObject({ turkish: "found", trickplay: "none", complete: false });
     expect(
       episodeStage(facts({ ...held, pendingSubtitles: ["tur"] }), true).turkish,
     ).toBe("searching");
+    expect(
+      episodeStage(facts({ ...held, pendingTrickplay: 1 }), true).trickplay,
+    ).toBe("queued");
   });
 
   it("is complete only once processed with Turkish subtitles and trickplay", () => {

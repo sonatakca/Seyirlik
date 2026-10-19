@@ -50,6 +50,7 @@ const facts = {
   pendingSubtitles: [],
   files: 0,
   trickplayFiles: 0,
+  pendingTrickplay: 0,
 };
 const title = (over: Partial<LibraryTitle>): LibraryTitle => ({
   ...facts,

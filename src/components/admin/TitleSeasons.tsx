@@ -148,6 +148,12 @@ const TURKISH_STYLE = {
   none: "bg-white/10",
 } as const;
 
+const TRICKPLAY_STYLE = {
+  found: "bg-pink-400",
+  queued: "bg-pink-400/35",
+  none: "bg-white/10",
+} as const;
+
 /**
  * An episode's pill in the season strip.
  *
@@ -171,9 +177,7 @@ function StripBar({ stage }: { stage: EpisodeStage }) {
     <span className="flex h-1.5 gap-px overflow-hidden rounded-full">
       <span className={`flex-[2] ${PROCESS_STYLE[stage.file.held]}`} />
       <span className={`flex-1 ${TURKISH_STYLE[stage.turkish]}`} />
-      <span
-        className={`flex-1 ${stage.trickplay ? "bg-pink-400" : "bg-white/10"}`}
-      />
+      <span className={`flex-1 ${TRICKPLAY_STYLE[stage.trickplay]}`} />
     </span>
   );
 }
@@ -197,11 +201,7 @@ function StripPill({ episode }: { episode: LibraryEpisode }) {
         : [
             t(`library.stage.${stage.file.held}`),
             t(`library.stage.turkish.${stage.turkish}`),
-            t(
-              stage.trickplay
-                ? "library.stage.trickplay.yes"
-                : "library.stage.trickplay.no",
-            ),
+            t(`library.stage.trickplay.${stage.trickplay}`),
           ];
   return (
     <Tooltip content={[code, ...facts].join(" · ")}>
@@ -218,7 +218,7 @@ function StripPill({ episode }: { episode: LibraryEpisode }) {
 const held = (
   file: "unprocessed" | "processed",
   turkish: EpisodeStage["turkish"] = "none",
-  trickplay = false,
+  trickplay: EpisodeStage["trickplay"] = "none",
 ): EpisodeStage => ({
   file: { held: file },
   turkish,
@@ -238,7 +238,7 @@ const LEGEND: Array<{
     stage: {
       file: { tone: "wanted" },
       turkish: "none",
-      trickplay: false,
+      trickplay: "none",
       complete: false,
     },
     label: "wanted",
@@ -247,7 +247,7 @@ const LEGEND: Array<{
     stage: {
       file: { tone: "downloading" },
       turkish: "none",
-      trickplay: false,
+      trickplay: "none",
       complete: false,
     },
     label: "downloading",
@@ -260,14 +260,18 @@ const LEGEND: Array<{
     label: "library.stage.turkish.searching",
   },
   {
-    stage: held("processed", "none", true),
-    label: "library.stage.trickplay.yes",
+    stage: held("processed", "none", "found"),
+    label: "library.stage.trickplay.found",
+  },
+  {
+    stage: held("processed", "none", "queued"),
+    label: "library.stage.trickplay.queued",
   },
   {
     stage: {
       file: { held: "processed" },
       turkish: "found",
-      trickplay: true,
+      trickplay: "found",
       complete: true,
     },
     label: "library.stage.complete",
@@ -291,9 +295,9 @@ function StripLegend({ seasons }: { seasons: LibraryTitleDetail["seasons"] }) {
       stage: {
         file: { tone },
         turkish: "none",
-        trickplay: false,
+        trickplay: "none",
         complete: false,
-      } as EpisodeStage,
+      } satisfies EpisodeStage,
       label: tone,
     })),
   ];

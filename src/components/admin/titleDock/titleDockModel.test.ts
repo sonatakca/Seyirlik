@@ -93,6 +93,7 @@ function detail(over: Partial<LibraryTitleDetail> = {}): LibraryTitleDetail {
     pendingSubtitles: [],
     files: 1,
     trickplayFiles: 0,
+    pendingTrickplay: 0,
     mediaFileId: "file-1",
     fileName: "Film.mkv",
     seasons: [],

@@ -10,7 +10,11 @@ import type { TmdbClient } from "../metadata/tmdbClient";
 import type { JobQueue } from "../tasks/jobQueue";
 import { JOB_TYPES } from "../tasks/jobHandlers";
 import { OwnApiError } from "../ownApiHandler";
-import { loadTitleDetail, type LibraryAdminRepository } from "./libraryAdmin";
+import {
+  cacheSeriesCatalogue,
+  loadTitleDetail,
+  type LibraryAdminRepository,
+} from "./libraryAdmin";
 import { TitleRemovalError, type TitleRemoval } from "./titleRemoval";
 
 const REMOVAL_STATUS: Record<TitleRemovalError["code"], number> = {
@@ -27,6 +31,7 @@ export function createLibraryAdminRoutes(options: {
   removal: TitleRemoval;
   queue: JobQueue;
 }): RouteDefinition[] {
+  const catalogue = options.tmdb && cacheSeriesCatalogue(options.tmdb);
   return [
     {
       /**
@@ -73,7 +78,7 @@ export function createLibraryAdminRoutes(options: {
         context.requirePrincipal();
         const detail = await loadTitleDetail(
           options.repository,
-          options.tmdb,
+          catalogue,
           requireUuid(context.params.itemId, "itemId"),
         );
         if (!detail)

@@ -36,6 +36,8 @@ export interface HoldingFacts {
   /** Playable titles (a film, or each episode) on disk, and how many have trickplay sheets. */
   files: number;
   trickplayFiles: number;
+  /** Playable titles whose trickplay is queued or being generated. */
+  pendingTrickplay: number;
 }
 
 export interface LibraryTitle extends HoldingFacts {
@@ -133,7 +135,13 @@ const HOLDING_COLUMNS = `
       AND EXISTS (SELECT 1 FROM trickplay_sets ts WHERE ts.media_file_id = f.id)) AS "trickplayFiles",
   ARRAY(SELECT DISTINCT w.language FROM subtitle_wants w JOIN media_files f ON f.id = w.media_file_id
     JOIN items fam ON fam.id = f.item_id
-    WHERE ${FAMILY("item")} AND w.active ORDER BY 1) AS "pendingSubtitles"`;
+    WHERE ${FAMILY("item")} AND w.active ORDER BY 1) AS "pendingSubtitles",
+  -- A title's trickplay job is keyed by the title, so a queued or running one
+  -- is found by its dedupe key alone.
+  (SELECT count(*)::int FROM items fam
+    WHERE ${FAMILY("item")} AND fam.kind IN ('movie', 'episode')
+      AND EXISTS (SELECT 1 FROM jobs tj WHERE tj.dedupe_key = 'trickplay.generate:' || fam.id::text
+        AND tj.status IN ('queued', 'running'))) AS "pendingTrickplay"`;
 
 type HoldingRow = Omit<HoldingFacts, "sizeBytes"> & {
   sizeBytes: string | number;
@@ -161,6 +169,7 @@ function holding(row: HoldingRow): HoldingFacts {
     pendingSubtitles: languageSet(row.pendingSubtitles),
     files: row.files,
     trickplayFiles: row.trickplayFiles,
+    pendingTrickplay: row.pendingTrickplay,
   };
 }
 
@@ -178,6 +187,7 @@ const NOTHING_HELD = (status: string): HoldingFacts => ({
   pendingSubtitles: [],
   files: 0,
   trickplayFiles: 0,
+  pendingTrickplay: 0,
 });
 
 type TitleRow = HoldingRow & {
@@ -402,6 +412,51 @@ function baseName(relativePath: string | undefined): string | null {
   return relativePath.split("/").pop() ?? null;
 }
 
+/** What a title page needs from TMDB: a show's seasons and their episodes. */
+export type SeriesCatalogue = Pick<
+  TmdbClient,
+  "getSeries" | "getSeasonEpisodes" | "buildImageUrl"
+>;
+
+/**
+ * TMDB's seasons and episodes, kept for a few minutes.
+ *
+ * An open title page asks for itself every few seconds to stay live, and what
+ * TMDB lists for a show changes over days, so asking it each time would be a
+ * call per season every few seconds for nothing. A failed answer is not kept.
+ */
+export function cacheSeriesCatalogue(
+  tmdb: SeriesCatalogue,
+  ttlMs = 10 * 60_000,
+  now = () => Date.now(),
+): SeriesCatalogue {
+  const entries = new Map<string, { at: number; value: Promise<unknown> }>();
+  const remember = <T>(key: string, load: () => Promise<T>): Promise<T> => {
+    const hit = entries.get(key);
+    if (hit && now() - hit.at < ttlMs) return hit.value as Promise<T>;
+    if (entries.size > 500)
+      for (const [stale, entry] of entries)
+        if (now() - entry.at >= ttlMs) entries.delete(stale);
+    const value = load();
+    entries.set(key, { at: now(), value });
+    value.catch(() => {
+      if (entries.get(key)?.value === value) entries.delete(key);
+    });
+    return value;
+  };
+  return {
+    getSeries: (providerId, language) =>
+      remember(`series:${providerId}:${language ?? ""}`, () =>
+        tmdb.getSeries(providerId, language),
+      ),
+    getSeasonEpisodes: (providerId, seasonNumber) =>
+      remember(`season:${providerId}:${seasonNumber}`, () =>
+        tmdb.getSeasonEpisodes(providerId, seasonNumber),
+      ),
+    buildImageUrl: (imagePath, size) => tmdb.buildImageUrl(imagePath, size),
+  };
+}
+
 /**
  * A title with everything under it.
  *
@@ -412,7 +467,7 @@ function baseName(relativePath: string | undefined): string | null {
  */
 export async function loadTitleDetail(
   repository: LibraryAdminRepository,
-  tmdb: TmdbClient | undefined,
+  tmdb: SeriesCatalogue | undefined,
   itemId: string,
   now = new Date(),
 ): Promise<LibraryTitleDetail | null> {

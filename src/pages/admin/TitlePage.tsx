@@ -56,6 +56,9 @@ type Tab = "overview" | "episodes" | "artwork" | "monitoring";
  * library list, and every one of those errands is a tab or a button on it —
  * for the film, and for a show's seasons and episodes individually.
  */
+/** How often an open title page asks again what it holds. */
+const LIVE_REFRESH_MS = 5_000;
+
 export function TitlePage() {
   const { t } = useLanguage();
   const { itemId = "" } = useParams();
@@ -90,6 +93,46 @@ export function TitlePage() {
       );
     return () => {
       cancelled = true;
+    };
+  }, [itemId]);
+
+  // Live while it is looked at: a subtitle found, an encode or trickplay
+  // finished, a download landed. Unchanged answers keep the same object, so
+  // nothing re-renders for a poll that found nothing new.
+  useEffect(() => {
+    let stopped = false;
+    let running = false;
+    let timer: number | undefined;
+    const tick = async () => {
+      window.clearTimeout(timer);
+      if (running || stopped) return;
+      running = true;
+      try {
+        if (document.visibilityState === "visible") {
+          const next = await getLibraryTitle(itemId, { background: true });
+          if (!stopped)
+            setDetail((previous) =>
+              previous && JSON.stringify(previous) === JSON.stringify(next)
+                ? previous
+                : next,
+            );
+        }
+      } catch {
+        // A missed refresh is retried by the next one.
+      } finally {
+        running = false;
+        if (!stopped) timer = window.setTimeout(tick, LIVE_REFRESH_MS);
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void tick();
+    };
+    timer = window.setTimeout(tick, LIVE_REFRESH_MS);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [itemId]);
 
