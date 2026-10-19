@@ -2,6 +2,7 @@ import { Captions, Images } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
 import type { TranslationKey } from "../../i18n/translations";
 import {
+  episodeStage,
   toneOf,
   type LibraryEpisode,
   type LibraryTitleDetail,
@@ -133,6 +134,77 @@ function EpisodeRow({
   );
 }
 
+const PROCESS_STYLE = {
+  unprocessed: "bg-orange-400",
+  processing: "bg-orange-400",
+  processed: "bg-white/60",
+} as const;
+
+const TURKISH_STYLE = {
+  found: "bg-blue-400",
+  searching: "bg-blue-400/35",
+  none: "bg-white/10",
+} as const;
+
+/**
+ * One episode in the season strip.
+ *
+ * Without a file the pill is one colour, since nothing after the download can
+ * exist yet. Once there is a file it splits into the file's step, Turkish
+ * subtitles and trickplay, the last two filling in whichever order they come.
+ * A finished episode is one green pill again.
+ */
+function StripPill({ episode }: { episode: LibraryEpisode }) {
+  const { t } = useLanguage();
+  const stage = episodeStage(episode, true);
+  const code = `E${String(episode.episodeNumber).padStart(2, "0")}`;
+  let bar;
+  let facts: string[];
+  if ("tone" in stage.file) {
+    const { tone } = stage.file;
+    bar = <span className={`h-1.5 rounded-full ${TONE_STYLE[tone].dot}`} />;
+    facts = [
+      tone === "wanted"
+        ? t("library.missingEpisode")
+        : t(`library.tone.${tone}` as TranslationKey),
+    ];
+  } else {
+    const { held } = stage.file;
+    bar = stage.complete ? (
+      <span className="h-1.5 rounded-full bg-emerald-400" />
+    ) : (
+      <span className="flex h-1.5 gap-px overflow-hidden rounded-full">
+        <span className={`flex-[2] ${PROCESS_STYLE[held]}`} />
+        <span className={`flex-1 ${TURKISH_STYLE[stage.turkish]}`} />
+        <span
+          className={`flex-1 ${stage.trickplay ? "bg-pink-400" : "bg-white/10"}`}
+        />
+      </span>
+    );
+    facts = stage.complete
+      ? [t("library.stage.complete")]
+      : [
+          t(`library.stage.${held}`),
+          t(`library.stage.turkish.${stage.turkish}`),
+          t(
+            stage.trickplay
+              ? "library.stage.trickplay.yes"
+              : "library.stage.trickplay.no",
+          ),
+        ];
+  }
+  return (
+    <Tooltip content={[code, ...facts].join(" · ")}>
+      <span className="flex min-w-0 max-w-7 flex-1 flex-col gap-1">
+        <span className="text-center text-[9px] font-bold leading-none tabular-nums text-white/40">
+          {episode.episodeNumber}
+        </span>
+        {bar}
+      </span>
+    </Tooltip>
+  );
+}
+
 /** A show's seasons, with what each season and episode holds and can be asked for. */
 export function TitleSeasons({
   detail,
@@ -151,6 +223,10 @@ export function TitleSeasons({
       ) : null}
       {detail.seasons.map((season) => {
         const held = season.episodes.filter((e) => e.hasMedia).length;
+        // Counted the way the strip is coloured: green is finished.
+        const finished = season.episodes.filter(
+          (e) => episodeStage(e, true).complete,
+        ).length;
         const label =
           season.seasonNumber === 0
             ? t("library.specials")
@@ -163,17 +239,15 @@ export function TitleSeasons({
           >
             <summary className="flex cursor-pointer list-none flex-wrap items-center gap-3 px-3 py-2 text-sm font-black text-white/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]">
               <span>{label}</span>
-              <span className="text-xs font-bold tabular-nums text-white/50">
-                {held}/{season.episodes.length}
+              <span className="min-w-10 text-xs font-bold tabular-nums text-white/50">
+                {finished}/{season.episodes.length}
               </span>
-              {/* One segment per episode: the season at a glance. */}
-              <span aria-hidden="true" className="flex min-w-16 flex-1 gap-0.5">
+              {/* One pill per episode: the season at a glance. */}
+              <span aria-hidden="true" className="flex min-w-16 flex-1 gap-1">
                 {season.episodes.map((episode) => (
-                  <span
-                    key={episode.episodeNumber}
-                    className={`h-1.5 max-w-6 flex-1 rounded-full ${
-                      TONE_STYLE[toneOf(episode, true)].dot
-                    }`}
+                  <StripPill
+                    key={`${episode.episodeNumber}:${episode.id ?? ""}`}
+                    episode={episode}
                   />
                 ))}
               </span>

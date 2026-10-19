@@ -333,6 +333,66 @@ export function toneOf(
   return wanted ? "wanted" : "absent";
 }
 
+/**
+ * How far an episode has come, for the season strip.
+ *
+ * The file walks one way: absent, downloading, held, processed. Turkish
+ * subtitles and trickplay only exist once there is a file, and arrive in
+ * either order, so they are reported apart rather than as further steps.
+ */
+export interface EpisodeStage {
+  /** The file's own step; `tone` while there is no file to speak of. */
+  file: { tone: HoldingTone } | { held: "unprocessed" | "processing" | "processed" };
+  turkish: "found" | "searching" | "none";
+  trickplay: boolean;
+  /** Processed, with Turkish subtitles and trickplay: nothing left to do. */
+  complete: boolean;
+}
+
+export function episodeStage(
+  episode: Pick<
+    HoldingFacts,
+    | "hasMedia"
+    | "downloading"
+    | "importing"
+    | "processing"
+    | "status"
+    | "subtitleLanguages"
+    | "pendingSubtitles"
+    | "trickplayFiles"
+  >,
+  wanted: boolean,
+): EpisodeStage {
+  if (!episode.hasMedia) {
+    return {
+      file: { tone: toneOf(episode, wanted) },
+      turkish: "none",
+      trickplay: false,
+      complete: false,
+    };
+  }
+  const held =
+    episode.status === "ready"
+      ? "processed"
+      : episode.processing > 0 ||
+          episode.status === "processing" ||
+          episode.status === "paused"
+        ? "processing"
+        : "unprocessed";
+  const turkish = episode.subtitleLanguages.includes("tur")
+    ? "found"
+    : episode.pendingSubtitles.includes("tur")
+      ? "searching"
+      : "none";
+  const trickplay = episode.trickplayFiles > 0;
+  return {
+    file: { held },
+    turkish,
+    trickplay,
+    complete: held === "processed" && turkish === "found" && trickplay,
+  };
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes <= 0) return "—";
   const units = ["B", "KB", "MB", "GB", "TB"];
