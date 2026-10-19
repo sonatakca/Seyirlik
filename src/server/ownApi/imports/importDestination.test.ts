@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalStem,
   destinationKey,
+  fileTargetsFor,
   isRefusal,
   planMediaDestination,
   planSubtitleDestination,
@@ -254,5 +255,116 @@ describe("the identity a destination is held by", () => {
       planMediaDestination({ kind: "movie", title: "***" }, "x.mkv"),
     );
     expect(isRefusal(outcome)).toBe(true);
+  });
+});
+
+describe("a season pack, explored file by file", () => {
+  const SEASON: DestinationTarget = {
+    kind: "season",
+    title: "Lilyhammer",
+    year: 2012,
+    season: 1,
+  };
+
+  function file(relative: string) {
+    return { relative, role: relative.endsWith(".srt") ? "subtitle" : "media" };
+  }
+
+  function explore(paths: string[]) {
+    const files = paths.map(file);
+    const outcome = fileTargetsFor(
+      SEASON,
+      files.filter((entry) => entry.role === "media"),
+      files.filter((entry) => entry.role === "subtitle"),
+    );
+    if (isRefusal(outcome)) throw new Error(`Refused: ${outcome.detail}`);
+    return {
+      placed: outcome.files.map(({ file: entry, target }) => {
+        const name = entry.relative.split("/").at(-1)!;
+        return relativeOf(
+          entry.role === "subtitle"
+            ? planSubtitleDestination(target, name)
+            : planMediaDestination(target, name),
+        );
+      }),
+      leftBehind: outcome.leftBehind.map((entry) => entry.relative),
+    };
+  }
+
+  it("names each episode of a flat pack by its own name", () => {
+    expect(
+      explore([
+        "Lilyhammer.S01.WEBRip.EAC3.5.1.1080p.x265-iVy/Lilyhammer.S01E03.WEBRip.EAC3.5.1.1080p.x265-iVy.mkv",
+      ]).placed,
+    ).toEqual(["Lilyhammer/Season 1/src/Lilyhammer - S01E03.mkv"]);
+  });
+
+  it("reads the episode from the folder when the file is obfuscated", () => {
+    expect(
+      explore(["pack/Lilyhammer.S01E04.1080p/a8f3c1d9e2.mkv"]).placed,
+    ).toEqual(["Lilyhammer/Season 1/src/Lilyhammer - S01E04.mkv"]);
+  });
+
+  it("takes a file named only by its number at its word", () => {
+    expect(explore(["Lilyhammer Season 1/05 - Tommy.mkv"]).placed).toEqual([
+      "Lilyhammer/Season 1/src/Lilyhammer - S01E05.mkv",
+    ]);
+  });
+
+  it("never reads a subtitle's track number as its episode", () => {
+    const explored = explore([
+      "pack/Lilyhammer.S01E02.mkv",
+      "pack/Subs/2_English.srt",
+    ]);
+    expect(explored.leftBehind).toEqual(["pack/Subs/2_English.srt"]);
+  });
+
+  it("files a subtitle with the episode its folder names", () => {
+    expect(
+      explore([
+        "pack/Lilyhammer.S01E05.mkv",
+        "pack/Subs/Lilyhammer.S01E05.WEBRip.x265-iVy/2_English.srt",
+      ]).placed,
+    ).toEqual([
+      "Lilyhammer/Season 1/src/Lilyhammer - S01E05.mkv",
+      "Lilyhammer/Season 1/src/Lilyhammer - S01E05.english.srt",
+    ]);
+  });
+
+  it("keeps a two-episode file's whole run in its name", () => {
+    expect(explore(["pack/Lilyhammer.S01E07E08.1080p.mkv"]).placed).toEqual([
+      "Lilyhammer/Season 1/src/Lilyhammer - S01E07-E08.mkv",
+    ]);
+  });
+
+  it("leaves behind extras, other seasons and orphaned subtitles", () => {
+    const explored = explore([
+      "pack/Lilyhammer.S01E01.mkv",
+      "pack/Making of Lilyhammer.mkv",
+      "pack/Lilyhammer.S02E01.mkv",
+      "pack/Subs/Lilyhammer.S01E09/2_English.srt",
+    ]);
+    expect(explored.placed).toEqual([
+      "Lilyhammer/Season 1/src/Lilyhammer - S01E01.mkv",
+    ]);
+    expect(explored.leftBehind).toEqual([
+      "pack/Making of Lilyhammer.mkv",
+      "pack/Lilyhammer.S02E01.mkv",
+      "pack/Subs/Lilyhammer.S01E09/2_English.srt",
+    ]);
+  });
+
+  it("refuses a pack with no episode of the season in it", () => {
+    const outcome = fileTargetsFor(
+      SEASON,
+      [file("pack/Lilyhammer.S02E01.mkv"), file("pack/Making of.mkv")],
+      [],
+    );
+    expect(isRefusal(outcome) && outcome.detail).toMatch(/season 1/);
+  });
+
+  it("leaves a film's or an episode's target as it is", () => {
+    const outcome = fileTargetsFor(EPISODE, [file("x/at.all.S09E09.mkv")], []);
+    expect(!isRefusal(outcome) && outcome.files[0]!.target).toBe(EPISODE);
   });
 });
