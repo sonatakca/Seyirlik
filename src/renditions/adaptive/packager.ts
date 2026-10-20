@@ -134,8 +134,15 @@ import {
   DEFAULT_EPOCH_TARGET_SECONDS,
   EPOCH_TIMELINE_POLICY_VERSION,
 } from "./epochs/policy";
-import { buildEpochPlan, nominalEpochBoundaries } from "./epochs/plan";
-import { probeSourceFrameTimeline } from "./epochs/sourceTimeline";
+import {
+  buildEpochPlan,
+  nominalEpochBoundaries,
+  withVideoEnd,
+} from "./epochs/plan";
+import {
+  probeSourceFrameTimeline,
+  probeSourceVideoEndSeconds,
+} from "./epochs/sourceTimeline";
 import { runEpochBuild, type SourceProbeWindow } from "./epochs/engine";
 import { ensureAudioStage } from "./epochs/audioStage";
 import { assembleVideoRenditions, copyStageDirectory } from "./epochs/assemble";
@@ -1529,15 +1536,24 @@ export async function packageAdaptiveRendition(
       ffprobePath,
       ...(signal ? { signal } : {}),
     });
-    const freshPlan = buildEpochPlan({
-      mediaId: request.mediaId,
-      sourceFingerprint: request.sourceFingerprint,
-      profileVersion: ADAPTIVE_PROFILE_VERSION,
-      sourceDurationSeconds: probe.durationSeconds,
-      epochTargetSeconds,
-      segmentSeconds,
-      timeline,
+    const videoEndSeconds = await probeSourceVideoEndSeconds({
+      sourcePath: request.sourcePath,
+      containerDurationSeconds: probe.durationSeconds,
+      ffprobePath,
+      ...(signal ? { signal } : {}),
     });
+    const freshPlan = withVideoEnd(
+      buildEpochPlan({
+        mediaId: request.mediaId,
+        sourceFingerprint: request.sourceFingerprint,
+        profileVersion: ADAPTIVE_PROFILE_VERSION,
+        sourceDurationSeconds: probe.durationSeconds,
+        epochTargetSeconds,
+        segmentSeconds,
+        timeline,
+      }),
+      videoEndSeconds,
+    );
     const planExpectation = {
       mediaId: request.mediaId,
       sourceFingerprint: request.sourceFingerprint,
@@ -1546,11 +1562,14 @@ export async function packageAdaptiveRendition(
       segmentSeconds,
       sourceDurationSeconds: probe.durationSeconds,
     };
-    const { plan } = await reconcilePlan({
+    const { plan: reconciledPlan } = await reconcilePlan({
       root: checkpoints,
       plan: freshPlan,
       expected: planExpectation,
     });
+    // A plan from an earlier attempt still expects its final epoch to reach
+    // the container's end; see `withVideoEnd`.
+    const plan = withVideoEnd(reconciledPlan, videoEndSeconds);
 
     const identity = {
       mediaId: request.mediaId,

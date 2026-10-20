@@ -230,6 +230,38 @@ export function buildEpochPlan({
 }
 
 /**
+ * The plan with its final epoch measured to the end of the source's video.
+ *
+ * `sourceDurationSeconds` is the container's, and a container lasts as long as
+ * its longest stream. When that is the audio, the final epoch was expected to
+ * cover sound the video encode never contains, and the validator rejected
+ * every such title on its last epoch, after the whole encode had run. Applied
+ * to plans already on disk as well as fresh ones, because a reused plan still
+ * carries the old expectation and its retry would fail the same way.
+ */
+export function withVideoEnd(
+  plan: EpochPlan,
+  videoEndSeconds: number | null,
+): EpochPlan {
+  const lastIndex = plan.epochs.length - 1;
+  const last = plan.epochs[lastIndex];
+  if (!last || videoEndSeconds === null || !Number.isFinite(videoEndSeconds)) {
+    return plan;
+  }
+  const expectedDurationSeconds = Number(
+    (videoEndSeconds - timestampSeconds(last.start)).toFixed(6),
+  );
+  if (!(expectedDurationSeconds > 0)) return plan;
+  return {
+    ...plan,
+    epochs: [
+      ...plan.epochs.slice(0, lastIndex),
+      { ...last, expectedDurationSeconds },
+    ],
+  };
+}
+
+/**
  * Whether a plan found on disk describes the job about to run.
  *
  * A plan whose source, profile or timeline policy differs describes a different

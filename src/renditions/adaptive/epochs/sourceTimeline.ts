@@ -262,3 +262,113 @@ export function cutSecondsBetween(
   const midpoint = (previous + next) / 2;
   return Math.floor(midpoint * 1_000_000) / 1_000_000;
 }
+
+/**
+ * How far before the container's end the video's last frames are looked for.
+ *
+ * A container's duration is that of its longest stream, which is often audio:
+ * Lilyhammer's episodes carry a third of a second of sound after their last
+ * picture. Ten seconds is far more than any such tail and still only a short
+ * read, since the probe reads packets and never decodes.
+ */
+const VIDEO_END_WINDOW_SECONDS = 10;
+
+/**
+ * The instant the source's last video frame stops being shown.
+ *
+ * The final epoch runs to the end of the source, and what it encodes is the
+ * video stream, so its expected length must be measured against where the
+ * video ends rather than where the container does. Null when the probe cannot
+ * say, in which case the container duration stands, as it always did.
+ */
+export async function probeSourceVideoEndSeconds({
+  sourcePath,
+  containerDurationSeconds,
+  ffprobePath = "ffprobe",
+  signal,
+  timeoutMs,
+  run,
+}: {
+  sourcePath: string;
+  containerDurationSeconds: number;
+  ffprobePath?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  /** Injected by tests; see `BoundedRunner`. */
+  run?: BoundedRunner;
+}): Promise<number | null> {
+  const start = Math.max(0, containerDurationSeconds - VIDEO_END_WINDOW_SECONDS);
+  let output: string;
+  try {
+    output = await runProcess(
+      ffprobePath,
+      [
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=time_base:packet=pts,duration",
+        "-of",
+        "compact=p=0:nk=0",
+        "-read_intervals",
+        `${start.toFixed(6)}%`,
+        sourcePath,
+      ],
+      signal,
+      timeoutMs,
+      run,
+    );
+  } catch {
+    return null;
+  }
+  return parseVideoEndSeconds(output);
+}
+
+/**
+ * The end of the last frame in a packet listing: its presentation time plus
+ * its duration, or plus the stream's frame interval when the container records
+ * no packet durations.
+ */
+export function parseVideoEndSeconds(output: string): number | null {
+  let timebase: number | undefined;
+  const packets: Array<{ pts: number; duration?: number }> = [];
+  for (const line of output.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed === "") continue;
+    const timebaseField = /(?:^|\|)time_base=([^|]+)/.exec(trimmed);
+    if (timebaseField) {
+      timebase ??= parseTimebase(timebaseField[1]!);
+      continue;
+    }
+    const ptsField = /(?:^|\|)pts=(-?\d+)/.exec(trimmed);
+    if (!ptsField) continue;
+    const pts = Number(ptsField[1]);
+    if (!Number.isFinite(pts) || pts < 0) continue;
+    const durationField = /(?:^|\|)duration=(\d+)/.exec(trimmed);
+    const duration = durationField ? Number(durationField[1]) : undefined;
+    packets.push({
+      pts,
+      ...(duration !== undefined && duration > 0 ? { duration } : {}),
+    });
+  }
+  if (timebase === undefined || packets.length === 0) return null;
+
+  const sorted = [...new Set(packets.map((packet) => packet.pts))].sort(
+    (left, right) => left - right,
+  );
+  let interval: number | undefined;
+  for (let index = 1; index < sorted.length; index += 1) {
+    const gap = sorted[index]! - sorted[index - 1]!;
+    if (gap > 0 && (interval === undefined || gap < interval)) interval = gap;
+  }
+
+  let endTicks: number | undefined;
+  for (const packet of packets) {
+    const length = packet.duration ?? interval;
+    if (length === undefined) continue;
+    const end = packet.pts + length;
+    if (endTicks === undefined || end > endTicks) endTicks = end;
+  }
+  return endTicks === undefined ? null : endTicks / timebase;
+}
