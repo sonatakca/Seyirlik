@@ -102,6 +102,8 @@ export interface MissingSearchResult {
   }>;
   /** Searched, and nothing acceptable under the quality profile. */
   readonly nothing: Array<{ season: number; episode: number }>;
+  /** Not searched: a download of it is already under way. A null episode is a season. */
+  readonly covered: Array<{ season: number; episode: number | null }>;
 }
 
 export interface ReplacementResult {
@@ -228,6 +230,8 @@ export function createAcquisitionFallback({
   ) {
     const picks: Array<{ target: AcquisitionTarget; winner: Selected }> = [];
     const missing: number[] = [];
+    /** Skipped because a download of them is already under way. */
+    const covered: number[] = [];
     for (const episode of episodes) {
       const episodeTarget: AcquisitionTarget = {
         kind: "episode",
@@ -240,7 +244,10 @@ export function createAcquisitionFallback({
         season,
         episode: episode.episode,
       };
-      if (await repository.hasLiveAcquisitionFor(episodeTarget)) continue;
+      if (await repository.hasLiveAcquisitionFor(episodeTarget)) {
+        covered.push(episode.episode);
+        continue;
+      }
       const episodeResult = await best(
         mediaTargetOf(episodeTarget)!,
         policy,
@@ -253,7 +260,7 @@ export function createAcquisitionFallback({
         missing.push(episode.episode);
       }
     }
-    return { picks, missing };
+    return { picks, missing, covered };
   }
 
   async function plan(
@@ -369,6 +376,7 @@ export function createAcquisitionFallback({
     };
     const started: MissingSearchResult["started"] = [];
     const nothing: MissingSearchResult["nothing"] = [];
+    const covered: MissingSearchResult["covered"] = [];
     for (const [
       index,
       { season, whole, episodes },
@@ -380,7 +388,10 @@ export function createAcquisitionFallback({
         ...series,
         season,
       };
-      if (await repository.hasLiveAcquisitionFor(seasonTarget)) continue;
+      if (await repository.hasLiveAcquisitionFor(seasonTarget)) {
+        covered.push({ season, episode: null });
+        continue;
+      }
       if (whole) {
         const pack = await best(
           mediaTargetOf(seasonTarget)!,
@@ -405,13 +416,11 @@ export function createAcquisitionFallback({
           continue;
         }
       }
-      const { picks, missing } = await chooseEpisodes(
-        series,
-        season,
-        episodes,
-        policy,
-        signal,
-      );
+      const {
+        picks,
+        missing,
+        covered: coming,
+      } = await chooseEpisodes(series, season, episodes, policy, signal);
       for (const pick of picks) {
         const made = await plan(
           pick.target,
@@ -428,8 +437,9 @@ export function createAcquisitionFallback({
         });
       }
       nothing.push(...missing.map((episode) => ({ season, episode })));
+      covered.push(...coming.map((episode) => ({ season, episode })));
     }
-    return { started, nothing };
+    return { started, nothing, covered };
   }
 
   return {

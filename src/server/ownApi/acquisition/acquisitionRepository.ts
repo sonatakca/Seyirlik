@@ -418,12 +418,27 @@ export function createAcquisitionRepository(
     },
 
     async hasLiveAcquisitionFor(target) {
-      // The same matching `supersedeFailedFor` uses: the catalogue item when
-      // both name one, otherwise kind, title, season and episode.
+      /*
+       * The same matching `supersedeFailedFor` uses: the catalogue item when
+       * both name one, otherwise kind, title, season and episode.
+       *
+       * `downloaded` never changes again, so it cannot mean "still coming" on
+       * its own. A finished download covers its target while its import is
+       * under way, or for a day while it waits for one; after that, whatever
+       * the import did not file is missing again. A season pack that filed
+       * half its episodes used to block every later search of its season.
+       */
       const result = await pool.query<{ live: boolean }>(
         `SELECT EXISTS (
            SELECT 1 FROM acquisitions a
             WHERE a.state NOT IN ('failed','cancelled','superseded')
+              AND (
+                a.state <> 'downloaded'
+                OR EXISTS (SELECT 1 FROM imports i WHERE i.acquisition_id = a.id
+                             AND i.state NOT IN ('complete','cancelled','failed'))
+                OR (NOT EXISTS (SELECT 1 FROM imports i WHERE i.acquisition_id = a.id)
+                    AND a.completed_at > now() - interval '1 day')
+              )
               AND a.target_kind = $1
               AND (
                 ($2::uuid IS NOT NULL AND a.target_item_id = $2::uuid

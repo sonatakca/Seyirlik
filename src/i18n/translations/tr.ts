@@ -148,6 +148,7 @@ export const tr = {
   "library.missingSearching": "Eksik bölümler aranıyor:",
   "library.missingStarted": "Başlatılan indirme:",
   "library.missingNothingFor": "Uygun sürüm bulunamadı:",
+  "library.missingAlreadyComing": "Zaten yolda:",
   "library.missingSearchFailed":
     "Arama tamamlanamadı. Birazdan yeniden deneyin; başlamış indirmeler sürüyor.",
   "library.title": "Kütüphane",

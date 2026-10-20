@@ -464,14 +464,23 @@ describe("searching for a series' missing episodes", () => {
       { season: 1, whole: false, episodes: [1] },
     ]);
     expect(h.search.search).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ started: 0, nothingAcceptable: 0 });
+    // Said, rather than reported as nothing at all.
+    expect(result).toMatchObject({
+      started: 0,
+      nothingAcceptable: 0,
+      alreadyComing: 1,
+      coveredBy: [{ season: 1, episode: null }],
+    });
   });
 
   it("skips an episode that started downloading since the plan was made", async () => {
     const w = world({ live: new Set([1]) });
     w.releases.set(3, [release("Show.S01E03.1080p.WEB-DL.x264-NTb", "e3")]);
     const h = build(w);
-    await search(h, [{ season: 1, whole: false, episodes: [1, 3] }]);
+    const result = await search(h, [
+      { season: 1, whole: false, episodes: [1, 3] },
+    ]);
     expect(h.created.map((input) => input.releaseGuid)).toEqual(["e3"]);
+    expect(result).toMatchObject({ coveredBy: [{ season: 1, episode: 1 }] });
   });
 });

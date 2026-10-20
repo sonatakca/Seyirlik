@@ -352,6 +352,47 @@ integration("acquisitions in PostgreSQL", () => {
     expect(await repository.supersedeFailedFor(again.id)).toBe(1);
   });
 
+  it("stops counting a finished download once its import is done with it", async () => {
+    const pack = (season: number) => ({
+      ...input,
+      target: { kind: "season" as const, title: "Imported Show", season },
+    });
+    const finish = async (season: number) => {
+      const created = await repository.create(pack(season));
+      await repository.update(created.id, "planned", { state: "downloaded" });
+      return created.id;
+    };
+    const importOf = async (acquisitionId: string, state: string) =>
+      pool.query(
+        `INSERT INTO imports (id, acquisition_id, target_kind, target_title, target_season,
+           source_root, library_root, source_relative, state, idempotency_key)
+         VALUES ($1,$2,'season','Imported Show',1,'/d','/l','x',$3,$4)`,
+        [randomUUID(), acquisitionId, state, `k-${randomUUID()}`],
+      );
+
+    // Just downloaded, nothing has picked it up yet: still coming.
+    await finish(1);
+    expect(await repository.hasLiveAcquisitionFor(pack(1).target)).toBe(true);
+
+    // Being imported: still coming.
+    await importOf(await finish(2), "staging");
+    expect(await repository.hasLiveAcquisitionFor(pack(2).target)).toBe(true);
+
+    // Imported, or given up on: whatever it did not file is missing again.
+    await importOf(await finish(3), "complete");
+    expect(await repository.hasLiveAcquisitionFor(pack(3).target)).toBe(false);
+    await importOf(await finish(4), "failed");
+    expect(await repository.hasLiveAcquisitionFor(pack(4).target)).toBe(false);
+
+    // Downloaded long ago and never imported: no longer on its way.
+    const stale = await finish(5);
+    await pool.query(
+      "UPDATE acquisitions SET completed_at = now() - interval '2 days' WHERE id = $1",
+      [stale],
+    );
+    expect(await repository.hasLiveAcquisitionFor(pack(5).target)).toBe(false);
+  });
+
   it("counts the replacements a title has had", async () => {
     const season = {
       ...input,

@@ -410,6 +410,7 @@ export function createAcquisitionRoutes({
                 ? {
                     started: job.result!.startedReleases ?? [],
                     nothing: job.result!.nothingFor ?? [],
+                    covered: job.result!.coveredBy ?? [],
                   }
                 : null,
             });

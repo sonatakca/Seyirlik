@@ -147,6 +147,7 @@ export const en = {
   "library.missingSearching": "Searching for missing episodes:",
   "library.missingStarted": "Downloads started:",
   "library.missingNothingFor": "Nothing acceptable for",
+  "library.missingAlreadyComing": "Already on its way:",
   "library.missingSearchFailed":
     "The search could not finish. Try again in a moment; anything already started keeps downloading.",
   "library.title": "Library",

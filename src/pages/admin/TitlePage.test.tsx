@@ -388,6 +388,7 @@ it("searches for a season's missing episodes and says what it started", async ()
       result: {
         started: [{ season: 6, episode: 2, release: "Sopranos.S06E02" }],
         nothing: [{ season: 6, episode: 3 }],
+        covered: [{ season: 6, episode: null }],
       },
     });
   vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -403,16 +404,14 @@ it("searches for a season's missing episodes and says what it started", async ()
     await waitFor(() =>
       expect(api.searchMissingEpisodes).toHaveBeenCalledWith(ID, 6),
     );
-    expect(
-      await screen.findByText("library.missingSearching 2"),
-    ).toBeTruthy();
+    expect(await screen.findByText("library.missingSearching 2")).toBeTruthy();
     // Every search button waits for this one.
     expect(screen.getByText("library.searchingMissing")).toBeTruthy();
 
     await vi.advanceTimersByTimeAsync(6_000);
     expect(
       await screen.findByText(
-        "library.missingStarted S06E02 · library.missingNothingFor S06E03",
+        "library.missingStarted S06E02 · library.missingNothingFor S06E03 · library.missingAlreadyComing S06",
       ),
     ).toBeTruthy();
     expect(screen.getByText("library.searchMissing · 2")).toBeTruthy();

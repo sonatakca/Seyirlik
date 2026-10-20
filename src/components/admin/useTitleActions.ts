@@ -44,12 +44,18 @@ export function useTitleActions(onChanged: () => void | Promise<void>) {
   function report(result: NonNullable<MissingSearchState["result"]>) {
     const started = result.started.map((s) => episodeCode(s.season, s.episode));
     const nothing = result.nothing.map((s) => episodeCode(s.season, s.episode));
+    const covered = (result.covered ?? []).map((s) =>
+      episodeCode(s.season, s.episode),
+    );
     setNotice({
       tone: started.length > 0 ? "ok" : "error",
       text: [
         `${t("library.missingStarted")} ${started.length > 0 ? started.join(", ") : 0}`,
         ...(nothing.length > 0
           ? [`${t("library.missingNothingFor")} ${nothing.join(", ")}`]
+          : []),
+        ...(covered.length > 0
+          ? [`${t("library.missingAlreadyComing")} ${covered.join(", ")}`]
           : []),
       ].join(" · "),
     });

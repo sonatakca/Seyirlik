@@ -1226,6 +1226,7 @@ describe("searching for missing episodes", () => {
               { season: 6, episode: 2, release: "Sopranos.S06E02.1080p" },
             ],
             nothingFor: [{ season: 6, episode: 3 }],
+            coveredBy: [{ season: 5, episode: null }],
           },
         },
       },
@@ -1241,6 +1242,7 @@ describe("searching for missing episodes", () => {
       result: {
         started: [{ season: 6, episode: 2, release: "Sopranos.S06E02.1080p" }],
         nothing: [{ season: 6, episode: 3 }],
+        covered: [{ season: 5, episode: null }],
       },
     });
   });

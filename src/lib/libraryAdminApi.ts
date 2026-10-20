@@ -478,6 +478,8 @@ export interface MissingSearchState {
     /** A null episode is a season pack. */
     started: Array<{ season: number; episode: number | null; release: string }>;
     nothing: Array<{ season: number; episode: number }>;
+    /** Not searched: already downloading or importing. A null episode is a season. */
+    covered?: Array<{ season: number; episode: number | null }>;
   } | null;
 }
 

@@ -123,8 +123,10 @@ export function createMissingSearchJobHandler(
     return {
       started: result.started.length,
       nothingAcceptable: result.nothing.length,
+      alreadyComing: result.covered.length,
       startedReleases: result.started,
       nothingFor: result.nothing,
+      coveredBy: result.covered,
     };
   };
 }
