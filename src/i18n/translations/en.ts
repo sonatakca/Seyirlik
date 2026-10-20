@@ -140,6 +140,15 @@ export const en = {
   "library.closeSearch": "Close the TMDB search",
   "library.generateTrickplaySeason": "Generate trickplay for this season",
   "library.findTurkishSeason": "Find Turkish subtitles for this season",
+  "library.searchMissing": "Search missing episodes",
+  "library.searchMissingSeason": "Search this season's missing episodes",
+  "library.searchingMissing": "Searching…",
+  "library.missingNone": "No episode is missing.",
+  "library.missingSearching": "Searching for missing episodes:",
+  "library.missingStarted": "Downloads started:",
+  "library.missingNothingFor": "Nothing acceptable for",
+  "library.missingSearchFailed":
+    "The search could not finish. Try again in a moment; anything already started keeps downloading.",
   "library.title": "Library",
   "library.description":
     "Every movie and show Seyirlik holds or wants. Green is on disk, purple is on its way, red is wanted but missing. Titles without a source appear only here, never on the Movies or Shows pages.",

@@ -11,6 +11,7 @@ import {
   FileVideo,
   Images,
   RefreshCcw,
+  Search,
   Trash2,
 } from "lucide-react";
 import { setPageTitle } from "../../lib/pageTitle";
@@ -18,6 +19,7 @@ import { useLanguage } from "../../i18n/LanguageContext";
 import type { TranslationKey } from "../../i18n/translations";
 import {
   getLibraryTitle,
+  isMissingEpisode,
   toneOf,
   type LibraryTitleDetail,
 } from "../../lib/libraryAdminApi";
@@ -179,6 +181,11 @@ export function TitlePage() {
 
   const tone = toneOf(detail, detail.desired);
   const busy = actions.busy !== null;
+  const searchingMissing = actions.searchingMissing(detail.id);
+  const missingEpisodes = detail.seasons.reduce(
+    (sum, season) => sum + season.episodes.filter(isMissingEpisode).length,
+    0,
+  );
 
   return (
     <div className="w-full space-y-6">
@@ -235,6 +242,19 @@ export function TitlePage() {
                 >
                   {t("wanted.releases")}
                 </Link>
+                {missingEpisodes > 0 ? (
+                  <button
+                    type="button"
+                    className={actionButton}
+                    disabled={busy || searchingMissing}
+                    onClick={() => void actions.searchMissing(detail.id)}
+                  >
+                    <Search size={13} aria-hidden="true" />
+                    {searchingMissing
+                      ? t("library.searchingMissing")
+                      : `${t("library.searchMissing")} · ${missingEpisodes}`}
+                  </button>
+                ) : null}
               </>
             ) : null}
             <button
@@ -461,6 +481,9 @@ export function TitlePage() {
               onTrickplay: (id) => void actions.trickplay(id),
               onUploadSubtitle: (id, file) =>
                 void actions.uploadSubtitle(id, file, uploadPolicy),
+              onSearchMissing: (season) =>
+                void actions.searchMissing(detail.id, season),
+              searchingMissing,
             }}
           />
         </>

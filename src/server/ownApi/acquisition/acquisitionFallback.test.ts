@@ -27,6 +27,10 @@ import type {
 import { profileFromIds } from "../releases/qualityProfile";
 import type { JobQueue, JobRecord } from "../tasks/jobQueue";
 import type { JobContext } from "../tasks/worker";
+import {
+  createMissingSearchJobHandler,
+  MISSING_SEARCH_JOB_TYPE,
+} from "./missingEpisodes";
 
 const SERIES = "00000000-0000-4000-8000-000000000001";
 const episodeId = (n: number) =>
@@ -195,7 +199,17 @@ function build(w: World) {
       isCancelled: async () => false,
     } as JobContext);
 
-  return { created, updates, enqueued, blocklisted, service, search, run };
+  return {
+    created,
+    updates,
+    enqueued,
+    blocklisted,
+    service,
+    search,
+    run,
+    fallback,
+    repository,
+  };
 }
 
 describe("automatic replacement of a release that cannot complete", () => {
@@ -330,5 +344,134 @@ describe("automatic replacement of a release that cannot complete", () => {
       await h.run(ACQUISITION_JOB_TYPES.replace, { acquisitionId: "a1" }),
     ).toEqual({ skipped: true });
     expect(h.search.search).not.toHaveBeenCalled();
+  });
+});
+
+describe("searching for a series' missing episodes", () => {
+  const search = (
+    h: ReturnType<typeof build>,
+    seasons: Array<{ season: number; whole: boolean; episodes: number[] }>,
+  ) =>
+    createMissingSearchJobHandler(h.fallback)({
+      job: {
+        jobType: MISSING_SEARCH_JOB_TYPE,
+        payload: {
+          profileId: "p1",
+          plan: {
+            seriesItemId: SERIES,
+            title: "Show",
+            seasons: seasons.map(({ season, whole, episodes }) => ({
+              season,
+              whole,
+              episodes: episodes.map((episode) => ({
+                episode,
+                itemId: episode === 2 ? SERIES : episodeId(episode),
+              })),
+            })),
+          },
+        },
+      } as unknown as JobRecord,
+      reportProgress: vi.fn(async () => undefined),
+      isCancelled: async () => false,
+    } as JobContext);
+
+  it("searches only the missing episodes of a season it partly holds", async () => {
+    const w = world();
+    w.releases.set(0, [release("Show.S01.1080p.BluRay.x265-PACK", "pack")]);
+    w.releases.set(1, [release("Show.S01E01.1080p.BluRay.x265-d3g", "e1")]);
+    w.releases.set(3, [release("Show.S01E03.1080p.WEB-DL.x264-NTb", "e3")]);
+    const h = build(w);
+    const result = await search(h, [
+      { season: 1, whole: false, episodes: [1, 3] },
+    ]);
+    // The pack would fetch episode 2 again, so it is never asked for.
+    expect(
+      vi.mocked(h.search.search).mock.calls.map(([query]) => query.episode),
+    ).toEqual([1, 3]);
+    expect(h.created.map((input) => input.releaseGuid)).toEqual(["e1", "e3"]);
+    expect(h.created[0]).toMatchObject({
+      origin: "automatic",
+      target: { kind: "episode", itemId: episodeId(1), season: 1, episode: 1 },
+    });
+    expect(h.enqueued.map((job) => job.jobType)).toEqual([
+      ACQUISITION_JOB_TYPES.submit,
+      ACQUISITION_JOB_TYPES.submit,
+    ]);
+    expect(h.repository.supersedeFailedFor).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ started: 2, nothingAcceptable: 0 });
+  });
+
+  it("files an episode the catalogue has no row for under its series", async () => {
+    const w = world();
+    w.releases.set(2, [release("Show.S01E02.1080p.BluRay.x265-d3g", "e2")]);
+    const h = build(w);
+    await search(h, [{ season: 1, whole: false, episodes: [2] }]);
+    expect(h.created[0]!.target).toMatchObject({
+      kind: "episode",
+      itemId: SERIES,
+      season: 1,
+      episode: 2,
+    });
+  });
+
+  it("asks for a pack first when nothing of the season is held", async () => {
+    const w = world();
+    w.releases.set(0, [release("Show.S01.1080p.BluRay.x265-PACK", "pack")]);
+    const h = build(w);
+    const result = await search(h, [
+      { season: 1, whole: true, episodes: [1, 2, 3] },
+    ]);
+    expect(h.created).toHaveLength(1);
+    expect(h.created[0]).toMatchObject({
+      releaseGuid: "pack",
+      target: { kind: "season", itemId: SERIES, season: 1 },
+    });
+    expect(result).toMatchObject({
+      started: 1,
+      startedReleases: [
+        {
+          season: 1,
+          episode: null,
+          release: "Show.S01.1080p.BluRay.x265-PACK",
+        },
+      ],
+    });
+  });
+
+  it("goes episode by episode when a whole season has no pack", async () => {
+    const w = world();
+    w.releases.set(1, [release("Show.S01E01.1080p.BluRay.x265-d3g", "e1")]);
+    const h = build(w);
+    const result = await search(h, [
+      { season: 1, whole: true, episodes: [1, 2, 3] },
+    ]);
+    expect(h.created.map((input) => input.releaseGuid)).toEqual(["e1"]);
+    expect(result).toMatchObject({
+      started: 1,
+      nothingAcceptable: 2,
+      nothingFor: [
+        { season: 1, episode: 2 },
+        { season: 1, episode: 3 },
+      ],
+    });
+  });
+
+  it("leaves a season alone while a pack for it is downloading", async () => {
+    const w = world({ live: new Set([0]) });
+    w.releases.set(1, [release("Show.S01E01.1080p.BluRay.x265-d3g", "e1")]);
+    const h = build(w);
+    const result = await search(h, [
+      { season: 1, whole: false, episodes: [1] },
+    ]);
+    expect(h.search.search).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ started: 0, nothingAcceptable: 0 });
+  });
+
+  it("skips an episode that started downloading since the plan was made", async () => {
+    const w = world({ live: new Set([1]) });
+    w.releases.set(3, [release("Show.S01E03.1080p.WEB-DL.x264-NTb", "e3")]);
+    const h = build(w);
+    await search(h, [{ season: 1, whole: false, episodes: [1, 3] }]);
+    expect(h.created.map((input) => input.releaseGuid)).toEqual(["e3"]);
   });
 });

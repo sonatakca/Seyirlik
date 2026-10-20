@@ -107,6 +107,7 @@ describe("loadTitleDetail", () => {
       seasons: new Map(),
       episodes: new Map(),
     }),
+    seriesWork: async () => [],
     primaryFiles: async (ids: readonly string[]) =>
       new Map(
         ids.map((id) => [
@@ -135,6 +136,62 @@ describe("loadTitleDetail", () => {
       [1, "ready"],
       [2, "downloaded"],
       [3, "downloaded"],
+    ]);
+  });
+
+  it("shows work addressed to the series on the episodes it covers", async () => {
+    const catalogue: SeriesCatalogue = {
+      ...tmdb(),
+      getSeries: async () =>
+        ({
+          seasons: [
+            { seasonNumber: 1, episodeCount: 4 },
+            { seasonNumber: 2, episodeCount: 2 },
+          ],
+        }) as never,
+      getSeasonEpisodes: async (_id: string, season: number) =>
+        (season === 1 ? [1, 2, 3, 4] : [1, 2]).map((episodeNumber) => ({
+          seasonNumber: season,
+          episodeNumber,
+          airDate: "2012-01-25",
+        })) as never,
+    };
+    const detail = await loadTitleDetail(
+      {
+        ...repository,
+        getTitle: async () => ({
+          id: "show",
+          kind: "series",
+          title: "Lilyhammer",
+          tmdbId: "1",
+          ...holding("downloaded"),
+        }),
+        seriesWork: async () => [
+          // An episode the catalogue has no row for, downloading.
+          { stage: "downloading", season: 1, episode: 4 },
+          // A season pack, importing.
+          { stage: "importing", season: 2, episode: null },
+        ],
+      } as unknown as LibraryAdminRepository,
+      catalogue,
+      "show",
+      { now: new Date("2026-10-20") },
+    );
+    const facts = detail!.seasons.flatMap((season) =>
+      season.episodes.map((e) => [
+        `${e.seasonNumber}x${e.episodeNumber}`,
+        e.downloading,
+        e.importing,
+      ]),
+    );
+    expect(facts).toEqual([
+      // Held episodes are not touched.
+      ["1x1", 0, 0],
+      ["1x2", 0, 0],
+      ["1x3", 0, 0],
+      ["1x4", 1, 0],
+      ["2x1", 0, 1],
+      ["2x2", 0, 1],
     ]);
   });
 });

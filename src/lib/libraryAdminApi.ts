@@ -369,7 +369,9 @@ export function toneOf(
  */
 export interface EpisodeStage {
   /** The file's own step; `tone` while there is no file to speak of. */
-  file: { tone: HoldingTone } | { held: "unprocessed" | "processing" | "processed" };
+  file:
+    | { tone: HoldingTone }
+    | { held: "unprocessed" | "processing" | "processed" };
   turkish: "found" | "searching" | "none";
   trickplay: "found" | "queued" | "none";
   /** Processed, with Turkish subtitles and trickplay: nothing left to do. */
@@ -436,4 +438,60 @@ export function formatBytes(bytes: number): string {
   );
   const value = bytes / 1024 ** power;
   return `${value >= 100 || power === 0 ? Math.round(value) : value.toFixed(1)} ${units[power]}`;
+}
+
+/**
+ * An episode the season strip draws red: aired, not held, and neither
+ * downloading nor importing. The server plans its search by the same rule.
+ */
+export function isMissingEpisode(
+  episode: Pick<
+    LibraryEpisode,
+    | "seasonNumber"
+    | "episodeNumber"
+    | "hasMedia"
+    | "downloading"
+    | "importing"
+    | "status"
+  >,
+): boolean {
+  return (
+    episode.seasonNumber > 0 &&
+    episode.episodeNumber > 0 &&
+    !episode.hasMedia &&
+    episode.downloading === 0 &&
+    episode.importing === 0 &&
+    episode.status !== "unaired"
+  );
+}
+
+export interface MissingSearch {
+  /** Null when nothing was missing, so nothing was queued. */
+  taskId: string | null;
+  episodes: number;
+}
+
+export interface MissingSearchState {
+  status: string;
+  message: string | null;
+  result: {
+    /** A null episode is a season pack. */
+    started: Array<{ season: number; episode: number | null; release: string }>;
+    nothing: Array<{ season: number; episode: number }>;
+  } | null;
+}
+
+/** Searches for a series' missing episodes, or one season's, and starts the best of each. */
+export function searchMissingEpisodes(itemId: string, season?: number) {
+  return ownApiClient.request<MissingSearch>("/acquisitions/missing", {
+    method: "POST",
+    body: { itemId, ...(season === undefined ? {} : { season }) },
+  });
+}
+
+export function getMissingSearch(taskId: string) {
+  return ownApiClient.request<MissingSearchState>(
+    `/acquisitions/missing/${encodeURIComponent(taskId)}`,
+    { background: true },
+  );
 }

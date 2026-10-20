@@ -25,7 +25,13 @@ import {
   createAcquisitionFallback,
   mediaTargetOf,
   type AcquisitionFallbackOptions,
+  type MissingEpisodePlan,
 } from "./acquisitionFallback";
+import {
+  countMissing,
+  MISSING_SEARCH_JOB_TYPE,
+  missingSearchDedupeKey,
+} from "./missingEpisodes";
 import type {
   AcquisitionRepository,
   AcquisitionSummary,
@@ -255,6 +261,16 @@ export interface CreateAcquisitionRoutesOptions {
    * episode. Without it a season with no other pack stays failed.
    */
   readonly episodesOf?: AcquisitionFallbackOptions["episodesOf"];
+  /**
+   * A series' missing episodes, as its season strip shows them, or null when
+   * there is no such series. Without it the missing-episode search is absent.
+   */
+  readonly missingEpisodes?: (
+    itemId: string,
+    season?: number,
+  ) => Promise<MissingEpisodePlan | null>;
+  /** The quality profile a title is monitored with, when it names one. */
+  readonly profileOf?: (itemId: string) => Promise<string | undefined>;
 }
 
 /**
@@ -296,6 +312,8 @@ export function createAcquisitionRoutes({
   policies,
   blocklist,
   episodesOf = async () => [],
+  missingEpisodes,
+  profileOf,
 }: CreateAcquisitionRoutesOptions): RouteDefinition[] {
   const fallback = createAcquisitionFallback({
     repository,
@@ -306,7 +324,101 @@ export function createAcquisitionRoutes({
     episodesOf,
     submitJobType: ACQUISITION_JOB_TYPES.submit,
   });
+  const missingRoutes: RouteDefinition[] = missingEpisodes
+    ? [
+        {
+          /**
+           * Search for a series' missing episodes, and start the best of each.
+           *
+           * Answers with the task and how many episodes it will look for; the
+           * searches themselves run on the worker. Nothing missing is an
+           * answer too, with no task behind it.
+           */
+          method: "POST",
+          path: "/acquisitions/missing",
+          access: "admin",
+          handle: async (context) => {
+            context.requirePrincipal();
+            const body = asObjectBody(await context.readJson(), [
+              "itemId",
+              "season",
+            ]);
+            const itemId = requireUuid(
+              requireBodyString(body, "itemId", { maxLength: 64 }),
+              "itemId",
+            );
+            const season = optionalBodyInteger(body, "season", {
+              min: 1,
+              max: 10_000,
+            });
+            const plan = await missingEpisodes(itemId, season);
+            if (!plan) {
+              throw new OwnApiError("NOT_FOUND", "No such series.", 404);
+            }
+            const episodes = countMissing(plan);
+            if (episodes === 0) {
+              sendData(context.response, context.requestId, {
+                taskId: null,
+                episodes,
+              });
+              return;
+            }
+            // The series' own profile, or the one a search by hand starts on.
+            const profileId =
+              (await profileOf?.(itemId)) ??
+              (await policies.listProfiles())[0]?.id;
+            if (!profileId) {
+              throw new OwnApiError(
+                "PROFILE_NOT_FOUND",
+                "No quality profile to choose releases with.",
+                409,
+              );
+            }
+            const taskId = await queue.enqueue({
+              jobType: MISSING_SEARCH_JOB_TYPE,
+              payload: { plan, profileId },
+              dedupeKey: missingSearchDedupeKey(itemId, season),
+            });
+            sendData(context.response, context.requestId, {
+              taskId,
+              episodes,
+            });
+          },
+        },
+        {
+          /** What a missing-episode search started, and what it found nothing for. */
+          method: "GET",
+          path: "/acquisitions/missing/:taskId",
+          access: "admin",
+          handle: async (context) => {
+            context.requirePrincipal();
+            const taskId = requireUuid(context.params.taskId, "taskId");
+            const job = await queue.get(taskId);
+            if (!job || job.jobType !== MISSING_SEARCH_JOB_TYPE) {
+              throw new OwnApiError(
+                "TASK_NOT_FOUND",
+                "That search could not be found.",
+                404,
+              );
+            }
+            const done = job.status === "succeeded" && job.result;
+            sendData(context.response, context.requestId, {
+              taskId: job.id,
+              status: job.status,
+              message: job.status === "running" ? job.progressMessage : null,
+              result: done
+                ? {
+                    started: job.result!.startedReleases ?? [],
+                    nothing: job.result!.nothingFor ?? [],
+                  }
+                : null,
+            });
+          },
+        },
+      ]
+    : [];
   return [
+    ...missingRoutes,
     {
       method: "GET",
       path: "/acquisitions",

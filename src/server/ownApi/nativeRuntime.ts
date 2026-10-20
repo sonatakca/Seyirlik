@@ -181,7 +181,16 @@ import {
 } from "./acquisition/acquisitionFallback";
 import { createMonitoringRepository } from "./releases/monitoringRepository";
 import { createWantedRoutes } from "./catalogue/wantedRoutes";
-import { createLibraryAdminRepository } from "./catalogue/libraryAdmin";
+import {
+  cacheSeriesCatalogue,
+  createLibraryAdminRepository,
+  loadTitleDetail,
+} from "./catalogue/libraryAdmin";
+import {
+  createMissingSearchJobHandler,
+  MISSING_SEARCH_JOB_TYPE,
+  missingEpisodePlan,
+} from "./acquisition/missingEpisodes";
 import { createLibraryAdminRoutes } from "./catalogue/libraryAdminRoutes";
 import { createTitleRemoval } from "./catalogue/titleRemoval";
 import { createMonitoringRoutes } from "./releases/monitoringRoutes";
@@ -1235,6 +1244,12 @@ export async function createNativeRuntime({
   const releasePolicies = createPolicyRepository(pool);
   const releaseBlocklist = createBlocklistRepository(pool);
   const seasonEpisodes = createCatalogueEpisodeLookup(pool);
+  const monitoringRepository = createMonitoringRepository(pool);
+  const libraryAdminRepository = createLibraryAdminRepository(pool, {
+    artworkExists: (image) => imageStorage.hasSource(image),
+  });
+  // The missing-episode search reads the same detail the season strip does.
+  const missingCatalogue = tmdb && cacheSeriesCatalogue(tmdb);
 
   /*
    * The download client, when one is configured.
@@ -1263,6 +1278,15 @@ export async function createNativeRuntime({
             indexers: indexerRegistry,
             sab,
             category: sabnzbdConfig.category,
+          }),
+          fallback: createAcquisitionFallback({
+            repository,
+            search: indexerSearch,
+            policies: releasePolicies,
+            blocklist: releaseBlocklist,
+            queue,
+            episodesOf: seasonEpisodes,
+            submitJobType: ACQUISITION_JOB_TYPES.submit,
           }),
         };
       })()
@@ -1710,19 +1734,20 @@ export async function createNativeRuntime({
             {
               // A release that can never complete is replaced by the next
               // acceptable one without waiting for an operator.
-              fallback: createAcquisitionFallback({
-                repository: acquisition.repository,
-                search: indexerSearch,
-                policies: releasePolicies,
-                blocklist: releaseBlocklist,
-                queue,
-                episodesOf: seasonEpisodes,
-                submitJobType: ACQUISITION_JOB_TYPES.submit,
-              }),
+              fallback: acquisition.fallback,
               blocklist: releaseBlocklist,
               queue,
             },
           )
+        : {}),
+      // Searching indexers and writing rows: the server's worker runs it, not
+      // the helper beside SABnzbd (see missingEpisodes.ts).
+      ...(acquisition
+        ? {
+            [MISSING_SEARCH_JOB_TYPE]: createMissingSearchJobHandler(
+              acquisition.fallback,
+            ),
+          }
         : {}),
       [GARBAGE_JOB_TYPES.collect]: collectGarbageJob,
       ...(importing
@@ -1902,12 +1927,10 @@ export async function createNativeRuntime({
       blocklist: releaseBlocklist,
       ...(tmdb ? { tmdb } : {}),
     }),
-    ...createMonitoringRoutes(createMonitoringRepository(pool)),
+    ...createMonitoringRoutes(monitoringRepository),
     ...createWantedRoutes(pool, tmdb),
     ...createLibraryAdminRoutes({
-      repository: createLibraryAdminRepository(pool, {
-        artworkExists: (image) => imageStorage.hasSource(image),
-      }),
+      repository: libraryAdminRepository,
       tmdb,
       queue,
       removal: titleRemoval,
@@ -1924,6 +1947,18 @@ export async function createNativeRuntime({
           policies: releasePolicies,
           blocklist: releaseBlocklist,
           episodesOf: seasonEpisodes,
+          missingEpisodes: async (itemId, season) => {
+            const detail = await loadTitleDetail(
+              libraryAdminRepository,
+              missingCatalogue,
+              itemId,
+            );
+            return detail?.kind === "series"
+              ? missingEpisodePlan(detail, season)
+              : null;
+          },
+          profileOf: async (itemId) =>
+            (await monitoringRepository.readTitle(itemId))?.profileId,
         })
       : []),
     ...(importing && importStarter

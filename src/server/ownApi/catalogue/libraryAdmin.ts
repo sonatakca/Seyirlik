@@ -370,6 +370,31 @@ export function createLibraryAdminRepository(
       return result.rows;
     },
 
+    /**
+     * Downloads and imports that name the series itself rather than an
+     * episode: a season pack, or an episode the catalogue has no row for yet.
+     * A null episode covers the whole season.
+     */
+    async seriesWork(seriesId: string) {
+      const result = await db.query<{
+        stage: "downloading" | "importing";
+        season: number | null;
+        episode: number | null;
+      }>(
+        `SELECT 'downloading' AS stage, a.target_season AS season, a.target_episode AS episode
+           FROM acquisitions a
+          WHERE a.target_item_id = $1 AND a.target_kind IN ('season', 'episode')
+            AND a.state NOT IN ('downloaded', 'cancelled', 'superseded', 'failed')
+         UNION ALL
+         SELECT 'importing', imp.target_season, imp.target_episode
+           FROM imports imp
+          WHERE imp.target_item_id = $1 AND imp.target_kind IN ('season', 'episode')
+            AND imp.state NOT IN ('complete', 'cancelled', 'failed')`,
+        [seriesId],
+      );
+      return result.rows;
+    },
+
     async monitoring(seriesId: string) {
       const [series, seasons, episodes] = await Promise.all([
         db.query<{ monitored: boolean }>(
@@ -519,9 +544,10 @@ export async function loadTitleDetail(
     };
   }
 
-  const [rows, monitoring] = await Promise.all([
+  const [rows, monitoring, seriesWork] = await Promise.all([
     repository.listEpisodes(title.id),
     repository.monitoring(title.id),
+    repository.seriesWork(title.id),
   ]);
   const files = await repository.primaryFiles(rows.map((row) => row.id));
   const seasonIds = new Map<number, string>();
@@ -611,6 +637,19 @@ export async function loadTitleDetail(
     } catch {
       // The disk is still the truth; TMDB only adds the rows it is missing.
       catalogueComplete = false;
+    }
+  }
+
+  // Work addressed to the series reaches the episodes it covers that are not
+  // held yet, so a season pack or an uncatalogued episode reads as on its way.
+  for (const episode of episodes.values()) {
+    if (episode.hasMedia) continue;
+    for (const work of seriesWork) {
+      if (
+        work.season === episode.seasonNumber &&
+        (work.episode === null || work.episode === episode.episodeNumber)
+      )
+        episode[work.stage] += 1;
     }
   }
 

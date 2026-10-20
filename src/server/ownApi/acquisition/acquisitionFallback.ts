@@ -73,6 +73,37 @@ export type ReplacementChoice =
     }
   | { readonly kind: "none" };
 
+/**
+ * A series' missing episodes, grouped by season: what the season strip
+ * shows red, and nothing already held or on its way.
+ */
+export interface MissingEpisodePlan {
+  readonly seriesItemId: string;
+  readonly title: string;
+  readonly year?: number;
+  readonly seasons: ReadonlyArray<{
+    readonly season: number;
+    /** Nothing of the season is held or coming, so a pack is asked for first. */
+    readonly whole: boolean;
+    readonly episodes: ReadonlyArray<{
+      readonly episode: number;
+      /** The episode's own item, or the series' when it has none yet. */
+      readonly itemId: string;
+    }>;
+  }>;
+}
+
+export interface MissingSearchResult {
+  /** A null episode is a season pack. */
+  readonly started: Array<{
+    season: number;
+    episode: number | null;
+    release: string;
+  }>;
+  /** Searched, and nothing acceptable under the quality profile. */
+  readonly nothing: Array<{ season: number; episode: number }>;
+}
+
 export interface ReplacementResult {
   readonly created: AcquisitionSummary[];
   readonly taskIds: string[];
@@ -167,18 +198,46 @@ export function createAcquisitionFallback({
     }
 
     const episodes = await episodesOf(target.itemId, target.season);
+    const { picks, missing } = await chooseEpisodes(
+      target,
+      target.season,
+      episodes,
+      policy,
+      signal,
+    );
+    return picks.length > 0
+      ? { kind: "episodes", picks, missing }
+      : { kind: "none" };
+  }
+
+  /**
+   * The best release for each episode, searched one at a time.
+   *
+   * An episode already downloading is skipped rather than searched, so a
+   * second pass over the same season starts nothing twice.
+   */
+  async function chooseEpisodes(
+    series: Pick<AcquisitionTarget, "title" | "year">,
+    season: number,
+    episodes: ReadonlyArray<{
+      readonly itemId?: string;
+      readonly episode: number;
+    }>,
+    policy: AcquisitionPolicy,
+    signal?: AbortSignal,
+  ) {
     const picks: Array<{ target: AcquisitionTarget; winner: Selected }> = [];
     const missing: number[] = [];
     for (const episode of episodes) {
       const episodeTarget: AcquisitionTarget = {
         kind: "episode",
-        // The episode's own item. Two episodes sharing the series' id would
-        // read as the same target, and starting one would retire the other's
-        // failure (`supersedeFailedFor` matches on the item first).
-        itemId: episode.itemId,
-        title: target.title,
-        ...(target.year === undefined ? {} : { year: target.year }),
-        season: target.season,
+        // The episode's own item, or its series' when the catalogue has no
+        // row for it yet. The matching compares season and episode as well,
+        // so episodes that share their series' id stay apart.
+        ...(episode.itemId ? { itemId: episode.itemId } : {}),
+        title: series.title,
+        ...(series.year === undefined ? {} : { year: series.year }),
+        season,
         episode: episode.episode,
       };
       if (await repository.hasLiveAcquisitionFor(episodeTarget)) continue;
@@ -194,9 +253,7 @@ export function createAcquisitionFallback({
         missing.push(episode.episode);
       }
     }
-    return picks.length > 0
-      ? { kind: "episodes", picks, missing }
-      : { kind: "none" };
+    return { picks, missing };
   }
 
   async function plan(
@@ -204,13 +261,14 @@ export function createAcquisitionFallback({
     winner: Selected,
     policy: AcquisitionPolicy,
     rejected: ReturnType<typeof selectRelease>["candidates"],
+    origin: "fallback" | "automatic" = "fallback",
   ) {
     const created = await repository.create({
       target,
       indexerId: winner.release.indexerId,
       releaseGuid: winner.release.guid,
       releaseTitle: winner.release.title,
-      origin: "fallback",
+      origin,
       evidence: {
         profileId: policy.profile.id,
         profileName: policy.profile.name,
@@ -291,7 +349,95 @@ export function createAcquisitionFallback({
     return { created, taskIds };
   }
 
-  return { choose, apply, policyFor: (id: string) => policies.load(id) };
+  /**
+   * Searches for each missing episode and starts the best release found.
+   *
+   * A season with nothing held asks for a pack first, as a search by hand
+   * would; any other season is searched episode by episode, so what is
+   * already held is never fetched again. A season pack already on its way
+   * covers its episodes, and its season is left alone.
+   */
+  async function acquireMissing(
+    missingPlan: MissingEpisodePlan,
+    policy: AcquisitionPolicy,
+    onSeason?: (season: number, index: number) => Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<MissingSearchResult> {
+    const series = {
+      title: missingPlan.title,
+      ...(missingPlan.year === undefined ? {} : { year: missingPlan.year }),
+    };
+    const started: MissingSearchResult["started"] = [];
+    const nothing: MissingSearchResult["nothing"] = [];
+    for (const [
+      index,
+      { season, whole, episodes },
+    ] of missingPlan.seasons.entries()) {
+      await onSeason?.(season, index);
+      const seasonTarget: AcquisitionTarget = {
+        kind: "season",
+        itemId: missingPlan.seriesItemId,
+        ...series,
+        season,
+      };
+      if (await repository.hasLiveAcquisitionFor(seasonTarget)) continue;
+      if (whole) {
+        const pack = await best(
+          mediaTargetOf(seasonTarget)!,
+          policy,
+          null,
+          signal,
+        );
+        if (pack.winner) {
+          const made = await plan(
+            seasonTarget,
+            pack.winner,
+            policy,
+            pack.candidates,
+            "automatic",
+          );
+          await repository.supersedeFailedFor(made.created.id);
+          started.push({
+            season,
+            episode: null,
+            release: pack.winner.release.title,
+          });
+          continue;
+        }
+      }
+      const { picks, missing } = await chooseEpisodes(
+        series,
+        season,
+        episodes,
+        policy,
+        signal,
+      );
+      for (const pick of picks) {
+        const made = await plan(
+          pick.target,
+          pick.winner,
+          policy,
+          [],
+          "automatic",
+        );
+        await repository.supersedeFailedFor(made.created.id);
+        started.push({
+          season,
+          episode: pick.target.episode ?? null,
+          release: pick.winner.release.title,
+        });
+      }
+      nothing.push(...missing.map((episode) => ({ season, episode })));
+    }
+    return { started, nothing };
+  }
+
+  return {
+    choose,
+    apply,
+    acquireMissing,
+    policyFor: (id: string) => policies.load(id),
+  };
 }
 
 export type AcquisitionFallback = ReturnType<typeof createAcquisitionFallback>;

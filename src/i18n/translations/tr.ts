@@ -141,6 +141,15 @@ export const tr = {
   "library.closeSearch": "TMDB aramasını kapat",
   "library.generateTrickplaySeason": "Bu sezon için trickplay oluştur",
   "library.findTurkishSeason": "Bu sezon için Türkçe altyazı bul",
+  "library.searchMissing": "Eksik bölümleri ara",
+  "library.searchMissingSeason": "Bu sezonun eksik bölümlerini ara",
+  "library.searchingMissing": "Aranıyor…",
+  "library.missingNone": "Eksik bölüm yok.",
+  "library.missingSearching": "Eksik bölümler aranıyor:",
+  "library.missingStarted": "Başlatılan indirme:",
+  "library.missingNothingFor": "Uygun sürüm bulunamadı:",
+  "library.missingSearchFailed":
+    "Arama tamamlanamadı. Birazdan yeniden deneyin; başlamış indirmeler sürüyor.",
   "library.title": "Kütüphane",
   "library.description":
     "Seyirlik'in sahip olduğu ya da istediği her film ve dizi. Yeşil diskte, mor yolda, kırmızı istenen ama eksik. Kaynağı olmayan başlıklar yalnızca burada görünür, Filmler ya da Diziler sayfalarında asla.",

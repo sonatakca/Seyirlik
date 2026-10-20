@@ -20,6 +20,8 @@ import {
   createEmptyRenditionRegistry,
 } from "../../../renditions/registry";
 import { createLibraryAdminRepository, loadTitleDetail } from "./libraryAdmin";
+import { createAcquisitionRepository } from "../acquisition/acquisitionRepository";
+import { missingEpisodePlan } from "../acquisition/missingEpisodes";
 import { createTitleRemoval, TitleRemovalError } from "./titleRemoval";
 import type { TmdbClient } from "../metadata/tmdbClient";
 
@@ -258,6 +260,50 @@ const databaseUrl = process.env.SEYIRLIK_TEST_DATABASE_URL;
       // The season's own row, so a season can be asked for as a whole.
       expect(detail!.seasons[0]!.id).toBe(season);
       expect(detail).toMatchObject({ files: 1, trickplayFiles: 0 });
+
+      // Searching for what is missing names the aired episode with no row.
+      expect(missingEpisodePlan(detail!).seasons).toEqual([
+        { season: 1, whole: false, episodes: [{ episode: 2, itemId: show }] },
+      ]);
+      // Once its download, addressed to the series, starts, it is on its way
+      // on the strip and no longer missing.
+      await createAcquisitionRepository(pool).create({
+        target: {
+          kind: "episode",
+          itemId: show,
+          title: "Show",
+          season: 1,
+          episode: 2,
+        },
+        indexerId: "nzbgeek",
+        releaseGuid: "e2",
+        releaseTitle: "Show.S01E02.1080p.WEB-DL",
+        origin: "automatic",
+        evidence: {
+          profileName: "HD-1080p",
+          policySnapshot: {},
+          releaseFacts: {},
+          score: 0,
+          reasons: [],
+          rejected: [],
+        },
+      });
+      const after = await loadTitleDetail(
+        createLibraryAdminRepository(pool),
+        tmdb,
+        show,
+      );
+      expect(
+        after!.seasons[0]!.episodes.map((e) => [
+          e.episodeNumber,
+          e.downloading,
+        ]),
+      ).toEqual([
+        [1, 0],
+        [2, 1],
+        [3, 0],
+      ]);
+      expect(missingEpisodePlan(after!).seasons).toEqual([]);
     });
 
     it("removes a film's folder, its rows, its package record and its legacy package", async () => {

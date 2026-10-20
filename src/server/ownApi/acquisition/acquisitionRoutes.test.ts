@@ -23,7 +23,9 @@ import type {
   BlocklistRepository,
 } from "../releases/blocklistRepository";
 import { profileFromIds } from "../releases/qualityProfile";
-import type { JobQueue } from "../tasks/jobQueue";
+import type { JobQueue, JobRecord } from "../tasks/jobQueue";
+import type { MissingEpisodePlan } from "./acquisitionFallback";
+import { MISSING_SEARCH_JOB_TYPE } from "./missingEpisodes";
 import type { RouteContext, RouteDefinition } from "../api/router";
 import { OwnApiError } from "../ownApiHandler";
 
@@ -84,6 +86,13 @@ function harness(
     profileId?: string | null;
     updateSucceeds?: (patch: Record<string, unknown>) => boolean;
     preBlocklisted?: AddBlocklistEntry[];
+    profiles?: Array<{ id: string; name: string }>;
+    missingEpisodes?: (
+      itemId: string,
+      season?: number,
+    ) => Promise<MissingEpisodePlan | null>;
+    profileOf?: (itemId: string) => Promise<string | undefined>;
+    jobs?: Record<string, Partial<JobRecord>>;
   } = {},
 ): Harness {
   const created: CreateAcquisitionInput[] = [];
@@ -182,7 +191,8 @@ function harness(
   };
 
   const policies = {
-    listProfiles: async () => [],
+    listProfiles: async () =>
+      (over.profiles ?? []).map((p) => ({ ...p, maxSizeBytes: null })),
     setMaxSize: async () => true,
     load: async (id: string) =>
       id === "p1"
@@ -220,6 +230,7 @@ function harness(
       enqueued.push(options);
       return "job-1";
     }),
+    get: async (id: string) => over.jobs?.[id] ?? null,
   } as unknown as JobQueue;
 
   const sab = {
@@ -237,6 +248,10 @@ function harness(
       search,
       policies,
       blocklist,
+      ...(over.missingEpisodes
+        ? { missingEpisodes: over.missingEpisodes }
+        : {}),
+      ...(over.profileOf ? { profileOf: over.profileOf } : {}),
     }),
     created,
     enqueued,
@@ -1115,5 +1130,130 @@ describe("steering the download queue", () => {
     await invoke(route(h, "POST", "/acquisitions/client/resume"));
     expect(pauseQueue).toHaveBeenCalledOnce();
     expect(resumeQueue).toHaveBeenCalledOnce();
+  });
+});
+
+describe("searching for missing episodes", () => {
+  const SERIES = "22222222-2222-4222-8222-222222222222";
+  const TASK = "33333333-3333-4333-8333-333333333333";
+  const plan: MissingEpisodePlan = {
+    seriesItemId: SERIES,
+    title: "The Sopranos",
+    year: 1999,
+    seasons: [
+      {
+        season: 6,
+        whole: false,
+        episodes: [
+          { episode: 2, itemId: SERIES },
+          { episode: 3, itemId: SERIES },
+        ],
+      },
+    ],
+  };
+
+  it("is not offered without a way to read what is missing", () => {
+    expect(() => route(harness(), "POST", "/acquisitions/missing")).toThrow();
+  });
+
+  it("queues one search for the missing episodes, under the series' profile", async () => {
+    const missingEpisodes = vi.fn(async () => plan);
+    const h = harness([], {
+      missingEpisodes,
+      profileOf: async () => "p1",
+      profiles: [{ id: "p0", name: "Any" }],
+    });
+    const answer = await invoke(route(h, "POST", "/acquisitions/missing"), {
+      body: { itemId: SERIES, season: 6 },
+    });
+    expect(missingEpisodes).toHaveBeenCalledWith(SERIES, 6);
+    expect(answer.payload?.data).toEqual({ taskId: "job-1", episodes: 2 });
+    expect(h.enqueued).toEqual([
+      {
+        jobType: MISSING_SEARCH_JOB_TYPE,
+        payload: { plan, profileId: "p1" },
+        dedupeKey: `${MISSING_SEARCH_JOB_TYPE}:${SERIES}:6`,
+      },
+    ]);
+  });
+
+  it("falls back to the profile a search by hand starts on", async () => {
+    const h = harness([], {
+      missingEpisodes: async () => plan,
+      profiles: [{ id: "p0", name: "Any" }],
+    });
+    await invoke(route(h, "POST", "/acquisitions/missing"), {
+      body: { itemId: SERIES },
+    });
+    expect(h.enqueued[0]).toMatchObject({
+      payload: { profileId: "p0" },
+      dedupeKey: `${MISSING_SEARCH_JOB_TYPE}:${SERIES}:all`,
+    });
+  });
+
+  it("queues nothing when nothing is missing", async () => {
+    const h = harness([], {
+      missingEpisodes: async () => ({ ...plan, seasons: [] }),
+    });
+    const answer = await invoke(route(h, "POST", "/acquisitions/missing"), {
+      body: { itemId: SERIES },
+    });
+    expect(answer.payload?.data).toEqual({ taskId: null, episodes: 0 });
+    expect(h.enqueued).toHaveLength(0);
+  });
+
+  it("refuses a title that is not a series", async () => {
+    const h = harness([], { missingEpisodes: async () => null });
+    await expect(
+      invoke(route(h, "POST", "/acquisitions/missing"), {
+        body: { itemId: SERIES },
+      }),
+    ).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("reports what a finished search started and found nothing for", async () => {
+    const h = harness([], {
+      missingEpisodes: async () => plan,
+      jobs: {
+        [TASK]: {
+          id: TASK,
+          jobType: MISSING_SEARCH_JOB_TYPE,
+          status: "succeeded",
+          result: {
+            started: 1,
+            nothingAcceptable: 1,
+            startedReleases: [
+              { season: 6, episode: 2, release: "Sopranos.S06E02.1080p" },
+            ],
+            nothingFor: [{ season: 6, episode: 3 }],
+          },
+        },
+      },
+    });
+    const answer = await invoke(
+      route(h, "GET", "/acquisitions/missing/:taskId"),
+      { params: { taskId: TASK } },
+    );
+    expect(answer.payload?.data).toEqual({
+      taskId: TASK,
+      status: "succeeded",
+      message: null,
+      result: {
+        started: [{ season: 6, episode: 2, release: "Sopranos.S06E02.1080p" }],
+        nothing: [{ season: 6, episode: 3 }],
+      },
+    });
+  });
+
+  it("does not read another kind of task through this route", async () => {
+    const h = harness([], {
+      missingEpisodes: async () => plan,
+      jobs: { [TASK]: { id: TASK, jobType: "library.scan" } },
+    });
+    await expect(
+      invoke(route(h, "GET", "/acquisitions/missing/:taskId"), {
+        params: { taskId: TASK },
+      }),
+    ).rejects.toBeInstanceOf(OwnApiError);
   });
 });

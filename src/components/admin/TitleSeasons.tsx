@@ -1,8 +1,9 @@
-import { Captions, Images } from "lucide-react";
+import { Captions, Images, Search } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
 import type { TranslationKey } from "../../i18n/translations";
 import {
   episodeStage,
+  isMissingEpisode,
   toneOf,
   type EpisodeStage,
   type HoldingTone,
@@ -50,6 +51,10 @@ export interface SeasonActions {
    * offers no upload rather than guessing a language.
    */
   onUploadSubtitle?: (itemId: string, file: File) => void;
+  /** Searches for a season's missing episodes; absent where it is not offered. */
+  onSearchMissing?: (season: number) => void;
+  /** A search for this title's missing episodes is still running. */
+  searchingMissing?: boolean;
 }
 
 function EpisodeRow({
@@ -340,6 +345,7 @@ export function TitleSeasons({
         const finished = season.episodes.filter(
           (e) => episodeStage(e, true).complete,
         ).length;
+        const missing = season.episodes.filter(isMissingEpisode).length;
         const label =
           season.seasonNumber === 0
             ? t("library.specials")
@@ -364,6 +370,23 @@ export function TitleSeasons({
                   />
                 ))}
               </span>
+              {actions.onSearchMissing && missing > 0 ? (
+                <Tooltip content={t("library.searchMissingSeason")}>
+                  <button
+                    type="button"
+                    className={actionButton}
+                    disabled={actions.busy || actions.searchingMissing}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      actions.onSearchMissing!(season.seasonNumber);
+                    }}
+                    aria-label={`${t("library.searchMissingSeason")} · ${label}`}
+                  >
+                    <Search size={13} aria-hidden="true" />
+                    <span className="tabular-nums">{missing}</span>
+                  </button>
+                </Tooltip>
+              ) : null}
               {season.id && held > 0 ? (
                 <span className="flex gap-1.5">
                   <Tooltip content={t("library.generateTrickplaySeason")}>
