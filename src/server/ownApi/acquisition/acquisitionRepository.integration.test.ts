@@ -294,6 +294,64 @@ integration("acquisitions in PostgreSQL", () => {
     );
   });
 
+  it("keeps two seasons of one series apart when both name the series", async () => {
+    // A season pack and an episode the catalogue has no row for both point
+    // at their series, so the item alone cannot tell them apart.
+    const libraryId = randomUUID();
+    const seriesId = randomUUID();
+    await pool.query(
+      `INSERT INTO libraries (id, slug, name, kind) VALUES ($1,'tv','TV','series')`,
+      [libraryId],
+    );
+    await pool.query(
+      `INSERT INTO items (id, library_id, kind, source_key, title, sort_title)
+       VALUES ($1,$2,'series','series:sopranos','The Sopranos','sopranos')`,
+      [seriesId, libraryId],
+    );
+    const pack = (season: number) => ({
+      ...input,
+      target: {
+        kind: "season" as const,
+        itemId: seriesId,
+        title: "The Sopranos",
+        season,
+      },
+    });
+    const episode = (n: number) => ({
+      ...input,
+      target: {
+        kind: "episode" as const,
+        itemId: seriesId,
+        // A title the matching by name could not join on.
+        title: `Sopranos ${n}`,
+        season: 6,
+        episode: n,
+      },
+    });
+
+    const failed = await repository.create(pack(5));
+    await repository.update(failed.id, "planned", {
+      state: "failed",
+      failureClass: "missing-articles",
+    });
+    const other = await repository.create(pack(6));
+    expect(await repository.supersedeFailedFor(other.id)).toBe(0);
+    expect(await repository.hasLiveAcquisitionFor(pack(6).target)).toBe(true);
+    expect(await repository.hasLiveAcquisitionFor(pack(4).target)).toBe(false);
+
+    await repository.create(episode(2));
+    expect(await repository.hasLiveAcquisitionFor(episode(2).target)).toBe(
+      true,
+    );
+    expect(await repository.hasLiveAcquisitionFor(episode(3).target)).toBe(
+      false,
+    );
+
+    // The same season is still the same target.
+    const again = await repository.create(pack(5));
+    expect(await repository.supersedeFailedFor(again.id)).toBe(1);
+  });
+
   it("counts the replacements a title has had", async () => {
     const season = {
       ...input,

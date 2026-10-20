@@ -378,7 +378,10 @@ export function createAcquisitionRepository(
       /*
        * The same target: the catalogue item when both name one, otherwise
        * the kind, title, season and episode. A year counts only when both
-       * rows recorded one, because a search by hand may leave it out.
+       * rows recorded one, because a search by hand may leave it out. The
+       * item alone is not enough: a season pack, and an episode the catalogue
+       * has no row for yet, name their series, so two seasons of one show
+       * share an item and differ only in their numbers.
        */
       const result = await pool.query<{ acquisition_id: string }>(
         `WITH newer AS (SELECT * FROM acquisitions WHERE id = $1),
@@ -390,7 +393,9 @@ export function createAcquisitionRepository(
               AND a.state = 'failed'
               AND a.target_kind = n.target_kind
               AND (
-                (a.target_item_id IS NOT NULL AND a.target_item_id = n.target_item_id)
+                (a.target_item_id IS NOT NULL AND a.target_item_id = n.target_item_id
+                 AND a.target_season IS NOT DISTINCT FROM n.target_season
+                 AND a.target_episode IS NOT DISTINCT FROM n.target_episode)
                 OR (
                   lower(a.target_title) = lower(n.target_title)
                   AND (a.target_year IS NULL OR n.target_year IS NULL
@@ -421,7 +426,9 @@ export function createAcquisitionRepository(
             WHERE a.state NOT IN ('failed','cancelled','superseded')
               AND a.target_kind = $1
               AND (
-                ($2::uuid IS NOT NULL AND a.target_item_id = $2::uuid)
+                ($2::uuid IS NOT NULL AND a.target_item_id = $2::uuid
+                 AND a.target_season IS NOT DISTINCT FROM $5::int
+                 AND a.target_episode IS NOT DISTINCT FROM $6::int)
                 OR (
                   lower(a.target_title) = lower($3)
                   AND (a.target_year IS NULL OR $4::int IS NULL
@@ -451,7 +458,9 @@ export function createAcquisitionRepository(
           WHERE a.origin = 'fallback'
             AND a.target_kind = n.target_kind
             AND (
-              (a.target_item_id IS NOT NULL AND a.target_item_id = n.target_item_id)
+              (a.target_item_id IS NOT NULL AND a.target_item_id = n.target_item_id
+               AND a.target_season IS NOT DISTINCT FROM n.target_season
+               AND a.target_episode IS NOT DISTINCT FROM n.target_episode)
               OR (
                 lower(a.target_title) = lower(n.target_title)
                 AND (a.target_year IS NULL OR n.target_year IS NULL
