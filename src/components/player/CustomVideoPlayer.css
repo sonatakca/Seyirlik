@@ -922,3 +922,149 @@ body:has(.seyirlik-player-shell) {
     opacity: 1;
   }
 }
+
+/*
+ * The quality toast (QualityChangeToast.tsx). It mirrors the party toast's
+ * motion from the right, but without its blur: blurring white letters smears
+ * light onto the picture, and the toast's light must stay inside the glyphs.
+ */
+@keyframes qualityToastEnter {
+  0% {
+    opacity: 0;
+    transform: translate3d(1.15rem, 0.55rem, 0) scale(0.94);
+  }
+
+  55% {
+    opacity: 1;
+    transform: translate3d(-0.18rem, -0.04rem, 0) scale(1.015);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes qualityToastExit {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+
+  35% {
+    opacity: 0.9;
+    transform: translate3d(-0.12rem, -0.03rem, 0) scale(1.01);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate3d(0.75rem, 0.55rem, 0) scale(0.96);
+  }
+}
+
+@keyframes qualityToastFadeIn {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes qualityToastFadeOut {
+  to {
+    opacity: 0;
+  }
+}
+
+.quality-toast {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  border-radius: 1rem;
+  padding: 7px 14px 7px 9px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  box-shadow: var(--shadow-player-controls);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+  white-space: nowrap;
+  will-change: transform, opacity;
+}
+
+.quality-toast-single {
+  gap: 0.5rem;
+  border-radius: 999px;
+  padding: 6px 12px;
+}
+
+.quality-toast-entering {
+  animation: qualityToastEnter 520ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.quality-toast-leaving {
+  animation: qualityToastExit 420ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quality-toast-entering {
+    animation: qualityToastFadeIn 200ms ease-out forwards;
+  }
+
+  .quality-toast-leaving {
+    animation: qualityToastFadeOut 200ms ease-in forwards;
+  }
+}
+
+.quality-toast-ring {
+  position: relative;
+  display: flex;
+  width: 1.25rem;
+  height: 1.25rem;
+  flex: none;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+.quality-toast-arrow {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.quality-toast-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+
+.quality-toast-line {
+  display: flex;
+  align-items: flex-start;
+  font-size: 13px;
+  line-height: 16px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  transform-origin: 0 50%;
+}
+
+/* The light is a gradient painted through the glyphs, never around them. */
+.quality-toast-value {
+  color: transparent;
+  background-image: linear-gradient(#fff, #fff);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+.quality-toast-hdr {
+  margin-top: 2px;
+  margin-left: 1.5px;
+  font-size: 5px;
+  line-height: 6px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.6);
+}

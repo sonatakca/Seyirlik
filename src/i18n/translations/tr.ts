@@ -678,6 +678,9 @@ export const tr = {
   "player.qualityAudioMismatch":
     "Bu üretilen dosyada farklı bir ses parçası var. Geçerli dili korumak için Orijinal'i kullanın veya uyumlu bir kalite seçin.",
   "player.qualityPreparing": "Hazırlanıyor…",
+  "player.qualityToast.start": "{quality} oynatılıyor",
+  "player.qualityToast.up": "Kalite {quality} seviyesine yükseldi",
+  "player.qualityToast.down": "Kalite {quality} seviyesine düştü",
   "player.qualitySwitchFailedReturnAuto":
     "Seçilen kalite dosyası oynatılamadı. Doğrulanmış kullanılabilir bir dosyaya dönmek için Otomatik'i seçin.",
   "player.qualityCompleteFileLimitations":

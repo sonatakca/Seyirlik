@@ -676,6 +676,9 @@ export const en = {
   "player.qualityAudioMismatch":
     "This generated file contains a different audio track. Keep Original or select a compatible quality to preserve the current language.",
   "player.qualityPreparing": "Preparing…",
+  "player.qualityToast.start": "Playing in {quality}",
+  "player.qualityToast.up": "Quality went up to {quality}",
+  "player.qualityToast.down": "Quality dropped to {quality}",
   "player.qualitySwitchFailedReturnAuto":
     "The selected quality file could not be played. Choose Auto to return to a verified available file.",
   "player.qualityCompleteFileLimitations":

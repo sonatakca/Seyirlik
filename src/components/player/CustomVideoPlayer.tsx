@@ -167,6 +167,9 @@ import {
   type VideoFit,
 } from "./useVideoFit";
 import { usePartyEventToast } from "./usePartyEventToast";
+import { QualityChangeToast } from "./QualityChangeToast";
+import { useQualityChangeToast } from "./useQualityChangeToast";
+import { formatQualityHeight, type PlayingQuality } from "./qualityToastModel";
 import { useMediaSessionControls } from "./useMediaSessionControls";
 import { useSubtitleEditor } from "./useSubtitleEditor";
 import { useTouchSeek } from "./useTouchSeek";
@@ -5166,6 +5169,63 @@ export function CustomVideoPlayer({
 
   const seekPointerAxis = "horizontal";
 
+  /*
+   * The quality on screen, read from the same rung the quality menu labels
+   * itself with. hls.js reports LEVEL_SWITCHED once the new rung's fragment is
+   * the one playing, and the decoded frame covers the engines that report
+   * nothing, so this follows the picture rather than the request.
+   */
+  const playingQuality = useMemo<PlayingQuality | null>(() => {
+    if (isAdaptiveRenditionPlayback && adaptiveQualityManifest) {
+      const ordered = [...adaptiveQualityManifest.qualities].sort(
+        (left, right) => left.height - right.height,
+      );
+      const effective = findEffectiveAdaptiveRung(
+        ordered,
+        activeAdaptiveWidth ?? decodedFrameWidth,
+        activeAdaptiveHeight,
+      );
+      return effective
+        ? { id: effective.id, height: effective.height, hdr: effective.hdr }
+        : null;
+    }
+    return activeQualityFile
+      ? {
+          id: activeQualityFile.id,
+          height: activeQualityFile.height,
+          hdr: activeQualityFile.hdr === true,
+        }
+      : null;
+  }, [
+    activeAdaptiveHeight,
+    activeAdaptiveWidth,
+    activeQualityFile,
+    adaptiveQualityManifest,
+    decodedFrameWidth,
+    isAdaptiveRenditionPlayback,
+  ]);
+  /*
+   * The skip button and the next-episode card own the bottom right; while
+   * either is up a quality change goes unannounced rather than covering them.
+   */
+  const isQualityToastSuppressed =
+    isViewModeEnabled ||
+    skippableActiveSegment !== null ||
+    (shouldShowDefaultNextEpisodeCountdown && Boolean(nextEpisode));
+  const shownQualityChange = useQualityChangeToast(
+    item.Id,
+    playingQuality,
+    isQualityToastSuppressed,
+  );
+  const qualityChangeLabel = shownQualityChange
+    ? t(`player.qualityToast.${shownQualityChange.change.kind}`).replace(
+        "{quality}",
+        `${formatQualityHeight(shownQualityChange.change.to)}${
+          shownQualityChange.change.to.hdr ? " HDR" : ""
+        }`,
+      )
+    : "";
+
   return (
     <div
       ref={containerRef}
@@ -5799,6 +5859,15 @@ export function CustomVideoPlayer({
             </div>
           </div>
         </div>
+      ) : null}
+
+      {shownQualityChange ? (
+        <QualityChangeToast
+          change={shownQualityChange.change}
+          leaving={shownQualityChange.leaving}
+          reduceMotion={shouldReduceMotion}
+          label={qualityChangeLabel}
+        />
       ) : null}
 
       {!isViewModeEnabled && isPlaybackInfoOpen ? (
