@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { cacheSeriesCatalogue, type SeriesCatalogue } from "./libraryAdmin";
+import {
+  cacheSeriesCatalogue,
+  loadTitleDetail,
+  packagedStatus,
+  type LibraryAdminRepository,
+  type SeriesCatalogue,
+} from "./libraryAdmin";
 
 function tmdb() {
   return {
@@ -33,5 +39,102 @@ describe("cacheSeriesCatalogue", () => {
     await expect(cached.getSeries("1398")).rejects.toThrow("TMDB is down");
     await expect(cached.getSeries("1398")).resolves.toEqual({ id: "1398" });
     expect(source.getSeries).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("packagedStatus", () => {
+  it("calls a complete package processed with no job behind it", () => {
+    // A finished job removed from history, or a title packaged before the
+    // catalogue was rebuilt.
+    expect(packagedStatus("downloaded", 0, "complete")).toBe("ready");
+    expect(packagedStatus("processing", 1, "complete")).toBe("ready");
+  });
+
+  it("does not call a title processed once its package is not whole", () => {
+    expect(packagedStatus("ready", 0, "none")).toBe("downloaded");
+    expect(packagedStatus("ready", 0, "partial")).toBe("downloaded");
+    expect(packagedStatus("ready", 0, "stale")).toBe("downloaded");
+    expect(packagedStatus("ready", 1, "partial")).toBe("processing");
+  });
+
+  it("keeps the catalogue's answer until the package has been read", () => {
+    expect(packagedStatus("ready", 0, "unknown")).toBe("ready");
+    expect(packagedStatus("downloaded", 0, "unknown")).toBe("downloaded");
+    expect(packagedStatus("processing", 1, "none")).toBe("processing");
+  });
+});
+
+describe("loadTitleDetail", () => {
+  const holding = (status: string) => ({
+    status,
+    hasMedia: true,
+    downloading: 0,
+    importing: 0,
+    processing: 0,
+    sizeBytes: 1,
+    resolution: 1080,
+    audioLanguages: ["eng"],
+    subtitleLanguages: [],
+    pendingSubtitles: [],
+    files: 1,
+    trickplayFiles: 0,
+    pendingTrickplay: 0,
+  });
+  const episode = (n: number, status: string) => ({
+    id: `e${n}`,
+    title: `Episode ${n}`,
+    season: 1,
+    episode: n,
+    airDate: null,
+    seasonId: "s1",
+    hasThumb: false,
+    ...holding(status),
+  });
+  const repository = {
+    getTitle: async () => ({
+      id: "show",
+      kind: "series",
+      title: "Lilyhammer",
+      ...holding("downloaded"),
+    }),
+    listEpisodes: async () => [
+      episode(1, "downloaded"),
+      episode(2, "ready"),
+      episode(3, "downloaded"),
+    ],
+    monitoring: async () => ({
+      series: { monitored: true },
+      seasons: new Map(),
+      episodes: new Map(),
+    }),
+    primaryFiles: async (ids: readonly string[]) =>
+      new Map(
+        ids.map((id) => [
+          id,
+          {
+            id: `f-${id}`,
+            relativePath: `Series/x/${id}.mkv`,
+            fingerprint: "fp",
+          },
+        ]),
+      ),
+  } as unknown as LibraryAdminRepository;
+
+  it("reads each episode's processed state from its package", async () => {
+    const packages = {
+      "f-e1": "complete",
+      "f-e2": "none",
+      "f-e3": "unknown",
+    } as const;
+    const detail = await loadTitleDetail(repository, undefined, "show", {
+      packageState: (file) => packages[file.id as keyof typeof packages],
+    });
+    expect(
+      detail!.seasons[0]!.episodes.map((e) => [e.episodeNumber, e.status]),
+    ).toEqual([
+      [1, "ready"],
+      [2, "downloaded"],
+      [3, "downloaded"],
+    ]);
   });
 });

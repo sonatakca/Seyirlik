@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { RouteDefinition } from "../api/router";
 import { sendData } from "../api/envelope";
 import {
@@ -10,10 +11,12 @@ import type { TmdbClient } from "../metadata/tmdbClient";
 import type { JobQueue } from "../tasks/jobQueue";
 import { JOB_TYPES } from "../tasks/jobHandlers";
 import { OwnApiError } from "../ownApiHandler";
+import type { PackageIndex } from "../processing/packageIndex";
 import {
   cacheSeriesCatalogue,
   loadTitleDetail,
   type LibraryAdminRepository,
+  type PackageStateLookup,
 } from "./libraryAdmin";
 import { TitleRemovalError, type TitleRemoval } from "./titleRemoval";
 
@@ -30,8 +33,35 @@ export function createLibraryAdminRoutes(options: {
   tmdb: TmdbClient | undefined;
   removal: TitleRemoval;
   queue: JobQueue;
+  /**
+   * The processing page's package index, so an episode is processed here
+   * exactly when it is processed there.
+   */
+  packages?: { index: PackageIndex; mediaRoot: string };
 }): RouteDefinition[] {
   const catalogue = options.tmdb && cacheSeriesCatalogue(options.tmdb);
+  const packages = options.packages;
+  /*
+   * Never waits on the volume: an episode the index has not read yet is asked
+   * for in the background and reads as `unknown`, and the page's next poll a
+   * few seconds later gets the answer.
+   */
+  const packageState: PackageStateLookup | undefined =
+    packages &&
+    ((file) => {
+      packages.index.track([
+        {
+          mediaFileId: file.id,
+          sourcePath: path.resolve(
+            packages.mediaRoot,
+            ...file.relativePath.split("/"),
+          ),
+          kind: "episode",
+          fingerprint: file.fingerprint,
+        },
+      ]);
+      return packages.index.get(file.id).state;
+    });
   return [
     {
       /**
@@ -80,6 +110,7 @@ export function createLibraryAdminRoutes(options: {
           options.repository,
           catalogue,
           requireUuid(context.params.itemId, "itemId"),
+          packageState ? { packageState } : {},
         );
         if (!detail)
           throw new OwnApiError("NOT_FOUND", "No such movie or show.", 404);

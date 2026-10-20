@@ -89,6 +89,7 @@ import {
   createProcessingRoutes,
 } from "./processing/processingRoutes";
 import { createProcessingEnqueuer } from "./processing/processingEnqueue";
+import { createPackageIndex } from "./processing/packageIndex";
 import {
   createImportProcessingStore,
   createImportProcessingSweep,
@@ -1790,6 +1791,10 @@ export async function createNativeRuntime({
       console.error("title.removal.sweep_failed", { error }),
     );
 
+  // One reading of the media volume, so the library and the processing page
+  // cannot disagree about which titles are processed.
+  const packageIndex = createPackageIndex();
+
   const routes: RouteDefinition[] = [
     ...createCatalogueRoutes({
       service: catalogueService,
@@ -1906,6 +1911,7 @@ export async function createNativeRuntime({
       tmdb,
       queue,
       removal: titleRemoval,
+      packages: { index: packageIndex, mediaRoot },
     }),
     ...(acquisition
       ? createAcquisitionRoutes({
@@ -1995,6 +2001,7 @@ export async function createNativeRuntime({
       // A `light` worker here means encodes run on another machine, whose own
       // scratch is what a job will spend.
       processingElsewhere: workerRole === "light",
+      packageIndex,
     }),
     ...(tmdb
       ? [

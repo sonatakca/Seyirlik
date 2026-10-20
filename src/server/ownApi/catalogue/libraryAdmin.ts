@@ -16,6 +16,7 @@ import {
   type MonitoringChoice,
 } from "../releases/monitoring";
 import { normalizeLanguage } from "../../../renditions/processing/languages";
+import type { ProcessingPackageState } from "../processing/packageIndex";
 import { MEDIA_STATUS_SQL, mediaAvailableSql } from "./mediaAvailability";
 
 export type LibraryTitleKind = "movie" | "series" | "book";
@@ -322,21 +323,26 @@ export function createLibraryAdminRepository(
     /** The file a subtitle or a detail line is about: the largest live one. */
     async primaryFiles(
       itemIds: readonly string[],
-    ): Promise<Map<string, { id: string; relativePath: string }>> {
-      const files = new Map<string, { id: string; relativePath: string }>();
+    ): Promise<Map<string, PrimaryFile>> {
+      const files = new Map<string, PrimaryFile>();
       if (itemIds.length === 0) return files;
       const result = await db.query<{
         item_id: string;
         id: string;
         relative_path: string;
+        fingerprint: string | null;
       }>(
-        `SELECT DISTINCT ON (item_id) item_id, id, relative_path FROM media_files
+        `SELECT DISTINCT ON (item_id) item_id, id, relative_path, fingerprint FROM media_files
          WHERE item_id = ANY($1::uuid[]) AND missing_since IS NULL AND size_bytes > 0
          ORDER BY item_id, is_primary DESC, size_bytes DESC`,
         [[...itemIds]],
       );
       for (const row of result.rows)
-        files.set(row.item_id, { id: row.id, relativePath: row.relative_path });
+        files.set(row.item_id, {
+          id: row.id,
+          relativePath: row.relative_path,
+          fingerprint: row.fingerprint,
+        });
       return files;
     },
 
@@ -407,6 +413,34 @@ export type LibraryAdminRepository = ReturnType<
   typeof createLibraryAdminRepository
 >;
 
+export interface PrimaryFile {
+  id: string;
+  relativePath: string;
+  fingerprint: string | null;
+}
+
+/** What the processing page's package index knows about one file's package. */
+export type PackageStateLookup = (file: PrimaryFile) => ProcessingPackageState;
+
+/**
+ * An episode's status, with "processed" read from its package.
+ *
+ * `MEDIA_STATUS_SQL` calls a title ready when a succeeded job published it,
+ * but that row is history: the processing page deletes it on request, and a
+ * title packaged before the catalogue was rebuilt never had one. The package
+ * on disk is what playback serves and what the processing page reports, so
+ * once the index has read it, it decides; until then the job history stands.
+ */
+export function packagedStatus(
+  status: string,
+  processing: number,
+  state: ProcessingPackageState,
+): string {
+  if (state === "complete") return "ready";
+  if (state === "unknown" || status !== "ready") return status;
+  return processing > 0 ? "processing" : "downloaded";
+}
+
 function baseName(relativePath: string | undefined): string | null {
   if (!relativePath) return null;
   return relativePath.split("/").pop() ?? null;
@@ -469,8 +503,9 @@ export async function loadTitleDetail(
   repository: LibraryAdminRepository,
   tmdb: SeriesCatalogue | undefined,
   itemId: string,
-  now = new Date(),
+  options: { now?: Date; packageState?: PackageStateLookup } = {},
 ): Promise<LibraryTitleDetail | null> {
+  const now = options.now ?? new Date();
   const title = await repository.getTitle(itemId);
   if (!title) return null;
   if (title.kind !== "series") {
@@ -497,6 +532,13 @@ export async function loadTitleDetail(
   const unnumbered: LibraryEpisode[] = [];
   for (const row of rows) {
     const file = files.get(row.id);
+    const facts = holding(row);
+    if (file && options.packageState)
+      facts.status = packagedStatus(
+        facts.status,
+        facts.processing,
+        options.packageState(file),
+      );
     const episode: LibraryEpisode = {
       id: row.id,
       seasonNumber: row.season ?? 0,
@@ -508,7 +550,7 @@ export async function loadTitleDetail(
       monitored: true,
       hasThumb: row.hasThumb,
       stillUrl: null,
-      ...holding(row),
+      ...facts,
     };
     if (row.season === null || row.episode === null) unnumbered.push(episode);
     else episodes.set(`${row.season}:${row.episode}`, episode);

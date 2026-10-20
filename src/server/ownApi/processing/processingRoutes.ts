@@ -29,7 +29,7 @@ import {
   PROCESSING_JOB_TYPE,
   createProcessingEnqueuer,
 } from "./processingEnqueue";
-import { createPackageIndex } from "./packageIndex";
+import { createPackageIndex, type PackageIndex } from "./packageIndex";
 import {
   packageTargetsFor,
   projectCatalogue,
@@ -83,6 +83,11 @@ export interface ProcessingRoutesOptions {
   storageGuard?: StorageGuard;
   /** The incident history, for the panel that explains why nothing is running. */
   storageIncidents?: Pick<StorageIncidentStore, "listOpen" | "listRecent">;
+  /**
+   * What the media volume holds, shared with the library pages so both say the
+   * same thing about whether a title is processed.
+   */
+  packageIndex?: PackageIndex;
 }
 
 /**
@@ -295,6 +300,7 @@ export function createProcessingRoutes({
   storageAvailable = () => true,
   storageGuard = createPermissiveStorageGuard(),
   storageIncidents,
+  packageIndex = createPackageIndex(),
 }: ProcessingRoutesOptions): RouteDefinition[] {
   const resolvedMediaRoot = path.resolve(mediaRoot);
 
@@ -393,7 +399,6 @@ export function createProcessingRoutes({
    */
   let catalogueCache: { view: ProcessingCatalogueView; at: number } | null =
     null;
-  const packageIndex = createPackageIndex();
 
   const SOURCE_PRESENCE_TTL_MS = 30_000;
   const SOURCE_PRESENCE_CONCURRENCY = 4;
