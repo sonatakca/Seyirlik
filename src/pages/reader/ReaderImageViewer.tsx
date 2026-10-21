@@ -140,7 +140,12 @@ export function ReaderImageViewer({
     // Bounds for a scale: a picture narrower than the window stays centred,
     // a wider one may not leave a gap at either edge.
     const clampView = (next: View): View => {
-      const fit = (offset: number, size: number, extent: number, span: number) => {
+      const fit = (
+        offset: number,
+        size: number,
+        extent: number,
+        span: number,
+      ) => {
         const scaled = size * next.s;
         if (scaled <= span) {
           return (size - scaled) / 2;
@@ -155,7 +160,12 @@ export function ReaderImageViewer({
     };
 
     // Zoom by `factor` keeping the point under (px, py) where it is.
-    const zoomAt = (from: View, scale: number, px: number, py: number): View => {
+    const zoomAt = (
+      from: View,
+      scale: number,
+      px: number,
+      py: number,
+    ): View => {
       const s = Math.min(maxScale, Math.max(1, scale));
       const contentX = (px - box.left - from.x) / from.s;
       const contentY = (py - box.top - from.y) / from.s;
@@ -180,7 +190,9 @@ export function ReaderImageViewer({
       ];
       const a = edge(from);
       const b = edge(to);
-      const travel = Math.max(...a.map((value, index) => Math.abs(value - b[index])));
+      const travel = Math.max(
+        ...a.map((value, index) => Math.abs(value - b[index])),
+      );
       const budget = (PX_PER_FRAME_AT_1080 * window.innerHeight) / 1080;
       const duration = reduced
         ? 0
@@ -258,14 +270,32 @@ export function ReaderImageViewer({
     animate({ s: 1, x: 0, y: 0, ground: 1 });
     // Focus moves in for keyboards and screen readers, without a ring
     // drawn over the corner after a tap.
-    closeRef.current?.focus({ preventScroll: true, focusVisible: false } as FocusOptions);
+    closeRef.current?.focus({
+      preventScroll: true,
+      focusVisible: false,
+    } as FocusOptions);
 
     /* ---------- Pointer: tap, drag, pinch ---------- */
     const pointers = new Map<number, { x: number; y: number }>();
     let gesture:
-      | { kind: "press"; id: number; x: number; y: number; at: number; view: View; onPicture: boolean }
+      | {
+          kind: "press";
+          id: number;
+          x: number;
+          y: number;
+          at: number;
+          view: View;
+          onPicture: boolean;
+        }
       | { kind: "pan"; id: number; x: number; y: number; view: View }
-      | { kind: "dismiss"; id: number; x: number; y: number; at: number; view: View }
+      | {
+          kind: "dismiss";
+          id: number;
+          x: number;
+          y: number;
+          at: number;
+          view: View;
+        }
       | { kind: "pinch"; distance: number; mx: number; my: number; view: View }
       | null = null;
 
@@ -279,8 +309,17 @@ export function ReaderImageViewer({
     };
 
     const settle = () => {
-      const target = clampView({ ...view, s: Math.min(maxScale, Math.max(1, view.s)), ground: 1 });
-      if (target.s !== view.s || target.x !== view.x || target.y !== view.y || view.ground !== 1) {
+      const target = clampView({
+        ...view,
+        s: Math.min(maxScale, Math.max(1, view.s)),
+        ground: 1,
+      });
+      if (
+        target.s !== view.s ||
+        target.x !== view.x ||
+        target.y !== view.y ||
+        view.ground !== 1
+      ) {
         animate(target);
       }
     };
@@ -320,7 +359,10 @@ export function ReaderImageViewer({
       if (gesture.kind === "pinch" && pointers.size >= 2) {
         const now = pinchOf();
         const start = gesture.view;
-        const s = Math.min(maxScale * 1.15, Math.max(0.75, (start.s * now.distance) / gesture.distance));
+        const s = Math.min(
+          maxScale * 1.15,
+          Math.max(0.75, (start.s * now.distance) / gesture.distance),
+        );
         const contentX = (gesture.mx - box.left - start.x) / start.s;
         const contentY = (gesture.my - box.top - start.y) / start.s;
         apply({
@@ -345,13 +387,30 @@ export function ReaderImageViewer({
         }
         gesture =
           gesture.view.s > 1.01
-            ? { kind: "pan", id: gesture.id, x: gesture.x, y: gesture.y, view: gesture.view }
-            : { kind: "dismiss", id: gesture.id, x: gesture.x, y: gesture.y, at: gesture.at, view: gesture.view };
+            ? {
+                kind: "pan",
+                id: gesture.id,
+                x: gesture.x,
+                y: gesture.y,
+                view: gesture.view,
+              }
+            : {
+                kind: "dismiss",
+                id: gesture.id,
+                x: gesture.x,
+                y: gesture.y,
+                at: gesture.at,
+                view: gesture.view,
+              };
       }
 
       if (gesture.kind === "pan") {
         // Past an edge the picture follows at a third of the finger's pace.
-        const free = { ...gesture.view, x: gesture.view.x + dx, y: gesture.view.y + dy };
+        const free = {
+          ...gesture.view,
+          x: gesture.view.x + dx,
+          y: gesture.view.y + dy,
+        };
         const held = clampView(free);
         apply({
           ...free,
@@ -360,7 +419,12 @@ export function ReaderImageViewer({
         });
       } else if (gesture.kind === "dismiss") {
         const pull = Math.min(1, Math.abs(dy) / (window.innerHeight * 0.45));
-        apply({ ...gesture.view, x: dx * 0.35, y: dy, ground: 1 - pull * 0.85 });
+        apply({
+          ...gesture.view,
+          x: dx * 0.35,
+          y: dy,
+          ground: 1 - pull * 0.85,
+        });
       }
     };
 
@@ -389,7 +453,10 @@ export function ReaderImageViewer({
       gesture = null;
 
       if (ended.kind === "press") {
-        if (event.type === "pointercancel" || performance.now() - ended.at > TAP_MS) {
+        if (
+          event.type === "pointercancel" ||
+          performance.now() - ended.at > TAP_MS
+        ) {
           return;
         }
         if (!ended.onPicture || (maxScale <= 1.2 && view.s <= 1.01)) {
@@ -397,7 +464,15 @@ export function ReaderImageViewer({
         } else if (view.s > 1.01) {
           animate({ s: 1, x: 0, y: 0, ground: 1 });
         } else {
-          animate({ ...zoomAt(view, Math.min(TAP_ZOOM, maxScale), event.clientX, event.clientY), ground: 1 });
+          animate({
+            ...zoomAt(
+              view,
+              Math.min(TAP_ZOOM, maxScale),
+              event.clientX,
+              event.clientY,
+            ),
+            ground: 1,
+          });
         }
         return;
       }
@@ -405,7 +480,10 @@ export function ReaderImageViewer({
       if (ended.kind === "dismiss") {
         const dy = event.clientY - ended.y;
         const speed = Math.abs(dy) / Math.max(1, performance.now() - ended.at);
-        if (event.type !== "pointercancel" && (Math.abs(dy) > DISMISS_DRAG_PX || speed > 0.6)) {
+        if (
+          event.type !== "pointercancel" &&
+          (Math.abs(dy) > DISMISS_DRAG_PX || speed > 0.6)
+        ) {
           close();
         } else {
           animate({ s: 1, x: 0, y: 0, ground: 1 });
@@ -430,9 +508,15 @@ export function ReaderImageViewer({
 
       if (event.ctrlKey || event.metaKey || view.s <= 1.01) {
         const factor = Math.exp(-dy * (event.ctrlKey ? 0.01 : 0.002));
-        apply({ ...zoomAt(view, view.s * factor, event.clientX, event.clientY), ground: 1 });
+        apply({
+          ...zoomAt(view, view.s * factor, event.clientX, event.clientY),
+          ground: 1,
+        });
       } else {
-        apply({ ...clampView({ ...view, x: view.x - dx, y: view.y - dy }), ground: 1 });
+        apply({
+          ...clampView({ ...view, x: view.x - dx, y: view.y - dy }),
+          ground: 1,
+        });
       }
       window.clearTimeout(settleTimer);
       settleTimer = window.setTimeout(settle, 140);
@@ -446,7 +530,10 @@ export function ReaderImageViewer({
       const zoomBy = (factor: number) =>
         animate({ ...zoomAt(view, view.s * factor, ...middle), ground: 1 });
       const panBy = (x: number, y: number) =>
-        animate({ ...clampView({ ...view, x: view.x + x, y: view.y + y }), ground: 1 });
+        animate({
+          ...clampView({ ...view, x: view.x + x, y: view.y + y }),
+          ground: 1,
+        });
       const keys: Record<string, () => void> = {
         Escape: close,
         "+": () => zoomBy(1.5),

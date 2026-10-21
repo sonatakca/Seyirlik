@@ -58,7 +58,14 @@ export function HomeGlyph({ active, reduced }: GlyphProps) {
     <Svg>
       <motion.path d={HOUSE} {...layer(active, false)} />
       <motion.g {...layer(active, true)}>
-        <mask id={mask} maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">
+        <mask
+          id={mask}
+          maskUnits="userSpaceOnUse"
+          x="0"
+          y="0"
+          width="24"
+          height="24"
+        >
           <path d={HOUSE} fill="#fff" stroke="#fff" />
           {BARS.map((y, index) => (
             <motion.rect
@@ -81,21 +88,38 @@ export function HomeGlyph({ active, reduced }: GlyphProps) {
             />
           ))}
         </mask>
-        <rect width="24" height="24" fill="currentColor" stroke="none" mask={`url(#${mask})`} />
+        <rect
+          width="24"
+          height="24"
+          fill="currentColor"
+          stroke="none"
+          mask={`url(#${mask})`}
+        />
       </motion.g>
     </Svg>
   );
 }
 
 const CLAP_ARM = { x: 3.4, y: 4.6, width: 17.2, height: 3.7 };
-const CLAP_STRIPES = ["M8.2 4.6 6.3 8.3", "M12.7 4.6 10.8 8.3", "M17.2 4.6 15.3 8.3"];
+const CLAP_STRIPES = [
+  "M8.2 4.6 6.3 8.3",
+  "M12.7 4.6 10.8 8.3",
+  "M17.2 4.6 15.3 8.3",
+];
 
 /** Films: a clapperboard; its arm lifts and claps shut. */
 export function FilmGlyph({ active, reduced }: GlyphProps) {
   const mask = useId();
   return (
     <Svg>
-      <motion.rect x="3.4" y="10" width="17.2" height="10.4" rx="2" {...layer(active, false)} />
+      <motion.rect
+        x="3.4"
+        y="10"
+        width="17.2"
+        height="10.4"
+        rx="2"
+        {...layer(active, false)}
+      />
       <motion.rect
         x="3.4"
         y="10"
@@ -113,7 +137,11 @@ export function FilmGlyph({ active, reduced }: GlyphProps) {
         animate={{ rotate: active && !reduced ? [0, -22, 0] : 0 }}
         transition={
           active && !reduced
-            ? { duration: 0.34, times: [0, 0.5, 1], ease: ["easeOut", "easeIn"] }
+            ? {
+                duration: 0.34,
+                times: [0, 0.5, 1],
+                ease: ["easeOut", "easeIn"],
+              }
             : { duration: 0.18 }
         }
       >
@@ -124,13 +152,26 @@ export function FilmGlyph({ active, reduced }: GlyphProps) {
           ))}
         </motion.g>
         <motion.g {...layer(active, true)}>
-          <mask id={mask} maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">
+          <mask
+            id={mask}
+            maskUnits="userSpaceOnUse"
+            x="0"
+            y="0"
+            width="24"
+            height="24"
+          >
             <rect {...CLAP_ARM} rx="1" fill="#fff" stroke="#fff" />
             {CLAP_STRIPES.map((d) => (
               <path key={d} d={d} stroke="#000" strokeWidth="1.5" />
             ))}
           </mask>
-          <rect width="24" height="24" fill="currentColor" stroke="none" mask={`url(#${mask})`} />
+          <rect
+            width="24"
+            height="24"
+            fill="currentColor"
+            stroke="none"
+            mask={`url(#${mask})`}
+          />
         </motion.g>
       </motion.g>
     </Svg>
@@ -171,8 +212,10 @@ export function ShowsGlyph({ active, reduced }: GlyphProps) {
   );
 }
 
-const PAGE_LEFT = "M12 6.7C10.15 5.3 7.4 4.75 3.3 5v13.65c4.1-.25 6.85.3 8.7 1.7Z";
-const PAGE_RIGHT = "M12 6.7c1.85-1.4 4.6-1.95 8.7-1.7v13.65c-4.1-.25-6.85.3-8.7 1.7Z";
+const PAGE_LEFT =
+  "M12 6.7C10.15 5.3 7.4 4.75 3.3 5v13.65c4.1-.25 6.85.3 8.7 1.7Z";
+const PAGE_RIGHT =
+  "M12 6.7c1.85-1.4 4.6-1.95 8.7-1.7v13.65c-4.1-.25-6.85.3-8.7 1.7Z";
 
 /** Books: an open book; a page turns over the spine as it opens to you. */
 export function BookGlyph({ active, reduced }: GlyphProps) {
@@ -184,12 +227,25 @@ export function BookGlyph({ active, reduced }: GlyphProps) {
         <path d={PAGE_RIGHT} />
       </motion.g>
       <motion.g {...layer(active, true)}>
-        <mask id={mask} maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">
+        <mask
+          id={mask}
+          maskUnits="userSpaceOnUse"
+          x="0"
+          y="0"
+          width="24"
+          height="24"
+        >
           <path d={PAGE_LEFT} fill="#fff" stroke="#fff" />
           <path d={PAGE_RIGHT} fill="#fff" stroke="#fff" />
           <path d="M12 7.4v12.2" stroke="#000" strokeWidth="1.3" />
         </mask>
-        <rect width="24" height="24" fill="currentColor" stroke="none" mask={`url(#${mask})`} />
+        <rect
+          width="24"
+          height="24"
+          fill="currentColor"
+          stroke="none"
+          mask={`url(#${mask})`}
+        />
       </motion.g>
       {/* The turning page: its edge, in the bar's own ground, crossing from
           the right leaf to the left about the spine. */}
@@ -209,7 +265,11 @@ export function BookGlyph({ active, reduced }: GlyphProps) {
           transition={
             active
               ? {
-                  scaleX: { duration: 0.46, delay: 0.04, ease: [0.37, 0, 0.63, 1] },
+                  scaleX: {
+                    duration: 0.46,
+                    delay: 0.04,
+                    ease: [0.37, 0, 0.63, 1],
+                  },
                   opacity: { duration: 0.5, times: [0, 0.12, 0.85, 1] },
                 }
               : { duration: 0 }
@@ -240,7 +300,10 @@ export function ListGlyph({ active, reduced }: GlyphProps) {
           animate={{ opacity: active ? 1 : 0, y: active || reduced ? 0 : -7 }}
           transition={
             active && !reduced
-              ? { y: { duration: 0.42, ease: travel }, opacity: { duration: 0.12 } }
+              ? {
+                  y: { duration: 0.42, ease: travel },
+                  opacity: { duration: 0.12 },
+                }
               : fadeOut
           }
         />

@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,6 +7,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createOwnApiRouter } from "../api/router";
 import type { OwnApiError } from "../ownApiHandler";
 import { createDownloadRoutes } from "./downloadRoutes";
+
+const ffmpegAvailable =
+  spawnSync("ffmpeg", ["-hide_banner", "-version"], { stdio: "ignore" })
+    .status === 0;
 
 const VIEWER = "11111111-1111-4111-8111-111111111111";
 const ITEM = "22222222-2222-4222-8222-222222222222";
@@ -225,14 +230,18 @@ describe("download subtitles", () => {
   const subtitle = (index: string) =>
     `/ownAPI/v1/downloads/items/${ITEM}/subtitles/${index}`;
 
-  it("serves a text track as WebVTT, by item and with no session", async () => {
-    const result = await call(
-      build({ allowDownloads: true, packaged: true }),
-      subtitle("3.vtt"),
-    );
-    expect(result).toMatchObject({ vtt: expect.stringContaining("Merhaba") });
-    expect((result as { vtt: string }).vtt).toMatch(/^WEBVTT/);
-  });
+  // The sidecar is SRT, so serving it runs FFmpeg; CI's runner has none.
+  it.skipIf(!ffmpegAvailable)(
+    "serves a text track as WebVTT, by item and with no session",
+    async () => {
+      const result = await call(
+        build({ allowDownloads: true, packaged: true }),
+        subtitle("3.vtt"),
+      );
+      expect(result).toMatchObject({ vtt: expect.stringContaining("Merhaba") });
+      expect((result as { vtt: string }).vtt).toMatch(/^WEBVTT/);
+    },
+  );
 
   it("serves a track only the package carries from its converted file", async () => {
     expect(

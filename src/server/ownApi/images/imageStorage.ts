@@ -466,7 +466,9 @@ export function createImageStorage({
     await mkdir(path.dirname(absolutePath), { recursive: true });
     const temporaryPath = `${absolutePath}.${process.pid}.${Date.now()}.tmp`;
     try {
-      const source = sharp(await readSource(image), { limitInputPixels: MAX_IMAGE_PIXELS });
+      const source = sharp(await readSource(image), {
+        limitInputPixels: MAX_IMAGE_PIXELS,
+      });
       const metadata = await source.metadata();
       if (!metadata.width || !metadata.height) {
         throw new Error("The logo has no size.");

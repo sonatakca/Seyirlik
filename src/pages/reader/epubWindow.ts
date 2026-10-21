@@ -443,12 +443,10 @@ export class WindowedViewManager extends ContinuousViewManager {
     // The edge itself can fall between two blocks; a little lower finds one.
     for (const below of ANCHOR_PROBES_PX) {
       const y = box.top + below;
-      const view = this.views
-        .displayed()
-        .find((candidate) => {
-          const rect = candidate.iframe?.getBoundingClientRect();
-          return rect && y >= rect.top && y < rect.bottom;
-        });
+      const view = this.views.displayed().find((candidate) => {
+        const rect = candidate.iframe?.getBoundingClientRect();
+        return rect && y >= rect.top && y < rect.bottom;
+      });
       const frame = view?.iframe;
       const document = frame?.contentDocument;
 

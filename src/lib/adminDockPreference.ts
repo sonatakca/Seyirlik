@@ -14,7 +14,9 @@ const CHANGED_EVENT = "seyirlik:admin-dock-changed";
 export function getAdminDockHidden(): boolean {
   if (typeof window === "undefined") return false;
   try {
-    return window.localStorage.getItem(ADMIN_DOCK_HIDDEN_STORAGE_KEY) === "true";
+    return (
+      window.localStorage.getItem(ADMIN_DOCK_HIDDEN_STORAGE_KEY) === "true"
+    );
   } catch {
     return false;
   }

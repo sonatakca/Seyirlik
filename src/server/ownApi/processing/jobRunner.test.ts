@@ -460,7 +460,10 @@ describe("processing job runner", () => {
       mkdirSync(own, { recursive: true });
       writeFileSync(
         path.join(own, ".seyirlik-job.json"),
-        JSON.stringify({ owner: "seyirlik-processing-job", workspaceId: "job-1" }),
+        JSON.stringify({
+          owner: "seyirlik-processing-job",
+          workspaceId: "job-1",
+        }),
       );
       const fingerprint = fake.latest().sourceFingerprint;
       const checkpoints = checkpointRoot(
@@ -470,7 +473,10 @@ describe("processing job runner", () => {
         fingerprint,
       );
       mkdirSync(checkpoints, { recursive: true });
-      writeFileSync(path.join(checkpoints, "epoch.m4s"), Buffer.alloc(1024 * 1024));
+      writeFileSync(
+        path.join(checkpoints, "epoch.m4s"),
+        Buffer.alloc(1024 * 1024),
+      );
       if (withPackage) {
         const assembled = path.join(
           own,
@@ -510,6 +516,37 @@ describe("processing job runner", () => {
       rmSync(own, { recursive: true, force: true });
     },
   );
+
+  /**
+   * MSI's rclone mount reported the registry as empty for a minute or more,
+   * and every queued title failed permanently with "Unexpected end of JSON
+   * input" while it lasted.
+   */
+  it("hands an unreadable registry back to the queue instead of failing the title", async () => {
+    const stateRoot = mkdtempSync(path.join(tmpdir(), "seyirlik-runner-"));
+    writeFileSync(path.join(stateRoot, "registry.json"), "");
+    const packageFn = vi.fn();
+    const localRunner = createProcessingJobRunner({
+      store: fake.store,
+      paths: { ...(paths as object), stateRoot } as never,
+      mediaRoot: "/media",
+      detectHardwareFn: vi.fn(async () => hardware) as never,
+      probeFn: vi.fn(async () => probe()) as never,
+      packageFn: packageFn as never,
+      registryUnreadableWaitMs: 0,
+    });
+
+    try {
+      const outcome = await localRunner.run(input);
+
+      expect(outcome.status).toBe("failed");
+      expect(outcome.retryable).toBe(true);
+      expect(outcome.errorMessage).toContain("could not be read");
+      expect(packageFn).not.toHaveBeenCalled();
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
 
   it("stops before encoding when the volume is too full", async () => {
     const packageFn = vi.fn();

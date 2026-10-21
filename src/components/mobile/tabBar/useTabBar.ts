@@ -145,7 +145,10 @@ export function useTabBarMotion({ tabs, inset }: Options): TabBarMotion {
       }
       const rightward = toLeft > fromLeft;
       animate(left, toLeft, { duration: rightward ? LAG : LEAD, ease: glide });
-      animate(right, toRight, { duration: rightward ? LEAD : LAG, ease: glide });
+      animate(right, toRight, {
+        duration: rightward ? LEAD : LAG,
+        ease: glide,
+      });
     },
     [left, reduced, right, target],
   );
@@ -175,7 +178,8 @@ export function useTabBarMotion({ tabs, inset }: Options): TabBarMotion {
         setHidden(false);
         return;
       }
-      travelled = Math.sign(delta) === Math.sign(travelled) ? travelled + delta : delta;
+      travelled =
+        Math.sign(delta) === Math.sign(travelled) ? travelled + delta : delta;
       if (travelled > 48) setHidden(true);
       else if (travelled < -24) setHidden(false);
     };
@@ -267,7 +271,8 @@ export function useTabBarMotion({ tabs, inset }: Options): TabBarMotion {
   // A tap on the tab you are already on takes you back to its top.
   const onTabClick = useCallback(
     (event: MouseEvent<HTMLAnchorElement>, index: number) => {
-      if (index !== activeIndex || location.pathname !== tabs[index]!.to) return;
+      if (index !== activeIndex || location.pathname !== tabs[index]!.to)
+        return;
       event.preventDefault();
       window.scrollTo({ top: 0, behavior: reduced ? "auto" : "smooth" });
     },

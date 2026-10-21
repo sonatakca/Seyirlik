@@ -25,7 +25,13 @@ const databaseUrl = process.env.SEYIRLIK_TEST_DATABASE_URL;
     await pool.query(
       `INSERT INTO item_images (id, item_id, image_type, content_hash, content_type, size_bytes, storage_key, source)
        VALUES ($1, $2, $3, $4, 'image/png', 1, $5, 'upload')`,
-      [randomUUID(), itemId, type, `${type}-${itemId}`, `${type}/${itemId}.png`],
+      [
+        randomUUID(),
+        itemId,
+        type,
+        `${type}-${itemId}`,
+        `${type}/${itemId}.png`,
+      ],
     );
   }
 
@@ -62,7 +68,10 @@ const databaseUrl = process.env.SEYIRLIK_TEST_DATABASE_URL;
       );
     await insert(ids.movie, "movie", "Dune");
     await insert(ids.series, "series", "Ezel");
-    await insert(ids.season, "season", "1. Sezon", { seriesId: ids.series, season: 1 });
+    await insert(ids.season, "season", "1. Sezon", {
+      seriesId: ids.series,
+      season: 1,
+    });
     await insert(ids.episode, "episode", "Pilot", {
       seriesId: ids.series,
       season: 1,

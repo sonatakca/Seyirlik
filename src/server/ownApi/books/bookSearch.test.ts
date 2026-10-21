@@ -227,7 +227,10 @@ describe("searching a book by meaning", () => {
     await Promise.all([search.search(BOOK, ""), search.search(other, "")]);
     await Promise.all([settle(search), settle(search, other)]);
     expect(most).toBe(1);
-    expect(engine.indexed).toEqual([BOOK.filePath, other.filePath]);
+    // Each search reads the disk before it queues, so either may go first.
+    expect([...engine.indexed].sort()).toEqual(
+      [BOOK.filePath, other.filePath].sort(),
+    );
   });
 
   it("prepares the library ahead of time, once", async () => {

@@ -1104,7 +1104,8 @@ function DriveUploadPanel({
       </div>
       {done ? (
         <span className="text-xs text-white/45">
-          {formatFileSize(upload.totalBytes)} · {t("processing.upload.serverNote")}
+          {formatFileSize(upload.totalBytes)} ·{" "}
+          {t("processing.upload.serverNote")}
         </span>
       ) : (
         <>

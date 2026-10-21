@@ -131,17 +131,84 @@ function parseRegistry(value: unknown): RenditionRegistry {
   return registry as RenditionRegistry;
 }
 
+/**
+ * The registry file exists but did not read back as JSON.
+ *
+ * Through an rclone mount this is usually a moment rather than a fault: the
+ * mount can report the file as zero bytes for a while, and the read comes back
+ * empty. It is never treated as an empty registry, because saving that would
+ * erase every package's identity.
+ */
+export class RenditionRegistryUnreadableError extends Error {
+  constructor(registryPath: string, cause: unknown) {
+    super(
+      `The rendition registry at ${registryPath} could not be read (${
+        cause instanceof Error ? cause.message : String(cause)
+      }).`,
+      { cause },
+    );
+    this.name = "RenditionRegistryUnreadableError";
+  }
+}
+
+export interface LoadRenditionRegistryOptions {
+  /** How long an empty or unparseable read keeps being retried. */
+  unreadableWaitMs?: number;
+  unreadablePollMs?: number;
+  signal?: AbortSignal;
+  /** Called once, on the first unreadable read that will be retried. */
+  onUnreadable?: (error: RenditionRegistryUnreadableError) => void;
+}
+
 export async function loadRenditionRegistry(
   registryPath: string,
+  options: LoadRenditionRegistryOptions = {},
 ): Promise<RenditionRegistry> {
-  try {
-    return parseRegistry(JSON.parse(await readFile(registryPath, "utf8")));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return createEmptyRenditionRegistry();
+  const { unreadableWaitMs = 0, unreadablePollMs = 5_000, signal } = options;
+  const deadline = Date.now() + unreadableWaitMs;
+  let reported = false;
+  for (;;) {
+    let text: string;
+    try {
+      text = await readFile(registryPath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return createEmptyRenditionRegistry();
+      }
+      throw error;
     }
-    throw error;
+    let value: unknown;
+    try {
+      value = JSON.parse(text);
+    } catch (error) {
+      const unreadable = new RenditionRegistryUnreadableError(
+        registryPath,
+        error,
+      );
+      if (signal?.aborted || Date.now() + unreadablePollMs > deadline) {
+        throw unreadable;
+      }
+      if (!reported) {
+        reported = true;
+        options.onUnreadable?.(unreadable);
+      }
+      await delay(unreadablePollMs, signal);
+      continue;
+    }
+    return parseRegistry(value);
   }
+}
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+    function done() {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    }
+  });
 }
 
 export async function saveRenditionRegistry(

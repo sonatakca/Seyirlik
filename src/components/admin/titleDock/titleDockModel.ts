@@ -190,7 +190,11 @@ export function subtitleStatus(detail: LibraryTitleDetail | null): DockStatus {
     return { tone: "attention", key: "titleDock.subtitles.none" };
   const list = languages(held, 2);
   return held.includes("tur")
-    ? { tone: "ok", key: "titleDock.subtitles.held", values: { languages: list } }
+    ? {
+        tone: "ok",
+        key: "titleDock.subtitles.held",
+        values: { languages: list },
+      }
     : {
         tone: "attention",
         key: "titleDock.subtitles.noTurkish",

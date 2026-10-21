@@ -134,7 +134,9 @@ describe("the title dock's processing status", () => {
       {
         movie: movie({
           packageState: "complete",
-          package: { rungs: [480, 1080, 720] } as ProcessingMovieTitle["package"],
+          package: {
+            rungs: [480, 1080, 720],
+          } as ProcessingMovieTitle["package"],
         }),
       },
       { kind: "movie", itemId: FILM },
@@ -161,7 +163,10 @@ describe("the title dock's processing status", () => {
       seriesId: "show",
       counts: counts({ total: 30, complete: 10 }),
       seasons: [
-        { seasonId: "s2", counts: counts({ total: 10, complete: 4, unavailable: 2 }) },
+        {
+          seasonId: "s2",
+          counts: counts({ total: 10, complete: 4, unavailable: 2 }),
+        },
       ],
     } as unknown as ProcessingSeries;
     const scope = { kind: "series", seriesId: "show", seasonId: "s2" } as const;
@@ -176,12 +181,18 @@ describe("the title dock's processing status", () => {
 
 describe("the title dock's other statuses", () => {
   it("wants Turkish subtitles, and says so when only others are on disk", () => {
-    expect(subtitleStatus(detail({ subtitleLanguages: ["eng"] }))).toMatchObject({
+    expect(
+      subtitleStatus(detail({ subtitleLanguages: ["eng"] })),
+    ).toMatchObject({
       tone: "attention",
       key: "titleDock.subtitles.noTurkish",
     });
-    expect(subtitleStatus(detail({ subtitleLanguages: ["eng", "tur"] })).tone).toBe("ok");
-    expect(subtitleStatus(detail({ pendingSubtitles: ["tur"] })).tone).toBe("busy");
+    expect(
+      subtitleStatus(detail({ subtitleLanguages: ["eng", "tur"] })).tone,
+    ).toBe("ok");
+    expect(subtitleStatus(detail({ pendingSubtitles: ["tur"] })).tone).toBe(
+      "busy",
+    );
     expect(subtitleStatus(detail({ files: 0 })).tone).toBe("idle");
   });
 
@@ -191,21 +202,33 @@ describe("the title dock's other statuses", () => {
       key: "titleDock.trickplay.partial",
       values: { done: 1, total: 3 },
     });
-    expect(trickplayStatus(detail({ files: 1, trickplayFiles: 1 })).tone).toBe("ok");
+    expect(trickplayStatus(detail({ files: 1, trickplayFiles: 1 })).tone).toBe(
+      "ok",
+    );
   });
 
   it("flags missing artwork, cover before logo", () => {
     expect(
       metadataStatus(
         detail({
-          artwork: { coverTag: null, logoTag: null, logoLayout: null, missing: true },
+          artwork: {
+            coverTag: null,
+            logoTag: null,
+            logoLayout: null,
+            missing: true,
+          },
         }),
       ).key,
     ).toBe("titleDock.metadata.noCover");
     expect(
       metadataStatus(
         detail({
-          artwork: { coverTag: "c", logoTag: null, logoLayout: null, missing: false },
+          artwork: {
+            coverTag: "c",
+            logoTag: null,
+            logoLayout: null,
+            missing: false,
+          },
         }),
       ).key,
     ).toBe("titleDock.metadata.noLogo");

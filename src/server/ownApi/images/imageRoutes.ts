@@ -148,8 +148,9 @@ export function createImageRoutes({
     // widest cached variant instead of a 404.
     const width =
       maxWidth ||
-      ((await stat(imageStorage.resolve(image.storageKey)).catch(() => null))
-        ?.isFile()
+      ((
+        await stat(imageStorage.resolve(image.storageKey)).catch(() => null)
+      )?.isFile()
         ? 0
         : MAX_ARTWORK_WIDTH);
     const requestedImage = width

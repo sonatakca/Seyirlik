@@ -1,10 +1,13 @@
-import { mkdtemp, rename, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rename, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   computeSourceFingerprint,
   createEmptyRenditionRegistry,
+  loadRenditionRegistry,
+  RenditionRegistryUnreadableError,
+  saveRenditionRegistry,
   upsertRegistrySource,
 } from "./registry";
 
@@ -122,5 +125,59 @@ describe("persistent rendition registry", () => {
     expect(updated.status).toBe("stale");
     expect(updated.adaptiveStatus).toBe("ready");
     expect(updated.adaptiveProfileVersion).toBe("cmaf-hls-aligned-v1");
+  });
+
+  it("never reads an empty registry file as an empty registry", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "seyirlik-registry-"));
+    const registryPath = path.join(root, "registry.json");
+    await writeFile(registryPath, "");
+
+    await expect(loadRenditionRegistry(registryPath)).rejects.toBeInstanceOf(
+      RenditionRegistryUnreadableError,
+    );
+  });
+
+  it("waits out a registry that reads back empty for a moment", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "seyirlik-registry-"));
+    const registryPath = path.join(root, "registry.json");
+    const saved = createEmptyRenditionRegistry();
+    upsertRegistrySource(saved, {
+      relativePath: "Movies/Dune.mp4",
+      size: 1,
+      mtimeMs: 1,
+      sourceFingerprint: "a".repeat(64),
+    });
+    await saveRenditionRegistry(registryPath, saved);
+    const full = await readFile(registryPath, "utf8");
+    await writeFile(registryPath, "");
+
+    let reported = 0;
+    const loading = loadRenditionRegistry(registryPath, {
+      unreadableWaitMs: 5_000,
+      unreadablePollMs: 20,
+      onUnreadable: () => {
+        reported += 1;
+      },
+    });
+    setTimeout(() => void writeFile(registryPath, full), 60);
+
+    const loaded = await loading;
+    expect(loaded.items.map((item) => item.relativePath)).toEqual([
+      "Movies/Dune.mp4",
+    ]);
+    expect(reported).toBe(1);
+  });
+
+  it("gives up once the wait is over", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "seyirlik-registry-"));
+    const registryPath = path.join(root, "registry.json");
+    await writeFile(registryPath, '{"schemaVersion": 1, "ite');
+
+    await expect(
+      loadRenditionRegistry(registryPath, {
+        unreadableWaitMs: 60,
+        unreadablePollMs: 20,
+      }),
+    ).rejects.toThrow(/could not be read \(.*JSON/);
   });
 });

@@ -62,7 +62,9 @@ export function shareText(
       };
     case "episode": {
       const position = [
-        item.parentIndexNumber !== null ? `${item.parentIndexNumber}. Sezon` : "",
+        item.parentIndexNumber !== null
+          ? `${item.parentIndexNumber}. Sezon`
+          : "",
         item.indexNumber !== null ? `${item.indexNumber}. Bölüm` : "",
       ]
         .filter(Boolean)

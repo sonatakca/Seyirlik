@@ -297,7 +297,10 @@ export async function probeSourceVideoEndSeconds({
   /** Injected by tests; see `BoundedRunner`. */
   run?: BoundedRunner;
 }): Promise<number | null> {
-  const start = Math.max(0, containerDurationSeconds - VIDEO_END_WINDOW_SECONDS);
+  const start = Math.max(
+    0,
+    containerDurationSeconds - VIDEO_END_WINDOW_SECONDS,
+  );
   let output: string;
   try {
     output = await runProcess(

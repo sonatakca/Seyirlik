@@ -21,7 +21,10 @@ export function AdminDockSwitch() {
   return (
     <div className="px-3 py-2.5">
       <div className="flex items-center gap-3">
-        <p id={labelId} className="min-w-0 flex-1 text-sm font-bold text-white/80">
+        <p
+          id={labelId}
+          className="min-w-0 flex-1 text-sm font-bold text-white/80"
+        >
           {t("titleDock.setting.label")}
         </p>
         <button
