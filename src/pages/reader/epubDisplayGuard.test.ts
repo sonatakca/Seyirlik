@@ -33,9 +33,16 @@ describe("guardCfiLocation", () => {
   it("keeps epub.js's locationOf from throwing on an overrunning CFI", () => {
     const doc = bareSection();
     const contents = new Contents(doc, doc.body, "/6/6", 2);
+    // epub.js polls for resizes by measuring a Range on the next frame, which
+    // jsdom cannot do; a slow runner reached that frame and failed the suite.
+    contents.textWidth = contents.textHeight = () => 0;
 
-    expect(() => contents.locationOf(SAVED)).toThrow();
-    guardCfiLocation();
-    expect(() => contents.locationOf(SAVED)).not.toThrow();
+    try {
+      expect(() => contents.locationOf(SAVED)).toThrow();
+      guardCfiLocation();
+      expect(() => contents.locationOf(SAVED)).not.toThrow();
+    } finally {
+      contents.destroy();
+    }
   });
 });
