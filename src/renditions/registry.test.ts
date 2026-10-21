@@ -171,7 +171,7 @@ describe("persistent rendition registry", () => {
   it("gives up once the wait is over", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "seyirlik-registry-"));
     const registryPath = path.join(root, "registry.json");
-    await writeFile(registryPath, "{\"schemaVersion\": 1, \"ite");
+    await writeFile(registryPath, '{"schemaVersion": 1, "ite');
 
     await expect(
       loadRenditionRegistry(registryPath, {
