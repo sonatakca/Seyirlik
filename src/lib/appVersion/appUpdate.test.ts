@@ -149,9 +149,7 @@ describe("app update", () => {
     });
     vi.stubGlobal("caches", storage);
 
-    expect(await purgeStaleCaches()).toEqual([
-      "workbox-runtime-old",
-    ]);
+    expect(await purgeStaleCaches()).toEqual(["workbox-runtime-old"]);
     expect(storage.names()).toEqual([
       "seyirlik-offline-v1",
       "workbox-precache-v2-https://x/",

@@ -22,7 +22,9 @@ export function MobileTabBar() {
     <nav
       style={{ ["--tabbar-ground" as string]: "#0a0b0c" }}
       className={`fixed inset-x-0 bottom-0 z-50 touch-none select-none pb-[env(safe-area-inset-bottom)] transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] landscape:hidden focus-within:!translate-y-0 focus-within:!opacity-100 motion-reduce:transition-opacity ${
-        bar.hidden ? "pointer-events-none translate-y-full motion-reduce:translate-y-0 motion-reduce:opacity-0" : "translate-y-0"
+        bar.hidden
+          ? "pointer-events-none translate-y-full motion-reduce:translate-y-0 motion-reduce:opacity-0"
+          : "translate-y-0"
       }`}
     >
       {/* The wall: near-black glass, its top rim a whisper of hairline

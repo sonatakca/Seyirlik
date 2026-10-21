@@ -42,7 +42,11 @@ function renderAt(path: string, routePath: string, props: object) {
   );
 }
 
-const FILM_ROUTE = ["/movies/film-1", "/movies/:libraryId", { mode: "library", libraryRouteKind: "movie" }] as const;
+const FILM_ROUTE = [
+  "/movies/film-1",
+  "/movies/:libraryId",
+  { mode: "library", libraryRouteKind: "movie" },
+] as const;
 
 describe("the title admin dock gate", () => {
   beforeEach(() => {
@@ -104,10 +108,14 @@ describe("the DevTools switch", () => {
 
     await userEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-checked", "false");
-    expect(window.localStorage.getItem(ADMIN_DOCK_HIDDEN_STORAGE_KEY)).toBe("true");
+    expect(window.localStorage.getItem(ADMIN_DOCK_HIDDEN_STORAGE_KEY)).toBe(
+      "true",
+    );
 
     await userEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-checked", "true");
-    expect(window.localStorage.getItem(ADMIN_DOCK_HIDDEN_STORAGE_KEY)).toBeNull();
+    expect(
+      window.localStorage.getItem(ADMIN_DOCK_HIDDEN_STORAGE_KEY),
+    ).toBeNull();
   });
 });

@@ -460,7 +460,10 @@ describe("processing job runner", () => {
       mkdirSync(own, { recursive: true });
       writeFileSync(
         path.join(own, ".seyirlik-job.json"),
-        JSON.stringify({ owner: "seyirlik-processing-job", workspaceId: "job-1" }),
+        JSON.stringify({
+          owner: "seyirlik-processing-job",
+          workspaceId: "job-1",
+        }),
       );
       const fingerprint = fake.latest().sourceFingerprint;
       const checkpoints = checkpointRoot(
@@ -470,7 +473,10 @@ describe("processing job runner", () => {
         fingerprint,
       );
       mkdirSync(checkpoints, { recursive: true });
-      writeFileSync(path.join(checkpoints, "epoch.m4s"), Buffer.alloc(1024 * 1024));
+      writeFileSync(
+        path.join(checkpoints, "epoch.m4s"),
+        Buffer.alloc(1024 * 1024),
+      );
       if (withPackage) {
         const assembled = path.join(
           own,

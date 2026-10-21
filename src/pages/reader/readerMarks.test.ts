@@ -231,10 +231,16 @@ describe("reader marks", () => {
         expect(result.current.marks.map((entry) => entry.id)).toEqual(["a"]),
       );
 
-      server.rows.set("b", { changedAt: MADE, mark: mark("b", { progress: 0.5 }) });
+      server.rows.set("b", {
+        changedAt: MADE,
+        mark: mark("b", { progress: 0.5 }),
+      });
       interval.tick();
       await waitFor(() =>
-        expect(result.current.marks.map((entry) => entry.id)).toEqual(["a", "b"]),
+        expect(result.current.marks.map((entry) => entry.id)).toEqual([
+          "a",
+          "b",
+        ]),
       );
 
       const shown = result.current.marks;

@@ -36,7 +36,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { RenditionPaths } from "../analysis";
 import { computeSourceFingerprint } from "../registry";
 import { prepareProcessingStorageRoles } from "../storageRoles";
-import { hasVerifiedScratchPackage, packageAdaptiveRendition } from "./packager";
+import {
+  hasVerifiedScratchPackage,
+  packageAdaptiveRendition,
+} from "./packager";
 import { runFfmpeg } from "../processor";
 import {
   readTitlePackageManifest,

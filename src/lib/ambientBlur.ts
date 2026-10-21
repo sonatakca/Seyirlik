@@ -69,9 +69,7 @@ function boxPass(
     const start = horizontal ? line * width * 4 : line * 4;
     for (let channel = 0; channel < 4; channel += 1) {
       const at = (i: number) =>
-        source[
-          start + Math.min(length - 1, Math.max(0, i)) * step + channel
-        ];
+        source[start + Math.min(length - 1, Math.max(0, i)) * step + channel];
       let sum = 0;
       for (let i = -radius; i <= radius; i += 1) sum += at(i);
       for (let i = 0; i < length; i += 1) {
@@ -108,9 +106,15 @@ export function saturatePixels(
 ): void {
   const s = amount;
   const m = [
-    0.213 + 0.787 * s, 0.715 - 0.715 * s, 0.072 - 0.072 * s,
-    0.213 - 0.213 * s, 0.715 + 0.285 * s, 0.072 - 0.072 * s,
-    0.213 - 0.213 * s, 0.715 - 0.715 * s, 0.072 + 0.928 * s,
+    0.213 + 0.787 * s,
+    0.715 - 0.715 * s,
+    0.072 - 0.072 * s,
+    0.213 - 0.213 * s,
+    0.715 + 0.285 * s,
+    0.072 - 0.072 * s,
+    0.213 - 0.213 * s,
+    0.715 - 0.715 * s,
+    0.072 + 0.928 * s,
   ];
   for (let i = 0; i < pixels.length; i += 4) {
     const r = pixels[i];
@@ -124,7 +128,8 @@ export function saturatePixels(
 
 async function bake(source: string, look: AmbientLook): Promise<string> {
   const response = await fetch(source, { credentials: "include" });
-  if (!response.ok) throw new Error(`Ambient request failed: ${response.status}`);
+  if (!response.ok)
+    throw new Error(`Ambient request failed: ${response.status}`);
   const bitmap = await createImageBitmap(await response.blob());
   try {
     const width = Math.min(bitmap.width, AMBIENT_SOURCE_WIDTH);
@@ -163,7 +168,10 @@ async function bake(source: string, look: AmbientLook): Promise<string> {
 const MAX_BAKED = 24;
 const baked = new Map<string, Promise<string>>();
 
-export function bakeAmbient(source: string, look: AmbientLook): Promise<string> {
+export function bakeAmbient(
+  source: string,
+  look: AmbientLook,
+): Promise<string> {
   const key = `${source}|${Math.round(look.blurPx)}|${look.saturation}|${Math.round(look.drawnWidth / 32)}`;
   const known = baked.get(key);
   if (known) {

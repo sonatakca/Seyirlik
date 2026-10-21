@@ -57,9 +57,7 @@ describe("the link preview's page", () => {
     expect(html).toContain(
       `<meta property="og:title" content="Dune: Part Two (2024) &lt;script&gt;" />`,
     );
-    expect(html).toContain(
-      `content="Paul &quot;Muad&#39;Dib&quot; Atreides"`,
-    );
+    expect(html).toContain(`content="Paul &quot;Muad&#39;Dib&quot; Atreides"`);
     expect(html).toContain(
       `<meta property="og:image" content="${API}/ownAPI/v1/share/items/${ID}/image?v=abc" />`,
     );
@@ -71,10 +69,17 @@ describe("the link preview's page", () => {
   it("keeps the rainbow preview for a title with no card", () => {
     const html = renderSharePreview(
       `/read/${ID}`,
-      { kind: "book", title: "Kürk Mantolu Madonna", description: null, image: null },
+      {
+        kind: "book",
+        title: "Kürk Mantolu Madonna",
+        description: null,
+        image: null,
+      },
       API,
     );
-    expect(html).toContain(`content="https://www.seyirlik.org/seyirlik-preview.png"`);
+    expect(html).toContain(
+      `content="https://www.seyirlik.org/seyirlik-preview.png"`,
+    );
     expect(html).toContain(`content="Kürk Mantolu Madonna"`);
     expect(html).not.toContain(`name="description"`);
   });
@@ -82,7 +87,9 @@ describe("the link preview's page", () => {
   it("falls back to the site's own preview when the server cannot say", async () => {
     const down = vi.fn().mockRejectedValue(new Error("offline"));
     expect(await lookUpCard(ID, API, down)).toBeNull();
-    const missing = vi.fn().mockResolvedValue(new Response("{}", { status: 404 }));
+    const missing = vi
+      .fn()
+      .mockResolvedValue(new Response("{}", { status: 404 }));
     expect(await lookUpCard(ID, API, missing)).toBeNull();
     // An image the server did not serve itself is never put in a preview.
     const foreign = vi.fn().mockResolvedValue(
@@ -91,7 +98,12 @@ describe("the link preview's page", () => {
           kind: "movie",
           title: "x",
           description: null,
-          image: { path: "https://evil.example/a.jpg", width: 1, height: 1, type: "image/jpeg" },
+          image: {
+            path: "https://evil.example/a.jpg",
+            width: 1,
+            height: 1,
+            type: "image/jpeg",
+          },
         },
       }),
     );

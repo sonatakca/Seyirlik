@@ -35,4 +35,3 @@ export function zoomableImageAt(target: Element | null): ReaderImage | null {
     naturalHeight: element.naturalHeight,
   };
 }
-

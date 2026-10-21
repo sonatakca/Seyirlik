@@ -248,7 +248,12 @@ describe("image storage", () => {
     const storage = createImageStorage({ imageRoot, mediaRoot });
     const cover = await storage.storeTitleArtwork(
       await sharp({
-        create: { width: 1000, height: 1500, channels: 3, background: "#7c2d12" },
+        create: {
+          width: 1000,
+          height: 1500,
+          channels: 3,
+          background: "#7c2d12",
+        },
       })
         .jpeg()
         .toBuffer(),

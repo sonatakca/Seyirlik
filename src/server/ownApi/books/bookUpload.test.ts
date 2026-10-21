@@ -65,7 +65,9 @@ describe("reading an EPUB", () => {
     const book = epub(
       `<dc:title>Kürk Mantolu Madonna</dc:title><dc:description>&lt;p&gt;Raif Efendi&amp;apos;nin &lt;b&gt;defteri&lt;/b&gt;.&lt;/p&gt;&lt;p&gt;Berlin, 1928.&lt;/p&gt;</dc:description>`,
     );
-    expect(readEpub(book).description).toBe("Raif Efendi'nin defteri. Berlin, 1928.");
+    expect(readEpub(book).description).toBe(
+      "Raif Efendi'nin defteri. Berlin, 1928.",
+    );
   });
 
   it("decodes entities and ignores Calibre's unknown-date placeholder", () => {

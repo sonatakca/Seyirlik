@@ -120,7 +120,9 @@ const primaryButton =
 function useStatusText() {
   const { t } = useLanguage();
   return (status: DockStatus) =>
-    status.values ? formatTemplate(t(status.key), status.values) : t(status.key);
+    status.values
+      ? formatTemplate(t(status.key), status.values)
+      : t(status.key);
 }
 
 /**
@@ -252,7 +254,10 @@ export default function TitleAdminDock({
     const rect = root.getBoundingClientRect();
     const shift = rect.bottom - (floor - INLINE_GAP_PX);
     if (Math.abs(shift) > 1)
-      window.scrollBy({ top: shift, behavior: reduceMotion ? "auto" : "smooth" });
+      window.scrollBy({
+        top: shift,
+        behavior: reduceMotion ? "auto" : "smooth",
+      });
     setInlinePanelMax(
       Math.max(
         INLINE_PANEL_MIN_PX,
@@ -368,7 +373,9 @@ export default function TitleAdminDock({
       ref={rootRef}
       data-testid="title-admin-dock"
       className={
-        inline ? "relative mx-auto mt-4 w-[min(22rem,calc(100%-2rem))]" : "relative"
+        inline
+          ? "relative mx-auto mt-4 w-[min(22rem,calc(100%-2rem))]"
+          : "relative"
       }
     >
       {/*
@@ -428,11 +435,16 @@ export default function TitleAdminDock({
                 ? { maxHeight: inlinePanelMax ?? undefined }
                 : {
                     x: "-50%",
-                    maxHeight: Math.max(240, Math.min(480, place.stageHeight - 300)),
+                    maxHeight: Math.max(
+                      240,
+                      Math.min(480, place.stageHeight - 300),
+                    ),
                   }
             }
             className={`hero-dock-bar absolute bottom-[calc(100%+10px)] !block overflow-y-auto !rounded-[26px] !p-4 text-white sm:!p-5 ${
-              inline ? "left-0 w-full" : "left-1/2 w-[min(34rem,calc(100vw-4rem))]"
+              inline
+                ? "left-0 w-full"
+                : "left-1/2 w-[min(34rem,calc(100vw-4rem))]"
             }`}
           >
             <PanelHeader
@@ -538,11 +550,7 @@ function SectionBody({
 
   if (section === "processing")
     return (
-      <ProcessingBody
-        scope={scope}
-        processing={processing}
-        reload={reload}
-      />
+      <ProcessingBody scope={scope} processing={processing} reload={reload} />
     );
 
   if (!detail)
@@ -944,7 +952,10 @@ function ProcessingBody({
             disabled={busy}
             onClick={() =>
               void run(async () => {
-                await enqueueProcessing(movie.itemId, movie.mediaFileId ?? undefined);
+                await enqueueProcessing(
+                  movie.itemId,
+                  movie.mediaFileId ?? undefined,
+                );
                 return t("titleDock.processing.queuedNotice");
               })
             }

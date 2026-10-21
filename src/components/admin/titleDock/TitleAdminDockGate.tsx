@@ -47,8 +47,7 @@ function useDockScope({
     return libraryRouteKind === "movie" && libraryId
       ? { kind: "movie", itemId: libraryId }
       : null;
-  if (mode === "series")
-    return seriesId ? { kind: "series", seriesId } : null;
+  if (mode === "series") return seriesId ? { kind: "series", seriesId } : null;
   if (!seasonId) return null;
   if (seriesId) return { kind: "series", seriesId, seasonId };
   return resolvedSeries?.seasonId === seasonId && resolvedSeries.seriesId

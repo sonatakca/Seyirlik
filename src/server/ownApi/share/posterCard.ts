@@ -271,12 +271,13 @@ export async function renderPosterCard(options: {
   }
 
   const radius = (CARD_RADIUS * width) / REFERENCE_CARD_WIDTH;
-  if (!options.square) layers.push({
-    input: Buffer.from(
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="${width}" height="${height}" rx="${radius}" ry="${radius}"/></svg>`,
-    ),
-    blend: "dest-in",
-  });
+  if (!options.square)
+    layers.push({
+      input: Buffer.from(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="${width}" height="${height}" rx="${radius}" ry="${radius}"/></svg>`,
+      ),
+      blend: "dest-in",
+    });
 
   return sharp(options.cover, { limitInputPixels: MAX_INPUT_PIXELS })
     .rotate()
@@ -304,7 +305,9 @@ export async function renderShareCard(options: {
   logo: Buffer;
   layout: LogoLayout | null;
 }): Promise<{ jpeg: Buffer; width: number; height: number }> {
-  const meta = await sharp(options.cover, { limitInputPixels: MAX_INPUT_PIXELS })
+  const meta = await sharp(options.cover, {
+    limitInputPixels: MAX_INPUT_PIXELS,
+  })
     .rotate()
     .metadata();
   const coverWidth = meta.autoOrient?.width ?? meta.width;

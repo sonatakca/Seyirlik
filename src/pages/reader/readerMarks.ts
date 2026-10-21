@@ -211,70 +211,73 @@ export function useReaderMarks(itemId: string | undefined): {
   }, []);
   const flightRef = useRef<{ again: boolean } | null>(null);
 
-  const sync = useCallback((options: { keepalive?: boolean } = {}) => {
-    const item = itemRef.current;
-    if (!item) {
-      return;
-    }
-    // One exchange at a time per page; a change made meanwhile goes next.
-    if (flightRef.current) {
-      flightRef.current.again = true;
-      return;
-    }
-    const flight = { again: false };
-    flightRef.current = flight;
+  const sync = useCallback(
+    (options: { keepalive?: boolean } = {}) => {
+      const item = itemRef.current;
+      if (!item) {
+        return;
+      }
+      // One exchange at a time per page; a change made meanwhile goes next.
+      if (flightRef.current) {
+        flightRef.current.again = true;
+        return;
+      }
+      const flight = { again: false };
+      flightRef.current = flight;
 
-    void (async () => {
-      try {
-        for (;;) {
-          const sent = readStored(item).pending.slice(0, MAX_MARK_CHANGES);
-          let server: ReaderBookmark[];
-          try {
-            server =
-              sent.length > 0
-                ? await sendBookMarkChanges(item, sent, options)
-                : await getBookMarks(item);
-          } catch (error) {
-            // A change the server refuses as invalid can never be stored, and
-            // would hold back every change after it. Anything else (offline,
-            // signed out, the server down) is tried again later.
-            if (
-              !(error instanceof OwnApiClientError) ||
-              !REFUSED_STATUSES.has(error.status) ||
-              sent.length === 0
-            ) {
-              return;
+      void (async () => {
+        try {
+          for (;;) {
+            const sent = readStored(item).pending.slice(0, MAX_MARK_CHANGES);
+            let server: ReaderBookmark[];
+            try {
+              server =
+                sent.length > 0
+                  ? await sendBookMarkChanges(item, sent, options)
+                  : await getBookMarks(item);
+            } catch (error) {
+              // A change the server refuses as invalid can never be stored, and
+              // would hold back every change after it. Anything else (offline,
+              // signed out, the server down) is tried again later.
+              if (
+                !(error instanceof OwnApiClientError) ||
+                !REFUSED_STATUSES.has(error.status) ||
+                sent.length === 0
+              ) {
+                return;
+              }
+              const stored = readStored(item);
+              stored.pending = stored.pending.filter(
+                (change) => !isSent(change, sent),
+              );
+              writeStored(item, stored);
+              continue;
             }
+
+            // Read again: changes made while this was in flight stay unsent.
             const stored = readStored(item);
+            stored.marks = server;
             stored.pending = stored.pending.filter(
               (change) => !isSent(change, sent),
             );
             writeStored(item, stored);
-            continue;
+            if (itemRef.current === item) {
+              showMarks(viewMarks(stored));
+            }
+            if (stored.pending.length === 0 || sent.length === 0) {
+              return;
+            }
           }
-
-          // Read again: changes made while this was in flight stay unsent.
-          const stored = readStored(item);
-          stored.marks = server;
-          stored.pending = stored.pending.filter(
-            (change) => !isSent(change, sent),
-          );
-          writeStored(item, stored);
-          if (itemRef.current === item) {
-            showMarks(viewMarks(stored));
-          }
-          if (stored.pending.length === 0 || sent.length === 0) {
-            return;
+        } finally {
+          flightRef.current = null;
+          if (flight.again) {
+            sync();
           }
         }
-      } finally {
-        flightRef.current = null;
-        if (flight.again) {
-          sync();
-        }
-      }
-    })();
-  }, [showMarks]);
+      })();
+    },
+    [showMarks],
+  );
 
   const commit = useCallback(
     (change: (current: ReaderBookmark[]) => ReaderBookmark[]) => {

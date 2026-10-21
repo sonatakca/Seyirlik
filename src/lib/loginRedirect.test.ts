@@ -30,9 +30,7 @@ describe("loginRedirect", () => {
       "javascript:alert(1)",
       "home",
     ]) {
-      expect(afterLoginPath(`?next=${encodeURIComponent(next)}`)).toBe(
-        "/home",
-      );
+      expect(afterLoginPath(`?next=${encodeURIComponent(next)}`)).toBe("/home");
     }
   });
 });
