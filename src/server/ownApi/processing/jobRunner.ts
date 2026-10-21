@@ -26,6 +26,7 @@ import { probeMediaFile } from "../../../renditions/probe";
 import { RenditionLockHeldError } from "../../../renditions/locks";
 import {
   loadRenditionRegistry,
+  RenditionRegistryUnreadableError,
   saveRenditionRegistry,
   upsertRegistrySource,
 } from "../../../renditions/registry";
@@ -170,6 +171,13 @@ export const LIVE_PUBLISH_INTERVAL_MS = 250;
 export const LIVE_HEARTBEAT_INTERVAL_MS = 2_000;
 
 /**
+ * How long a job waits for a registry that reads back empty before giving the
+ * attempt back to the queue. Observed outages on MSI's mount lasted about a
+ * minute; the queue's own backoff covers anything longer.
+ */
+export const REGISTRY_UNREADABLE_WAIT_MS = 2 * 60_000;
+
+/**
  * Runs one processing job from analysis to publication.
  *
  * Every stage transition and every progress update goes through the store, so
@@ -193,6 +201,8 @@ export interface ProcessingJobRunnerDeps {
   probeFn?: typeof probeMediaFile;
   /** Free bytes on the output volume. Injected so tests can force a shortfall. */
   freeBytesFn?: typeof freeBytesOn;
+  /** Overrides `REGISTRY_UNREADABLE_WAIT_MS`; injected in tests. */
+  registryUnreadableWaitMs?: number;
   /** Whether a verified package is already on scratch. Injected in tests. */
   verifiedPackageFn?: typeof hasVerifiedScratchPackage;
   /** Bytes of an unverified scratch package a rebuild removes. Injected in tests. */
@@ -435,6 +445,7 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
     packageFn = packageAdaptiveRendition,
     probeFn = probeMediaFile,
     freeBytesFn = freeBytesOn,
+    registryUnreadableWaitMs = REGISTRY_UNREADABLE_WAIT_MS,
     verifiedPackageFn = hasVerifiedScratchPackage,
     replaceablePackageFn = replaceableScratchPackageBytes,
     storageAvailableFn,
@@ -1294,7 +1305,27 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
      * package in a directory nothing ever looks in.
      */
     const registryPath = path.join(paths.stateRoot, "registry.json");
-    const registry = await loadRenditionRegistry(registryPath);
+    /*
+     * MSI reads the registry through its own rclone mount, which has reported
+     * the file as empty for a minute or more after it changed. Failing on the
+     * first empty read emptied the whole queue into ENCODE_FAILED, one title
+     * every five seconds, so the read waits it out here and, past that, the
+     * failure is retryable.
+     */
+    const registry = await loadRenditionRegistry(registryPath, {
+      unreadableWaitMs: registryUnreadableWaitMs,
+      ...(input.signal ? { signal: input.signal } : {}),
+      onUnreadable: (error) => {
+        void store
+          .appendEvent({
+            processingJobId: job.id,
+            stage: "waiting",
+            level: "warning",
+            message: `${error.message} Waiting for it to read back before encoding.`,
+          })
+          .catch(() => undefined);
+      },
+    });
     const registryItem = upsertRegistrySource(registry, {
       relativePath: input.relativePath,
       size: input.sizeBytes,
@@ -2809,8 +2840,9 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
         /*
          * Nothing here is allowed to become a queue-level retry on its own.
          *
-         * The one condition that genuinely deserves another pass is another
-         * attempt holding the rendition lock, and it says so by its type.
+         * The conditions that genuinely deserve another pass say so by their
+         * type: another attempt holding the rendition lock, and a registry
+         * that read back empty through the mount before any work began.
          * Everything else — a dropped database connection, a bug, an
          * unhandled rejection from a write — leaves a job row an operator can
          * see and retry deliberately. Requeuing automatically is what sent a
@@ -2821,7 +2853,9 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
           error instanceof Error
             ? error.message
             : "Processing stopped unexpectedly.";
-        const retryable = error instanceof RenditionLockHeldError;
+        const retryable =
+          error instanceof RenditionLockHeldError ||
+          error instanceof RenditionRegistryUnreadableError;
         await store
           .update(input.processingJobId, {
             state: "failed",
