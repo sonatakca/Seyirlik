@@ -73,7 +73,16 @@ async function sampleFrames(
   const frames: { at: number; control: Box; pile: Box; gap: number }[] = [];
   const started = performance.now();
   await new Promise<void>((resolve) => {
-    const tick = () => {
+    /*
+     * Read at the end of each frame, once every frame callback has run. The
+     * pile is moved by a compositor animation, which a read during the frame
+     * already sees at this frame's time; the control is written by
+     * framer-motion's own frame callback, which can run after this one, so a
+     * read inside the frame could see the control a frame behind the pile and
+     * report a gap that was never painted.
+     */
+    const tick = () => setTimeout(atFrameEnd, 0);
+    const atFrameEnd = () => {
       const reading = read();
       if (reading)
         frames.push({

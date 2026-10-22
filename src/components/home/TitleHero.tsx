@@ -5,12 +5,8 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  animate,
-  motion,
-  useMotionValue,
-  useReducedMotion,
-} from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
+import { Curve } from "../../lib/timeline/curve";
 import { Video, VideoOff, Volume2, VolumeX } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
 import { getHeroPreviewUrl } from "../../lib/mediaApi";
@@ -121,37 +117,41 @@ export function TitleHero({
   const [isOverviewFocused, setIsOverviewFocused] = useState(false);
   const isOverviewOpen =
     isOverviewHovered || isOverviewPinned || isOverviewFocused;
-  const overview = useMotionValue(0);
+  const [overview] = useState(() => new Curve(0));
   const overviewLift = layout?.overviewLift ?? 0;
   const closeOverview = useCallback(() => {
     setIsOverviewHovered(false);
     setIsOverviewPinned(false);
     setIsOverviewFocused(false);
   }, []);
-  // One value drives the title's rise and growth and the copy's, as at home.
-  useEffect(
-    () =>
-      overview.on("change", (value) => {
-        composition.titleY.set(-value * overviewLift);
-        composition.titleScale.set(
-          titleScale.rest + (titleScale.open - titleScale.rest) * value,
-        );
-      }),
-    [composition, overview, overviewLift, titleScale],
-  );
   // The composition is made before the stage is measured; once its shape is
-  // known the title takes that shape's resting size.
+  // known the title takes that shape's resting size and rise.
   useEffect(() => {
+    const value = overview.get();
+    composition.titleY.set(-value * overviewLift);
     composition.titleScale.set(
-      titleScale.rest + (titleScale.open - titleScale.rest) * overview.get(),
+      titleScale.rest + (titleScale.open - titleScale.rest) * value,
     );
-  }, [composition, overview, titleScale]);
+  }, [composition, overview, overviewLift, titleScale]);
+  // One course drives the title's rise and growth and the copy's, as at home:
+  // each is linear in the overview, so it is tweened on the same duration and
+  // curve from where it stands.
   useEffect(() => {
-    const controls = animate(overview, isOverviewOpen ? 1 : 0, {
+    const open = isOverviewOpen ? 1 : 0;
+    const options = {
       duration: reduceMotion ? 0 : HERO_MOTION.overviewS,
       ease: HERO_MOTION.travelEase,
-    });
+    };
+    const controls = overview.tween(open, options);
+    composition.titleY.tween(-open * overviewLift, options);
+    composition.titleScale.tween(
+      titleScale.rest + (titleScale.open - titleScale.rest) * open,
+      options,
+    );
     return () => controls.stop();
+    // Only the overview opening or closing sets it moving; a new shape is
+    // taken up by the effect above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOverviewOpen, overview, reduceMotion]);
 
   // ---------------------------------------------------------- the trailer
@@ -228,9 +228,8 @@ export function TitleHero({
       duration: reduceMotion ? 0 : 0.8,
       ease: HERO_MOTION.travelEase,
     };
-    void animate(composition.trailer, isTrailerPlaying ? 1 : 0, options);
-    void animate(
-      composition.titleScale,
+    void composition.trailer.tween(isTrailerPlaying ? 1 : 0, options);
+    void composition.titleScale.tween(
       isTrailerPlaying ? titleScale.trailer : titleScale.rest,
       options,
     );

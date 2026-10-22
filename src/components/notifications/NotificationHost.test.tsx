@@ -14,14 +14,22 @@ vi.mock("../../i18n/LanguageContext", () => ({
 }));
 
 let reducedMotion = true;
+const presenceModes: Array<string | undefined> = [];
+/** A transform keyframe, or the last of a list of them. */
+const lastTransform = (target: unknown) => {
+  const transform = (target as { transform?: string | string[] })?.transform;
+  return String(Array.isArray(transform) ? transform.at(-1) : transform);
+};
 vi.mock("framer-motion", () => ({
-  AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
-  // The lane travel the host puts on its own root: a value it writes to and an
-  // animation it may stop. Neither moves anything here, and both have to exist
-  // for the host to render at all.
-  useMotionValue: (initial: number) => {
-    let current = initial;
-    return { get: () => current, set: (next: number) => (current = next) };
+  AnimatePresence: ({
+    children,
+    mode,
+  }: {
+    children: React.ReactNode;
+    mode?: string;
+  }) => {
+    presenceModes.push(mode);
+    return children;
   },
   animate: () => ({ stop: () => {} }),
   motion: {
@@ -48,10 +56,8 @@ vi.mock("framer-motion", () => ({
             ),
           ) as React.CSSProperties
         }
-        data-initial-y={String((initial as { y?: number })?.y)}
-        data-initial-x={String((initial as { x?: number })?.x)}
-        data-exit-y={String((exit as { y?: number })?.y)}
-        data-exit-height={String((exit as { height?: number })?.height)}
+        data-initial-transform={lastTransform(initial)}
+        data-exit-transform={lastTransform(exit)}
         data-initial-opacity={String(
           (initial as { opacity?: number })?.opacity,
         )}
@@ -442,16 +448,16 @@ describe("notification host", () => {
 
   it("gives its row back on the way out rather than at the end of it", () => {
     // A card that fades in place and only then stops taking up space is what
-    // left the controls above the column sitting still and then jumping.
+    // left the controls above the column sitting still and then jumping. A
+    // leaving card steps out of the flow at once and fades where it stood.
+    presenceModes.length = 0;
     render(<NotificationHost />);
     act(() => {
       notify({ title: "Saved", tone: "success" });
     });
 
-    expect(screen.getByText("Saved").closest("[data-card]")).toHaveAttribute(
-      "data-exit-height",
-      "0",
-    );
+    expect(screen.getByText("Saved").closest("[data-card]")).toBeTruthy();
+    expect(presenceModes).toContain("popLayout");
   });
 });
 
@@ -464,9 +470,18 @@ it.each([true, false])(
       notify({ title: "Motion" });
     });
     const card = screen.getByText("Motion").closest("[data-card]");
-    expect(card).toHaveAttribute("data-initial-y", reduce ? "0" : "16");
-    expect(card).toHaveAttribute("data-initial-x", reduce ? "0" : "16");
-    expect(card).toHaveAttribute("data-exit-y", reduce ? "0" : "10");
+    expect(card).toHaveAttribute(
+      "data-initial-transform",
+      reduce
+        ? "translate(0px, 0px) scale(1)"
+        : "translate(16px, 16px) scale(0.94)",
+    );
+    expect(card).toHaveAttribute(
+      "data-exit-transform",
+      reduce
+        ? "translate(0px, 0px) scale(1)"
+        : "translate(24px, 10px) scale(0.94)",
+    );
   },
 );
 

@@ -8,13 +8,10 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
-import {
-  AnimatePresence,
-  motion,
-  useTransform,
-  type MotionValue,
-} from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
+import { useBake } from "../../lib/timeline/bake";
+import type { ValueSource } from "../../lib/timeline/curve";
 import { useLanguage } from "../../i18n/LanguageContext";
 import { formatRuntime } from "../../lib/format";
 import { getItemDisplayMetadata } from "../../lib/itemMetadataPreferences";
@@ -92,7 +89,7 @@ export function HeroCopyBlock({
    * covers the title's whole box.
    */
   titleSize?: DrawnSize | null;
-  overview: MotionValue<number>;
+  overview: ValueSource;
   isOverviewOpen: boolean;
   /** The pointer has rested on the title (true), or left it (false). */
   onHoverIntent: (open: boolean) => void;
@@ -370,7 +367,7 @@ function HeroCopy({
   factsRegion: SampleRegion;
   overviewId: string;
   /** 0–1: the overview opening under the facts. */
-  overview: MotionValue<number>;
+  overview: ValueSource;
   isOverviewOpen: boolean;
   onToggleOverview: () => void;
   /** Where "Details" goes when the title's details are further down this page. */
@@ -406,17 +403,32 @@ function HeroCopy({
     .filter(Boolean)
     .join("  ·  ");
 
-  const factsY = useTransform(
-    overview,
-    (value) => -value * layout.overviewLift,
+  // The facts ride up with the title as the overview opens, and the
+  // overview comes up from under them as they rise off it: both baked from
+  // the overview's course, so the compositor plays them.
+  const factsRowRef = useRef<HTMLDivElement>(null);
+  const overviewTextRef = useRef<HTMLParagraphElement | null>(null);
+  const overviewTravel = layout.overviewHeight + OVERVIEW_SHADE_FOOT_PX;
+  useBake(
+    [overview],
+    (at) => {
+      const value = overview.get(at);
+      return [
+        [
+          factsRowRef.current,
+          { transform: `translateY(${-value * layout.overviewLift}px)` },
+        ],
+        [
+          overviewTextRef.current,
+          {
+            transform: `translateY(${overviewTravel * (1 - value)}px)`,
+            opacity: value,
+          },
+        ],
+      ];
+    },
+    [layout.overviewLift, overviewTravel, Boolean(metadata.overview)],
   );
-  // The overview comes up from under the facts as they rise off it.
-  const overviewY = useTransform(
-    overview,
-    [0, 1],
-    [layout.overviewHeight + OVERVIEW_SHADE_FOOT_PX, 0],
-  );
-  const overviewOpacity = overview;
 
   // The copy changes with the title by fading in place: only the title and
   // the artwork travel.
@@ -449,9 +461,10 @@ function HeroCopy({
     >
       {/* Fixed rows: the title above sits at the same height for every
           title. The facts ride up with the title as the overview opens. */}
-      <motion.div
+      <div
+        ref={factsRowRef}
         className="absolute inset-x-0 top-0"
-        style={{ height: COPY_ROWS.factsPx, y: factsY }}
+        style={{ height: COPY_ROWS.factsPx }}
       >
         <motion.p
           ref={factsRef}
@@ -461,7 +474,7 @@ function HeroCopy({
         >
           {facts}
         </motion.p>
-      </motion.div>
+      </div>
       {metadata.overview ? (
         <div
           id={overviewId}
@@ -485,19 +498,20 @@ function HeroCopy({
             padding: `${OVERVIEW_SHADE_ROOM_PX}px ${OVERVIEW_SHADE_ROOM_PX}px ${OVERVIEW_SHADE_FOOT_PX}px`,
           }}
         >
-          <motion.p
-            ref={overviewRef}
+          <p
+            ref={(element) => {
+              overviewRef(element);
+              overviewTextRef.current = element;
+            }}
             className="line-clamp-3 max-w-[46ch] font-semibold"
             style={{
               ...copyTextStyle(shade, 0.8),
               fontSize: layout.overviewFontPx,
               lineHeight: COPY_ROWS.overviewLineHeight,
-              y: overviewY,
-              opacity: overviewOpacity,
             }}
           >
             {metadata.overview}
-          </motion.p>
+          </p>
         </div>
       ) : null}
       {layout.form === "tall" ? (

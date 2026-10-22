@@ -7,14 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  animate,
-  motion,
-  useMotionValue,
-  useReducedMotion,
-  useTransform,
-  type AnimationPlaybackControls,
-} from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import {
   ChevronLeft,
   ChevronRight,
@@ -27,6 +20,8 @@ import {
 } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
 import { DwellClock } from "../../lib/dwellClock";
+import { useBake } from "../../lib/timeline/bake";
+import { Curve, derive, type TweenControls } from "../../lib/timeline/curve";
 import { getItemDisplayMetadata } from "../../lib/itemMetadataPreferences";
 import {
   claimBottomChrome,
@@ -152,7 +147,7 @@ function wait(ms: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 }
 
-function run(controls: AnimationPlaybackControls): Promise<void> {
+function run(controls: TweenControls): Promise<void> {
   return controls.finished.then(
     () => undefined,
     () => undefined,
@@ -228,13 +223,14 @@ export function HomeHero({
   const [isOverviewFocused, setIsOverviewFocused] = useState(false);
   const isOverviewOpen =
     isOverviewHovered || isOverviewPinned || isOverviewFocused;
-  const overview = useMotionValue(0);
+  const [overview] = useState(() => new Curve(0));
   const overviewLiftRef = useRef(0);
   // On a tall stage the overview opens across the queue's row, so the queue
   // steps aside for it on the same value.
   const isTallRef = useRef(false);
-  const queueFade = useTransform(overview, (value) =>
-    isTallRef.current ? 1 - value : 1,
+  const queueFade = useMemo(
+    () => derive([overview], (value) => (isTallRef.current ? 1 - value : 1)),
+    [overview],
   );
   const closeOverview = useCallback(() => {
     setIsOverviewHovered(false);
@@ -324,12 +320,12 @@ export function HomeHero({
             duration: reduceMotion ? 0 : HERO_MOTION.slideS,
             ease: HERO_MOTION.slideEase,
           };
-          void animate(existing.x, target.x, options);
-          void animate(existing.y, target.y, options);
-          void animate(existing.scale, target.scale, options);
+          void existing.x.tween(target.x, options);
+          void existing.y.tween(target.y, options);
+          void existing.scale.tween(target.scale, options);
         } else {
           const entry = motionFor(id, target, 1);
-          void animate(entry.dim, QUEUE_DIM, {
+          void entry.dim.tween(QUEUE_DIM, {
             duration: reduceMotion ? 0 : 0.4,
             ease: "linear",
           });
@@ -414,7 +410,7 @@ export function HomeHero({
       const entry = motions.current.get(items[index]!.Id);
       if (!entry) return;
       place(entry, slotPlacement(size, slots[position]!));
-      void animate(entry.dim, QUEUE_DIM, {
+      void entry.dim.tween(QUEUE_DIM, {
         duration: reduceMotion ? 0 : 0.5,
         delay: reduceMotion ? 0 : HERO_MOTION.openQueueDelayS + position * 0.06,
         ease: "easeOut",
@@ -480,9 +476,9 @@ export function HomeHero({
         to: Placement,
         options: Timing,
       ) => {
-        animations.push(run(animate(entry.x, to.x, options)));
-        void animate(entry.y, to.y, options);
-        void animate(entry.scale, to.scale, options);
+        animations.push(run(entry.x.tween(to.x, options)));
+        void entry.y.tween(to.y, options);
+        void entry.scale.tween(to.scale, options);
       };
       /**
        * The queue slides as one row: every miniature that moves along it,
@@ -509,7 +505,7 @@ export function HomeHero({
         };
         for (const { entry, to } of moves) {
           moveTo(entry, to, options);
-          void animate(entry.dim, QUEUE_DIM, options);
+          void entry.dim.tween(QUEUE_DIM, options);
         }
       };
       /** A title joining the queue, waiting in line beyond the right edge. */
@@ -540,14 +536,14 @@ export function HomeHero({
         // The incoming title grows out of its slot over the stage.
         const rising = motions.current.get(incoming.Id)!;
         moveTo(rising, stagePlacement(), liftOptions);
-        void animate(rising.dim, 0, { duration: lift * 0.5, ease: "linear" });
+        void rising.dim.tween(0, { duration: lift * 0.5, ease: "linear" });
 
         // The outgoing one recedes beneath it.
         const under = motions.current.get(outgoing.Id)!;
-        void animate(under.x, pushedBackPlacement(size).x, liftOptions);
-        void animate(under.y, pushedBackPlacement(size).y, liftOptions);
-        void animate(under.scale, pushedBackPlacement(size).scale, liftOptions);
-        void animate(under.dim, HERO_MOTION.pushBackDim, liftOptions);
+        void under.x.tween(pushedBackPlacement(size).x, liftOptions);
+        void under.y.tween(pushedBackPlacement(size).y, liftOptions);
+        void under.scale.tween(pushedBackPlacement(size).scale, liftOptions);
+        void under.dim.tween(HERO_MOTION.pushBackDim, liftOptions);
 
         // Titles jumped over sink out of the queue.
         for (const id of leaving) {
@@ -558,12 +554,11 @@ export function HomeHero({
             duration: reduceMotion ? 0 : HERO_MOTION.dropS,
             ease: HERO_MOTION.travelEase,
           };
-          void animate(
-            entry.y,
+          void entry.y.tween(
             droppedPlacement(size, slots[position]!).y,
             options,
           );
-          void animate(entry.dim, 1, options);
+          void entry.dim.tween(1, options);
         }
 
         // The rest close up, and newcomers line up behind them.
@@ -619,15 +614,14 @@ export function HomeHero({
         ]);
         const shrinking = motions.current.get(outgoing.Id)!;
         moveTo(shrinking, slotPlacement(size, slots[0]!), liftOptions);
-        void animate(shrinking.dim, QUEUE_DIM, liftOptions);
-        void animate(
-          shrinking.titleScale,
+        void shrinking.dim.tween(QUEUE_DIM, liftOptions);
+        void shrinking.titleScale.tween(
           titleScaleRef.current.rest,
           liftOptions,
         );
-        void animate(shrinking.trailer, 0, liftOptions);
+        void shrinking.trailer.tween(0, liftOptions);
         moveTo(previous, stagePlacement(), liftOptions);
-        void animate(previous.dim, 0, liftOptions);
+        void previous.dim.tween(0, liftOptions);
 
         // The queue makes room at its head; its last title slides out past
         // the edge, on the same clock, so the row stays a row.
@@ -665,28 +659,32 @@ export function HomeHero({
     [closeOverview, hasOpened, items, motionFor, clock, reduceMotion, total],
   );
 
-  // The overview opening: one value drives the title's rise and growth, the
-  // facts' rise and the text coming up under them, so none can disagree. It
-  // lifts whichever title holds the stage until the next one settles, so a
-  // closing overview carries the outgoing title's logo back down with it.
-  useEffect(
-    () =>
-      overview.on("change", (value) => {
-        const id = items[stageIndexRef.current]?.Id;
-        const entry = id ? motions.current.get(id) : undefined;
-        if (!entry) return;
-        const scales = titleScaleRef.current;
-        entry.titleY.set(-value * overviewLiftRef.current);
-        entry.titleScale.set(scales.rest + (scales.open - scales.rest) * value);
-      }),
-    [items, overview],
-  );
+  // The overview opening: one course drives the title's rise and growth, the
+  // facts' rise and the text coming up under them, so none can disagree. Each
+  // is linear in the overview, so tweening it on the same duration and curve
+  // from where it stands keeps it exactly in step. It lifts whichever title
+  // holds the stage, so a closing overview carries the outgoing title's logo
+  // back down with it.
   useEffect(() => {
-    const controls = animate(overview, isOverviewOpen ? 1 : 0, {
+    const open = isOverviewOpen ? 1 : 0;
+    const options = {
       duration: reduceMotion ? 0 : HERO_MOTION.overviewS,
       ease: HERO_MOTION.travelEase,
-    });
+    };
+    const controls = overview.tween(open, options);
+    const id = items[stageIndexRef.current]?.Id;
+    const entry = id ? motions.current.get(id) : undefined;
+    if (entry) {
+      const scales = titleScaleRef.current;
+      entry.titleY.tween(-open * overviewLiftRef.current, options);
+      entry.titleScale.tween(
+        scales.rest + (scales.open - scales.rest) * open,
+        options,
+      );
+    }
     return () => controls.stop();
+    // `items` is read for the stage's title at the moment the overview moves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOverviewOpen, overview, reduceMotion]);
 
   // Artwork for the titles about to arrive, fetched before they slide in, so
@@ -775,9 +773,8 @@ export function HomeHero({
       duration: reduceMotion ? 0 : 0.8,
       ease: HERO_MOTION.travelEase,
     };
-    void animate(entry.trailer, isTrailerPlaying ? 1 : 0, options);
-    void animate(
-      entry.titleScale,
+    void entry.trailer.tween(isTrailerPlaying ? 1 : 0, options);
+    void entry.titleScale.tween(
       isTrailerPlaying
         ? titleScaleRef.current.trailer
         : titleScaleRef.current.rest,
@@ -860,7 +857,7 @@ export function HomeHero({
     }
     const entry = stageEntry();
     if (entry)
-      void animate(entry.x, 0, {
+      void entry.x.tween(0, {
         duration: reduceMotion ? 0 : 0.32,
         ease: HERO_MOTION.settleEase,
       });
@@ -890,6 +887,14 @@ export function HomeHero({
   controlsBottomRef.current = headSlot ? headSlot.y + headSlot.height + 12 : 0;
   const copyItem = copyItemId ? (itemsById.get(copyItemId) ?? null) : null;
 
+  // The queue's furniture steps aside with the queue, on the same course.
+  const furnitureRef = useRef<HTMLDivElement>(null);
+  useBake(
+    [queueFade],
+    (at) => [[furnitureRef.current, { opacity: queueFade.get(at) }]],
+    [isTall, hasOpened],
+  );
+
   const hover = (id: string, active: boolean) => {
     if (busyRef.current) return;
     const entry = motions.current.get(id);
@@ -902,7 +907,7 @@ export function HomeHero({
       duration: reduceMotion ? 0 : 0.3,
       ease: HERO_MOTION.settleEase,
     };
-    void animate(entry.y, slot.y - lift, options);
+    void entry.y.tween(slot.y - lift, options);
   };
 
   if (total === 0) {
@@ -1035,9 +1040,9 @@ export function HomeHero({
           together while the overview is open across its row. */}
       {/* Stepped aside for the overview, the queue is out of reach
           altogether: no focus, nothing for assistive technology. */}
-      <motion.div
+      <div
+        ref={furnitureRef}
         className="pointer-events-none absolute inset-0 z-[6]"
-        style={{ opacity: queueFade }}
         {...(isQueueAside ? { inert: "" } : {})}
       >
         {stage && hasOpened
@@ -1206,7 +1211,7 @@ export function HomeHero({
             </span>
           </motion.div>
         ) : null}
-      </motion.div>
+      </div>
 
       {/* Loading: the skeleton, piece for piece where the hero's own pieces
           will be, fading off as the first artwork fades in. */}

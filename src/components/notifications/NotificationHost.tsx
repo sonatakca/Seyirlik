@@ -13,7 +13,6 @@ import {
   AnimatePresence,
   animate,
   motion,
-  useMotionValue,
   useReducedMotion,
 } from "framer-motion";
 import {
@@ -51,6 +50,9 @@ import {
 } from "../../lib/layout/bottomChrome";
 import { useLanguage } from "../../i18n/LanguageContext";
 import { formatTemplate } from "../../lib/format";
+import { move } from "../../lib/compositorMotion";
+import { useBake } from "../../lib/timeline/bake";
+import { Curve, type TweenControls } from "../../lib/timeline/curve";
 
 /**
  * A spinner whose painted weight stays centred throughout a rotation.
@@ -609,8 +611,11 @@ const SINE_OUT: [number, number, number, number] = [0.61, 1, 0.88, 1];
 function useLaneTravel(
   hostRef: RefObject<HTMLDivElement | null>,
   reduceMotion: boolean,
-): ReturnType<typeof useMotionValue<number>> {
-  const lift = useMotionValue(0);
+): Curve {
+  // A Curve rather than a motion value: its journeys are baked onto the
+  // compositor (see NotificationHost), so the pile travels at the display's
+  // full rate whatever the page under it is doing.
+  const [lift] = useState(() => new Curve(0));
 
   useLayoutEffect(() => {
     const host = hostRef.current;
@@ -664,7 +669,13 @@ function useLaneTravel(
       return { lift: -Math.max(0, band.top - floor), side: "above" };
     };
 
-    let travel: { stop: () => void } | undefined;
+    let travel: TweenControls | undefined;
+    const journey = (controls: TweenControls) => {
+      travel = controls;
+      void controls.finished.then(() => {
+        if (travel === controls) travel = undefined;
+      });
+    };
     let side: "floor" | "above" = "floor";
 
     /*
@@ -731,13 +742,12 @@ function useLaneTravel(
          * ease that starts at rest never gets going, which is the stall this
          * replaced; an ease-out moves on its first frame.
          */
-        travel = animate(lift, next.lift, {
-          duration: journeyS(distance),
-          ease: SINE_OUT,
-          onComplete: () => {
-            travel = undefined;
-          },
-        });
+        journey(
+          lift.tween(next.lift, {
+            duration: journeyS(distance),
+            ease: SINE_OUT,
+          }),
+        );
         return;
       }
 
@@ -750,16 +760,15 @@ function useLaneTravel(
        * is the pile's journey alone.
        */
       const handover = mode === "handover";
-      travel = animate(lift, next.lift, {
-        duration: handover
-          ? Math.max(BOTTOM_CHROME_MOTION.durationS, journeyS(distance))
-          : journeyS(distance),
-        delay: handover ? BOTTOM_CHROME_MOTION.delayS : 0,
-        ease: handover ? BOTTOM_CHROME_MOTION.ease : SINE_IN_OUT,
-        onComplete: () => {
-          travel = undefined;
-        },
-      });
+      journey(
+        lift.tween(next.lift, {
+          duration: handover
+            ? Math.max(BOTTOM_CHROME_MOTION.durationS, journeyS(distance))
+            : journeyS(distance),
+          delay: handover ? BOTTOM_CHROME_MOTION.delayS : 0,
+          ease: handover ? BOTTOM_CHROME_MOTION.ease : SINE_IN_OUT,
+        }),
+      );
     };
 
     /*
@@ -805,6 +814,101 @@ function useLaneTravel(
   }, [hostRef, lift, reduceMotion]);
 
   return lift;
+}
+
+/**
+ * Cards gliding to where a change of the column put them, on the compositor.
+ *
+ * After every commit each card's place is read off its layout, and a card
+ * that moved is carried from where it was to where it is by one Web Animation
+ * added onto whatever it is already playing. The place is taken from the
+ * pile's foot, where the pile is anchored: cards folding away above the front
+ * one shorten the column and move its top, but not the front card. offsetTop
+ * ignores the transforms the cards wear; it is turned into a place on screen
+ * through the column's origin marker, which wears none, and the lane's lift
+ * moves the foot and the cards alike, so it is never mistaken for a journey.
+ * Between commits a ResizeObserver and the column's scroll keep the places
+ * current — a detail opening grows a card without a render, and a scroll is
+ * not a journey — so one always starts from where the card was really drawn.
+ *
+ * This replaces framer-motion's layout projection, which measured the same
+ * thing but ran every frame of the journey on the main thread, and the cards'
+ * animated heights, which re-laid out the whole column on every frame: a
+ * height now changes at once, and its neighbours glide.
+ */
+function useColumnGlide(
+  listRef: RefObject<HTMLDivElement | null>,
+  timing: { duration: number; easing: string },
+  disabled: boolean,
+  onSettled: () => void,
+) {
+  const places = useRef(new Map<string, number>());
+  const read = useCallback(() => {
+    const list = listRef.current;
+    const next = new Map<string, number>();
+    if (!list) return next;
+    const origin = list.querySelector<HTMLElement>(
+      ":scope > [data-column-origin]",
+    );
+    const foot = (
+      list.closest("[data-notification-host]") ?? list
+    ).getBoundingClientRect().bottom;
+    // Where the column's layout top would be drawn, measured from the foot.
+    const top = origin
+      ? origin.getBoundingClientRect().top - origin.offsetTop - foot
+      : list.getBoundingClientRect().top - list.scrollTop - foot;
+    for (const card of list.querySelectorAll<HTMLElement>(
+      ":scope > [data-card]",
+    )) {
+      const id = card.dataset.cardId;
+      if (id) next.set(id, top + card.offsetTop);
+    }
+    return next;
+  }, [listRef]);
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const previous = places.current;
+    const next = read();
+    places.current = next;
+    if (!list || disabled || typeof Element.prototype.animate !== "function")
+      return;
+    for (const card of list.querySelectorAll<HTMLElement>(
+      ":scope > [data-card]",
+    )) {
+      const id = card.dataset.cardId;
+      const from = id ? previous.get(id) : undefined;
+      const to = id ? next.get(id) : undefined;
+      if (from === undefined || to === undefined) continue;
+      const shift = from - to;
+      if (Math.abs(shift) < 0.5) continue;
+      const glide = card.animate(
+        [
+          { transform: `translateY(${shift}px)` },
+          { transform: "translateY(0px)" },
+        ],
+        { ...timing, composite: "add" },
+      );
+      void glide.finished.then(onSettled, () => undefined);
+    }
+  });
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list || typeof ResizeObserver === "undefined") return;
+    const refresh = () => {
+      places.current = read();
+    };
+    const observer = new ResizeObserver(refresh);
+    observer.observe(list);
+    for (const card of list.querySelectorAll(":scope > [data-card]"))
+      observer.observe(card);
+    list.addEventListener("scroll", refresh, { passive: true });
+    return () => {
+      observer.disconnect();
+      list.removeEventListener("scroll", refresh);
+    };
+  });
 }
 
 /**
@@ -898,6 +1002,13 @@ export function NotificationHost() {
   );
   const hostRef = useRef<HTMLDivElement>(null);
   const laneLift = useLaneTravel(hostRef, Boolean(shouldReduceMotion));
+  useBake(
+    [laneLift],
+    (at) => [
+      [hostRef.current, { transform: `translateY(${laneLift.get(at)}px)` }],
+    ],
+    [],
+  );
   /** The card a press is about, and where its top edge was when pressed. */
   const pinned = useRef<{ id: string; top: number } | null>(null);
   const announced = useRef(new Map<string, string>());
@@ -1178,9 +1289,17 @@ export function NotificationHost() {
   );
   const hasPeek = stack.entries.some((entry) => entry.isCollapsed);
   const holdsExpandedViewport = isExpanded || isPileClosing;
+  useColumnGlide(
+    listRef,
+    isPileClosing
+      ? { duration: 200, easing: "cubic-bezier(0.4, 0, 0.2, 1)" }
+      : { duration: 340, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+    Boolean(shouldReduceMotion),
+    overrun.remeasure,
+  );
 
   return (
-    <motion.div
+    <div
       ref={hostRef}
       data-notification-host
       tabIndex={-1}
@@ -1224,7 +1343,6 @@ export function NotificationHost() {
        * and is capped short of it, so the pile never becomes the page it is
        * reporting on. Both limits live in `--notification-pile-max-height`.
        */
-      style={{ y: laneLift }}
       className="pointer-events-none fixed bottom-[var(--notification-lane-floor)] right-[max(1rem,env(safe-area-inset-right))] z-[200] flex max-h-[var(--notification-pile-max-height)] flex-col-reverse items-end gap-1"
     >
       <div
@@ -1294,7 +1412,7 @@ export function NotificationHost() {
                 }
               : {}),
           }}
-          className={`scrollbar-none flex min-h-0 w-fit min-w-[16rem] max-w-[min(30rem,calc(100vw-2rem-env(safe-area-inset-right)))] flex-col-reverse items-stretch overflow-y-auto overflow-x-hidden overscroll-contain ${
+          className={`scrollbar-none relative flex min-h-0 w-fit min-w-[16rem] max-w-[min(30rem,calc(100vw-2rem-env(safe-area-inset-right)))] flex-col-reverse items-stretch overflow-y-auto overflow-x-hidden overscroll-contain ${
             /* A column that runs out of room should run out of view rather
                than be sliced through — but only at an end something is
                actually running past. */
@@ -1320,7 +1438,14 @@ export function NotificationHost() {
            * rows — so lifting the pin here changes nothing and leaves nothing
            * to animate.
            */}
-          <AnimatePresence initial={false} onExitComplete={releasePileWidth}>
+          {/* Where the column's layout meets the screen: a mark that never
+              moves with a transform (see useColumnGlide). */}
+          <div aria-hidden="true" data-column-origin className="h-0 shrink-0" />
+          <AnimatePresence
+            initial={false}
+            mode="popLayout"
+            onExitComplete={releasePileWidth}
+          >
             {stack.entries.map((entry) => (
               <motion.div
                 key={entry.notification.id}
@@ -1329,10 +1454,16 @@ export function NotificationHost() {
                  * size means animating a scale — which stretches every glyph
                  * inside it on the way there and squashes them on the way back.
                  * The box takes its new size at once; what animates is where the
-                 * cards around it sit.
+                 * cards around it sit (useColumnGlide). Collapsed cards overlap
+                 * the one in front instead of taking a row of their own.
                  */
-                layout={shouldReduceMotion ? false : "position"}
-                style={{ zIndex: entry.zIndex }}
+                style={{
+                  zIndex: entry.zIndex,
+                  ...(entry.isCollapsed ||
+                  (isPileClosing && !entry.isColumnBottom)
+                    ? { height: 0 }
+                    : {}),
+                }}
                 data-card
                 data-card-id={entry.notification.id}
                 aria-hidden={entry.isCollapsed || undefined}
@@ -1343,37 +1474,39 @@ export function NotificationHost() {
                 // Movement is skipped when motion is reduced, but the fade stays:
                 // appearing and disappearing without one is what reads as a
                 // glitch rather than as a change.
+                // Whole transforms, which framer-motion hands to the compositor.
                 initial={{
                   opacity: 0,
-                  y: shouldReduceMotion ? 0 : 16,
-                  x: shouldReduceMotion ? 0 : 16,
-                  scale: shouldReduceMotion ? 1 : 0.94,
+                  transform: shouldReduceMotion
+                    ? move()
+                    : move({ x: 16, y: 16, scale: 0.94 }),
                 }}
                 animate={{
                   opacity:
                     isPileClosing && !entry.isColumnBottom ? 0 : entry.opacity,
-                  x: 0,
-                  y: entry.offsetY,
-                  scale: shouldReduceMotion ? 1 : entry.scale,
-                  // Collapsed cards overlap the one in front instead of taking a
-                  // row of their own.
-                  height:
-                    entry.isCollapsed ||
-                    (isPileClosing && !entry.isColumnBottom)
-                      ? 0
-                      : "auto",
+                  transform: move({
+                    y: entry.offsetY,
+                    scale: shouldReduceMotion ? 1 : entry.scale,
+                  }),
                 }}
                 /*
-                 * A card on its way out gives its row back as it goes. Fading in
-                 * place and then vanishing is what made the controls above the
-                 * column sit still through the whole animation and then jump.
+                 * A card on its way out gives its row back at once and fades
+                 * where it stood, out of the flow (mode="popLayout"), while the
+                 * cards it leaves glide into the room. Fading in place and then
+                 * vanishing is what made the controls above the column sit
+                 * still through the whole animation and then jump.
                  */
                 exit={{
                   opacity: 0,
-                  y: shouldReduceMotion ? 0 : 10,
-                  x: shouldReduceMotion ? 0 : 24,
-                  scale: shouldReduceMotion ? 1 : 0.94,
-                  height: 0,
+                  transform: [
+                    move({
+                      y: entry.offsetY,
+                      scale: shouldReduceMotion ? 1 : entry.scale,
+                    }),
+                    shouldReduceMotion
+                      ? move({ y: entry.offsetY })
+                      : move({ x: 24, y: 10, scale: 0.94 }),
+                  ],
                 }}
                 transition={{
                   duration: shouldReduceMotion
@@ -1396,7 +1529,6 @@ export function NotificationHost() {
                    stops rather than left waiting for an observer that will
                    never fire. */
                 onAnimationComplete={overrun.remeasure}
-                onLayoutAnimationComplete={overrun.remeasure}
               >
                 <div
                   className={
@@ -1518,6 +1650,6 @@ export function NotificationHost() {
           ) : null}
         </div>
       ) : null}
-    </motion.div>
+    </div>
   );
 }
