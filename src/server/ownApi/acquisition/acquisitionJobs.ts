@@ -19,15 +19,34 @@ import {
   planRetry,
   type FailureClass,
 } from "./acquisitionState";
+import {
+  MAX_AUTOMATIC_REPLACEMENTS,
+  type AcquisitionFallback,
+} from "./acquisitionFallback";
+import type { BlocklistRepository } from "../releases/blocklistRepository";
+import type { JobQueue } from "../tasks/jobQueue";
 
 export const ACQUISITION_JOB_TYPES = {
   submit: "acquisition.submit",
   reconcile: "acquisition.reconcile",
+  /** Chooses and starts the next release for one that cannot complete. */
+  replace: "acquisition.replace",
 } as const;
+
+/**
+ * What the automatic replacement needs. Absent, a failed release waits for
+ * an operator, which is how it always worked.
+ */
+export interface AutomaticReplacement {
+  readonly fallback: AcquisitionFallback;
+  readonly blocklist: BlocklistRepository;
+  readonly queue: JobQueue;
+}
 
 export function createAcquisitionJobHandlers(
   service: AcquisitionService,
   repository: AcquisitionRepository,
+  automatic?: AutomaticReplacement,
 ): Record<string, JobHandler> {
   const submit: JobHandler = async ({ job, reportProgress }) => {
     const acquisitionId = job.payload.acquisitionId;
@@ -79,19 +98,131 @@ export function createAcquisitionJobHandlers(
         }
       } else if (plan.action === "try-another-release") {
         /*
-         * Left as it is, on purpose. Choosing the next candidate means running
-         * a search and the decision engine again, which belongs to whoever
-         * asks for it — automatically or by hand — and not to a reconciler
-         * whose job is to observe.
+         * Not chosen here. Choosing the next candidate means running a search
+         * and the decision engine again, which belongs to its own job — so a
+         * slow indexer cannot hold up the reconciler, and a job that fails is
+         * retried by the queue without the reconciler deciding anything.
+         * The key collapses the request every tick makes onto the one job.
          */
+        if (automatic) {
+          await automatic.queue.enqueue({
+            jobType: ACQUISITION_JOB_TYPES.replace,
+            payload: { acquisitionId: record.id },
+            dedupeKey: `${ACQUISITION_JOB_TYPES.replace}:${record.id}`,
+          });
+        }
         abandoned += 1;
       }
     }
     return { ...result, retried, awaitingAlternative: abandoned };
   };
 
+  /**
+   * Replaces a release that will never complete with the next acceptable one.
+   *
+   * The search runs before anything is changed, so an unreachable indexer
+   * fails this job (and the queue retries it) while the acquisition stays
+   * exactly as SABnzbd left it. Only once there is an answer is the release
+   * blocklisted, its SABnzbd job and partial files removed, and the
+   * replacement started. A title gets at most `MAX_AUTOMATIC_REPLACEMENTS`;
+   * after that, or when nothing acceptable is left, the acquisition stays
+   * failed and blocklisted for an operator to decide.
+   */
+  const replace: JobHandler = async ({ job, reportProgress }) => {
+    if (!automatic) {
+      throw new PermanentJobError("Automatic replacement is not configured.");
+    }
+    const acquisitionId = job.payload.acquisitionId;
+    if (typeof acquisitionId !== "string") {
+      throw new PermanentJobError("The task payload names no acquisition.");
+    }
+    const record = await repository.get(acquisitionId);
+    if (
+      !record ||
+      record.state !== "failed" ||
+      !record.failureClass ||
+      dispositionFor(record.failureClass as FailureClass) !==
+        "try-another-release"
+    ) {
+      // Somebody already dealt with it, by hand or by an earlier run.
+      return { skipped: true };
+    }
+
+    const giveUp = async (detail: string) => {
+      await automatic.blocklist.add({
+        indexerId: record.indexerId,
+        releaseGuid: record.releaseGuid,
+        releaseTitle: record.releaseTitle,
+        targetKind: record.targetKind,
+        targetTitle: record.targetTitle,
+        reason: record.failureClass ?? "unknown",
+        acquisitionId,
+      });
+      await service.blocklist(acquisitionId);
+      await repository.update(
+        acquisitionId,
+        "failed",
+        { failureClass: "blocklisted", failureDetail: detail },
+        detail,
+      );
+      return { replaced: false, detail };
+    };
+
+    const context = await repository.searchContext(acquisitionId);
+    const policy = context?.profileId
+      ? await automatic.fallback.policyFor(context.profileId)
+      : null;
+    if (!context || !policy) {
+      return giveUp(
+        "No quality profile is recorded for it, so another release cannot be chosen automatically.",
+      );
+    }
+    if (
+      (await repository.replacementsFor(acquisitionId)) >=
+      MAX_AUTOMATIC_REPLACEMENTS
+    ) {
+      return giveUp(
+        `${MAX_AUTOMATIC_REPLACEMENTS} replacements have already failed for this title; choose another release by hand.`,
+      );
+    }
+
+    await reportProgress(0.2, "Searching for another release");
+    const choice = await automatic.fallback.choose(context.target, policy, {
+      indexerId: record.indexerId,
+      releaseGuid: record.releaseGuid,
+    });
+    if (choice.kind === "none") {
+      return giveUp("Searched again automatically; nothing else acceptable.");
+    }
+
+    await automatic.blocklist.add({
+      indexerId: record.indexerId,
+      releaseGuid: record.releaseGuid,
+      releaseTitle: record.releaseTitle,
+      targetKind: record.targetKind,
+      targetTitle: record.targetTitle,
+      reason: record.failureClass,
+      acquisitionId,
+    });
+    // Marks it blocklisted and removes its SABnzbd job and partial files.
+    await service.blocklist(acquisitionId);
+    const applied = await automatic.fallback.apply(
+      acquisitionId,
+      choice,
+      policy,
+    );
+    return {
+      replaced: applied !== null,
+      created: applied?.created.length ?? 0,
+      ...(choice.kind === "episodes"
+        ? { episodes: choice.picks.length, missingEpisodes: choice.missing }
+        : {}),
+    };
+  };
+
   return {
     [ACQUISITION_JOB_TYPES.submit]: submit,
     [ACQUISITION_JOB_TYPES.reconcile]: reconcile,
+    [ACQUISITION_JOB_TYPES.replace]: replace,
   };
 }

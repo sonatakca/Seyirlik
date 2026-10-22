@@ -338,6 +338,23 @@ describe("native authentication HTTP endpoints", () => {
     ).toBe(413);
   });
 
+  it("hands an empty password to the service, for a passwordless account", async () => {
+    const auth = fakeAuth();
+    const { baseUrl } = await startAuthServer({ auth });
+    const response = await fetch(`${baseUrl}/ownAPI/v1/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: JSON.stringify({ username: "person", password: "" }),
+    });
+
+    // The fake only knows "correct password", so this is the service's
+    // refusal, not the request validator's.
+    expect(response.status).toBe(401);
+    expect(auth.login).toHaveBeenCalledWith(
+      expect.objectContaining({ username: "person", password: "" }),
+    );
+  });
+
   it("does not trust forwarded headers for origin or rate-limit identity", async () => {
     const limiter = createBoundedRateLimiter({
       maxAttempts: 1,

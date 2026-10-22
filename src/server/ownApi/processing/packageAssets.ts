@@ -35,10 +35,14 @@ export interface MissingPackageAsset {
  * cannot be taken back, and when a single title is analysed on demand. It is
  * deliberately not read by the background package index: that sweeps the whole
  * library on a clock, and this is a stat per rendition against a spinning disk.
+ *
+ * `sizeOf` answers for a place other than this disk — Drive itself, when a
+ * helper checks that an upload holds every file before the source goes.
  */
 export async function missingPackageAssets(
   titleRoot: string,
   manifest: TitlePackageManifest,
+  sizeOf: (absolutePath: string) => Promise<number | undefined> = statSize,
 ): Promise<MissingPackageAsset[]> {
   const expected: Array<{
     relativePath: string;
@@ -81,13 +85,7 @@ export async function missingPackageAssets(
       });
       continue;
     }
-    let size: number | undefined;
-    try {
-      const stats = await stat(absolutePath);
-      if (stats.isFile()) size = stats.size;
-    } catch {
-      size = undefined;
-    }
+    const size = await sizeOf(absolutePath);
     if (size === undefined) {
       missing.push({
         relativePath: entry.relativePath,
@@ -113,6 +111,16 @@ export async function missingPackageAssets(
   return missing;
 }
 
+/** A regular file's size, or undefined when there is none to measure. */
+async function statSize(absolutePath: string): Promise<number | undefined> {
+  try {
+    const stats = await stat(absolutePath);
+    return stats.isFile() ? stats.size : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** How many damaged files a message names before it stops listing them. */
 const NAMED_LIMIT = 3;
 
@@ -125,13 +133,14 @@ const NAMED_LIMIT = 3;
  */
 export function describeMissingPackageAssets(
   missing: readonly MissingPackageAsset[],
+  where = "on disk",
 ): string {
   const named = missing
     .slice(0, NAMED_LIMIT)
     .map((asset) =>
       asset.reason === "size"
-        ? `${asset.relativePath} is ${asset.actualBytes} bytes on disk, and the package records ${asset.expectedBytes}`
-        : `${asset.relativePath} is not on disk`,
+        ? `${asset.relativePath} is ${asset.actualBytes} bytes ${where}, and the package records ${asset.expectedBytes}`
+        : `${asset.relativePath} is not ${where}`,
     );
   const rest = missing.length - named.length;
   return rest > 0 ? `${named.join("; ")}; and ${rest} more` : named.join("; ");

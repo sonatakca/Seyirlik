@@ -194,6 +194,27 @@ describe("uploading a subtitle by hand", () => {
     });
   });
 
+  /*
+   * A processed title whose source was removed keeps its catalogue row and its
+   * package. The subtitle goes where the source was and is listed at once —
+   * the scan reads such a title from its package and would never list it.
+   */
+  it("files a subtitle for a title whose source has been removed", async () => {
+    await rm(path.join(root, ...MEDIA.split("/")));
+
+    expect(await upload(SRT)).toMatchObject({
+      outcome: "installed",
+      relativePath: "Movies/Dune (2021)/Dune (2021).tur.srt",
+      attached: true,
+    });
+    expect(attached).toEqual([
+      expect.objectContaining({
+        relativePath: "Movies/Dune (2021)/Dune (2021).tur.srt",
+        language: "tur",
+      }),
+    ]);
+  });
+
   it("refuses a title whose files it cannot tell apart", async () => {
     files = ["file-1", "file-2"];
 

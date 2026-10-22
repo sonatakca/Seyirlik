@@ -26,6 +26,7 @@ import {
   VolumeX,
 } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
+import { DwellClock } from "../../lib/dwellClock";
 import { formatRuntime } from "../../lib/format";
 import {
   getItemDisplayMetadata,
@@ -37,7 +38,8 @@ import {
   getLogoLayout,
   getLogoLayoutStyle,
   getLogoShadowBackdropStyle,
-  getLogoShadowFilter,
+  getLogoShadowFrameStyle,
+  getLogoShadowReach,
 } from "../../lib/logoLayout";
 import {
   getBackdropImageUrl,
@@ -52,6 +54,21 @@ import { FavouriteButton } from "../FavouriteButton";
 import { readHeroTrailersEnabledPreference } from "../hero/heroModel";
 import { heroPlayState } from "../home/HeroActions";
 import { HERO_DWELL_MS, HERO_TRAILER_DELAY_MS } from "../home/homeHeroModel";
+import { AMBIENT_SOURCE_WIDTH } from "../../lib/ambientBlur";
+import { useBakedAmbient } from "./useBakedAmbient";
+import {
+  ACTIONS,
+  CARD_GAP_PX,
+  CARD_WIDTH,
+  CardShell,
+  FACTS,
+  PROGRESS,
+  PhoneHeroFrame,
+  PhoneHomeHeroSkeleton,
+  ROUND,
+  SIDE_SCALE,
+  SIDE_SHADE,
+} from "./phoneHomeHeroFrame";
 
 /**
  * The phone's home hero: a deck of posters. The one in front is a poster
@@ -69,18 +86,6 @@ import { HERO_DWELL_MS, HERO_TRAILER_DELAY_MS } from "../home/homeHeroModel";
  * so every placeholder is the size of, and where, the piece that replaces it.
  */
 
-/**
- * The front card's width: at most 70% of the screen, so a neighbour shows at
- * each side, and small enough for the card and everything under it to stand
- * above the tab bar. Taken off the height: the page's top inset, the progress
- * line, the facts and the actions with their gaps, and the tab bar.
- */
-const CARD_WIDTH =
-  "min(20.5rem, 70vw, max(13rem, calc((100svh - 19.25rem - env(safe-area-inset-top) - env(safe-area-inset-bottom)) / 1.5)))";
-const CARD_GAP_PX = 14;
-/** A neighbour stands back: smaller and in shade. */
-const SIDE_SCALE = 0.88;
-const SIDE_SHADE = 0.55;
 /** A drag past this share of a card, or a flick, moves the deck one card. */
 const SWIPE_SHARE = 0.18;
 const SWIPE_VELOCITY_PX_MS = 0.35;
@@ -96,109 +101,53 @@ const GLASS =
   "border border-white/[0.16] bg-white/[0.1] backdrop-blur-2xl shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_10px_24px_-10px_rgba(0,0,0,0.7)]";
 const FOCUS =
   "focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[#050607]";
-const ROUND =
-  "inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full";
 
-/** The rows under the deck: their heights are fixed, so nothing moves. */
-const PROGRESS = "mt-4 h-[2px] overflow-hidden rounded-full bg-white/15";
-const FACTS =
-  "mt-3 h-5 w-full truncate text-center text-[0.8125rem] font-semibold leading-5 text-white/[0.78]";
-const ACTIONS = "mt-3 flex h-11 w-full items-center gap-2";
-
-function getPosterUrl(item: MediaItem): string {
+function getPosterUrl(
+  item: MediaItem,
+  coverWidth = 900,
+  backdropWidth = 1280,
+): string {
   if (item.Type === "Episode" && item.SeriesId && item.SeriesPrimaryImageTag) {
-    return getPrimaryImageUrl(item.SeriesId, item.SeriesPrimaryImageTag, 900);
+    return getPrimaryImageUrl(
+      item.SeriesId,
+      item.SeriesPrimaryImageTag,
+      coverWidth,
+    );
   }
   if (item.ImageTags?.Primary) {
-    return getPrimaryImageUrl(item.Id, item.ImageTags.Primary, 900);
+    return getPrimaryImageUrl(item.Id, item.ImageTags.Primary, coverWidth);
   }
   if (item.ParentBackdropItemId && item.ParentBackdropImageTags?.[0]) {
     return getBackdropImageUrl(
       item.ParentBackdropItemId,
       item.ParentBackdropImageTags[0],
-      1280,
+      backdropWidth,
     );
   }
   if (item.BackdropImageTags?.[0]) {
-    return getBackdropImageUrl(item.Id, item.BackdropImageTags[0], 1280);
+    return getBackdropImageUrl(
+      item.Id,
+      item.BackdropImageTags[0],
+      backdropWidth,
+    );
   }
   return "";
 }
 
+/** The poster at the size its baked light is made from. */
+const getAmbientSource = (item: MediaItem | undefined) =>
+  item ? getPosterUrl(item, AMBIENT_SOURCE_WIDTH, AMBIENT_SOURCE_WIDTH) : "";
+
+/**
+ * The light's look: what `blur-3xl saturate-150` on the full poster gave.
+ * The field spans the hero and the 4rem it bleeds past each side.
+ */
+const AMBIENT_BLUR_PX = 64;
+const AMBIENT_SATURATION = 1.5;
+const AMBIENT_BLEED_PX = 128;
+
 const mod = (value: number, length: number) =>
   ((value % length) + length) % length;
-
-/** The room the deck stands in, lit by the front poster's own colours. */
-function PhoneHeroFrame({
-  ambient,
-  children,
-}: {
-  ambient?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <section className="full-bleed relative overflow-hidden bg-zinc-950 pb-8 pt-[calc(4.75rem+env(safe-area-inset-top))]">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_32%,rgba(82,82,91,0.28),transparent_46%),linear-gradient(180deg,#111113_0%,#070708_55%,#050506_100%)]" />
-      {ambient}
-      <div className="absolute inset-0 bg-gradient-to-b from-black/72 via-black/38 to-[#050506]" />
-      <div className="absolute inset-0 bg-gradient-to-t from-[#050506] via-[#050506]/20 to-black/30" />
-      <div className="absolute inset-x-0 bottom-0 h-48 bg-gradient-to-t from-[#050506] to-transparent" />
-      <div className="relative flex w-full flex-col items-center">
-        {children}
-      </div>
-    </section>
-  );
-}
-
-/** A card's edge and fill, the same for a poster and its placeholder. */
-function CardShell({ children }: { children: ReactNode }) {
-  return (
-    <div className="cinematic-card-shadow relative aspect-[2/3] w-full rounded-[2rem] bg-gradient-to-t from-zinc-400/35 via-zinc-600/18 to-transparent p-px shadow-2xl">
-      <div className="relative h-full w-full overflow-hidden rounded-[calc(2rem-1px)] bg-zinc-900">
-        {children}
-      </div>
-    </div>
-  );
-}
-
-export function PhoneHomeHeroSkeleton() {
-  return (
-    <PhoneHeroFrame>
-      <div className="relative" style={{ width: CARD_WIDTH }}>
-        <div className="relative aspect-[2/3] w-full">
-          {[-1, 1].map((side) => (
-            <div
-              key={side}
-              className="absolute inset-0"
-              style={{
-                transform: `translateX(calc(${side} * (100% + ${CARD_GAP_PX}px))) scale(${SIDE_SCALE})`,
-                opacity: 1 - SIDE_SHADE,
-              }}
-            >
-              <CardShell>
-                <div className="shimmer absolute inset-0" />
-              </CardShell>
-            </div>
-          ))}
-          <div className="absolute inset-0">
-            <CardShell>
-              <div className="shimmer absolute inset-0" />
-            </CardShell>
-          </div>
-        </div>
-        <div className={PROGRESS} />
-        <div className={`${FACTS} flex justify-center`}>
-          <div className="shimmer h-full w-3/5 rounded-md" />
-        </div>
-        <div className={ACTIONS}>
-          <div className="shimmer h-11 flex-1 rounded-full" />
-          <div className={`shimmer ${ROUND}`} />
-          <div className={`shimmer ${ROUND}`} />
-        </div>
-      </div>
-    </PhoneHeroFrame>
-  );
-}
 
 /** One poster in the deck, placed from the deck's position. */
 function DeckCard({
@@ -250,7 +199,7 @@ function DeckCard({
   const layout = stored ?? INITIAL_LOGO_LAYOUT;
   // The tool's shadow is measured on a 200px card; this one is larger.
   const shadowScale = step > 0 ? step / LOGO_SHADOW_REFERENCE_WIDTH : 1;
-  const logoShadow = getLogoShadowFilter(layout.shadow, shadowScale);
+  const logoShadow = getLogoShadowFrameStyle(layout.shadow, shadowScale);
   const logoBackdrop = stored
     ? getLogoShadowBackdropStyle(stored.shadow, shadowScale)
     : undefined;
@@ -279,22 +228,32 @@ function DeckCard({
         {logoUrl ? (
           <div
             className="pointer-events-none absolute z-20"
-            style={getLogoLayoutStyle(layout)}
+            style={getLogoLayoutStyle(
+              layout,
+              getLogoShadowReach(layout.shadow, shadowScale),
+            )}
           >
-            {logoBackdrop ? (
-              <span
-                aria-hidden="true"
-                style={logoBackdrop}
-                className="absolute inset-[6%] rounded-[45%]"
-              />
-            ) : null}
-            <img
-              src={logoUrl}
-              alt=""
-              draggable={false}
-              style={logoShadow ? { filter: logoShadow } : undefined}
-              className="relative z-10 block h-auto w-full select-none object-contain"
-            />
+            <div className="relative flow-root">
+              {logoBackdrop ? (
+                <span
+                  aria-hidden="true"
+                  style={logoBackdrop}
+                  className="absolute inset-[6%] rounded-[45%]"
+                />
+              ) : null}
+              <div
+                data-logo-shadow="true"
+                style={logoShadow}
+                className="relative z-10"
+              >
+                <img
+                  src={logoUrl}
+                  alt=""
+                  draggable={false}
+                  className="block h-auto w-full select-none object-contain"
+                />
+              </div>
+            </div>
           </div>
         ) : (
           <p className="text-cinematic-title pointer-events-none absolute inset-x-0 bottom-[8%] z-20 line-clamp-2 px-5 text-center text-[2rem] font-black uppercase leading-[0.9] text-white drop-shadow-[0_10px_22px_rgba(0,0,0,0.95)]">
@@ -351,7 +310,7 @@ export function PhoneHomeHero({
   const [isDragging, setIsDragging] = useState(false);
   const [isInView, setIsInView] = useState(true);
   const [isPageVisible, setIsPageVisible] = useState(true);
-  const progress = useMotionValue(0);
+  const [clock] = useState(() => new DwellClock(HERO_DWELL_MS));
   const dragRef = useRef<{
     id: number;
     startX: number;
@@ -391,8 +350,8 @@ export function PhoneHomeHero({
     position.set(0);
     frontRef.current = 0;
     setFront(0);
-    progress.set(0);
-  }, [itemsKey, position, progress]);
+    clock.reset();
+  }, [itemsKey, position, clock]);
 
   // Out of view, or behind another tab, the deck and its preview wait.
   useEffect(() => {
@@ -416,7 +375,7 @@ export function PhoneHomeHero({
     (target: number, velocity = 0) => {
       frontRef.current = target;
       setFront(target);
-      progress.set(0);
+      clock.reset();
       setIsTrailerPlaying(false);
       void animate(
         position,
@@ -424,7 +383,7 @@ export function PhoneHomeHero({
         reduceMotion ? { duration: 0 } : { ...DECK_SPRING, velocity },
       );
     },
-    [position, progress, reduceMotion],
+    [position, clock, reduceMotion],
   );
 
   // The front card's time: it runs while the deck rests in view, holds
@@ -438,14 +397,8 @@ export function PhoneHomeHero({
     isPageVisible;
   useEffect(() => {
     if (!isRunning) return undefined;
-    const remaining = (1 - progress.get()) * HERO_DWELL_MS;
-    const controls = animate(progress, 1, {
-      duration: remaining / 1000,
-      ease: "linear",
-      onComplete: () => goTo(frontRef.current + 1),
-    });
-    return () => controls.stop();
-  }, [isRunning, front, progress, goTo]);
+    return clock.start(() => goTo(frontRef.current + 1));
+  }, [isRunning, front, clock, goTo]);
 
   // The preview: asked for once the card is in front, played once per visit,
   // after the poster has had its moment.
@@ -466,14 +419,11 @@ export function PhoneHomeHero({
   useEffect(() => {
     if (!trailerUrl || !frontItem || reduceMotion) return undefined;
     if (trailersSeen.current.has(frontItem.Id)) return undefined;
-    const unsubscribe = progress.on("change", (value) => {
-      if (value >= HERO_TRAILER_DELAY_MS / HERO_DWELL_MS) {
-        trailersSeen.current.add(frontItem.Id);
-        setIsTrailerPlaying(true);
-      }
+    return clock.onReach(HERO_TRAILER_DELAY_MS / HERO_DWELL_MS, () => {
+      trailersSeen.current.add(frontItem.Id);
+      setIsTrailerPlaying(true);
     });
-    return unsubscribe;
-  }, [frontItem, progress, reduceMotion, trailerUrl]);
+  }, [frontItem, clock, reduceMotion, trailerUrl]);
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -484,6 +434,22 @@ export function PhoneHomeHero({
       video.pause();
     }
   }, [isInView, isPageVisible, isTrailerMuted, isTrailerPlaying]);
+
+  const ambientUrl = useBakedAmbient(
+    getAmbientSource(frontItem),
+    count > 1
+      ? [front + 1, front - 1].map((slot) =>
+          getAmbientSource(items[mod(slot, count)]),
+        )
+      : [],
+    {
+      blurPx: AMBIENT_BLUR_PX,
+      saturation: AMBIENT_SATURATION,
+      drawnWidth:
+        (typeof window === "undefined" ? 390 : window.innerWidth) +
+        AMBIENT_BLEED_PX,
+    },
+  );
 
   if (!frontItem) return <PhoneHomeHeroSkeleton />;
 
@@ -565,16 +531,16 @@ export function PhoneHomeHero({
     frontItem.Type === "Episode" ||
     frontItem.Type === "Series" ||
     frontItem.MediaType === "Video";
-  const frontPoster = getPosterUrl(frontItem);
   const title = metadata.title ?? frontItem.Name;
   const slots =
     count > 1 ? [front - 2, front - 1, front, front + 1, front + 2] : [front];
 
+  // The baked field, cross-faded: the turn moves only opacity, never a filter.
   const ambient = (
     <AnimatePresence mode="sync" initial={false}>
-      {frontPoster ? (
+      {ambientUrl ? (
         <motion.div
-          key={frontPoster}
+          key={ambientUrl}
           className="absolute -inset-16 overflow-hidden"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -582,10 +548,10 @@ export function PhoneHomeHero({
           transition={{ duration: reduceMotion ? 0 : 0.9, ease: EASE_OUT }}
         >
           <img
-            src={frontPoster}
+            src={ambientUrl}
             alt=""
             decoding="async"
-            className="h-full w-full scale-125 object-cover opacity-72 blur-3xl saturate-150"
+            className="h-full w-full scale-125 object-cover opacity-72"
           />
         </motion.div>
       ) : null}
@@ -671,9 +637,9 @@ export function PhoneHomeHero({
 
         {/* How long the front card has left. */}
         <div className={PROGRESS} aria-hidden="true">
-          <motion.div
-            className="h-full origin-left rounded-full bg-[var(--accent)]"
-            style={{ scaleX: progress }}
+          <div
+            ref={clock.attach}
+            className="h-full origin-left rounded-full bg-[var(--accent)] [transform:scaleX(0)]"
           />
         </div>
 

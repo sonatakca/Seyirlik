@@ -1,11 +1,11 @@
-import { NotificationHistoryButton } from "../notifications/NotificationHistoryButton";
-import { useEffect, useState } from "react";
+import { NotificationCenter } from "../notifications/NotificationCenter";
+import { useNavbarScrolled } from "../../hooks/useNavbarScrolled";
 import { Search } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { useLanguage } from "../../i18n/LanguageContext";
 import { AccountMenu } from "../AccountMenu";
 import { AppUpdateButton } from "../AppUpdateButton";
-import { LanguageSwitch } from "../LanguageSwitch";
+import { NavbarSurface } from "../NavbarSurface";
 import { NavbarWordmark } from "../NavbarWordmark";
 import { openSearchOverlay } from "../../lib/searchModel";
 import { Tooltip } from "../ui/Tooltip";
@@ -14,50 +14,37 @@ import { MobileTabBar } from "./tabBar/MobileTabBar";
 export function MobileNavbar() {
   const location = useLocation();
   const { t } = useLanguage();
-  const [hasScrolled, setHasScrolled] = useState(false);
-
-  useEffect(() => {
-    const updateScrolledState = () => {
-      setHasScrolled(window.scrollY > 10);
-    };
-
-    updateScrolledState();
-    window.addEventListener("scroll", updateScrolledState, { passive: true });
-
-    return () => {
-      window.removeEventListener("scroll", updateScrolledState);
-    };
-  }, []);
+  const hasScrolled = useNavbarScrolled();
 
   const headerOverArtwork =
     location.pathname === "/home" ||
     /^\/(?:movies|shows)\/[^/]+(?:\/season\/[^/]+)?$/.test(location.pathname);
   const showHeaderSurface = hasScrolled || !headerOverArtwork;
-  const headerSurfaceClass = showHeaderSurface
-    ? "bg-black/75 backdrop-blur-2xl"
-    : "bg-transparent";
 
   return (
     <>
       <header
-        className={`fixed inset-x-0 top-0 z-40 flex h-[calc(3.5rem+env(safe-area-inset-top))] items-end justify-between  px-4 pb-2 pt-[env(safe-area-inset-top)] transition-[background-color,border-color,backdrop-filter] duration-300 ${headerSurfaceClass}`}
+        // On a tablet the clear bar sits over the floating backdrop, which
+        // starts 8px down: its contents drop to the bar's foot to clear it.
+        className={`fixed inset-x-0 top-0 z-40 flex h-[calc(3.5rem+env(safe-area-inset-top))] items-end justify-between  px-4 pb-2 pt-[env(safe-area-inset-top)] transition-[padding] duration-300 motion-reduce:transition-none ${
+          showHeaderSurface ? "" : "md:pb-0"
+        }`}
       >
+        <NavbarSurface shown={showHeaderSurface} variant="mobile" />
         <Link
           to="/home"
           aria-label={t("nav.brandHome")}
-          className="flex h-10 min-w-0 flex-1 items-center pr-2"
+          className="relative z-[1] flex h-10 min-w-0 flex-1 items-center pr-2"
         >
-          <NavbarWordmark className="h-9" />
+          <NavbarWordmark className="h-9" overArtwork={!showHeaderSurface} />
         </Link>
 
         {/* Over artwork the icons carry the wordmark's soft shadow, so a
             bright picture never swallows them. Each glyph takes it, not the
             group: a filter there would anchor the menus' fixed panels. */}
         <div
-          className={`flex shrink-0 items-center gap-1 ${
-            showHeaderSurface
-              ? ""
-              : "[&_svg]:[filter:drop-shadow(0_1px_2px_rgba(0,0,0,0.6))_drop-shadow(0_3px_14px_rgba(0,0,0,0.5))]"
+          className={`relative z-[1] flex shrink-0 items-center gap-1 ${
+            showHeaderSurface ? "" : "[&_svg]:[filter:var(--filter-navbar-ink)]"
           }`}
         >
           <AppUpdateButton variant="mobile" />
@@ -71,8 +58,7 @@ export function MobileNavbar() {
               <Search size={18} />
             </button>
           </Tooltip>
-          <LanguageSwitch />
-          <NotificationHistoryButton />
+          <NotificationCenter variant="mobile" />
           <AccountMenu variant="mobile" />
         </div>
       </header>

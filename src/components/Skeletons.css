@@ -1,3 +1,9 @@
+/*
+ * The sweep is a layer three times the skeleton's width, slid across it with
+ * a transform, so the compositor runs it at the display's full rate and no
+ * skeleton is repainted while it moves. It used to be the element's own
+ * background, slid with background-position, which repaints every frame.
+ */
 .shimmer {
   --shimmer-color: var(--accent);
   --shimmer-base: rgb(255 255 255 / 3%);
@@ -6,6 +12,22 @@
   --shimmer-duration: 2s;
 
   background-color: var(--shimmer-base);
+  overflow: hidden;
+  overflow: clip;
+}
+
+/* Positioned so the sweep can sit inside it, without outranking a utility
+   such as `absolute` that places the skeleton itself. */
+:where(.shimmer) {
+  position: relative;
+}
+
+.shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 300%;
+  pointer-events: none;
   background-image: linear-gradient(
     105deg,
     transparent 15%,
@@ -14,29 +36,25 @@
     var(--shimmer-mid) 65%,
     transparent 85%
   );
-  background-repeat: no-repeat;
-  background-size: 300% 100%;
-  background-position: 150% 0;
-
+  transform: translateX(-100%);
   animation: shimmer-sweep var(--shimmer-duration) linear infinite;
-  will-change: background-position;
 }
 
 @keyframes shimmer-sweep {
   0% {
-    background-position: 150% 0;
+    transform: translateX(-100%);
   }
   45% {
-    background-position: -150% 0;
+    transform: translateX(100%);
   }
   100% {
-    background-position: -150% 0;
+    transform: translateX(100%);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .shimmer {
+  .shimmer::after {
     animation: none;
-    background-position: center;
+    transform: translateX(-33.333%);
   }
 }

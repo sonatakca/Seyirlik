@@ -50,9 +50,15 @@ export function addWanted(title: WantedTitle, libraryId: string) {
   });
 }
 export function releaseSearchUrl(
-  title: Pick<WantedTitle, "title" | "kind" | "year"> & { id?: string },
+  title: Pick<WantedTitle, "title" | "kind" | "year"> & {
+    id?: string;
+    /** A TMDB id, under either name the callers hold it by. */
+    tmdbId?: string | null;
+    providerId?: string;
+  },
 ) {
-  return `/admin/decisions?${new URLSearchParams({ title: title.title, kind: title.kind, ...(title.id ? { itemId: title.id } : {}), ...(title.year ? { year: String(title.year) } : {}) })}`;
+  const tmdbId = title.tmdbId ?? title.providerId;
+  return `/admin/decisions?${new URLSearchParams({ title: title.title, kind: title.kind, ...(title.id ? { itemId: title.id } : {}), ...(title.year ? { year: String(title.year) } : {}), ...(tmdbId ? { tmdbId } : {}) })}`;
 }
 
 export function setWanted(id: string, desired: boolean) {

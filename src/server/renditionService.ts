@@ -137,6 +137,12 @@ export interface PackagedSubtitle {
   title?: string;
   isDefault: boolean;
   isForced: boolean;
+  /**
+   * True when it was packaged from a subtitle file beside the source rather
+   * than from a track inside it. Only a track inside the video is known to be
+   * timed for this video, which is what makes it a reference to align against.
+   */
+  fromSidecar: boolean;
   /** The converted file, absolute. */
   path: string;
 }
@@ -209,18 +215,40 @@ export interface RenditionService {
    */
   findPackagedAudio(
     media: PlaybackResolvedMedia,
+    /** The source audio stream wanted; the default rendition when absent or not packaged. */
+    sourceStreamIndex?: number,
   ): Promise<PackagedAudio | null>;
 }
 
 /** The default audio rendition of a ready package, as a decoder input. */
 export interface PackagedAudio {
   path: string;
+  /**
+   * The rendition's own HLS playlist, for the same reason as
+   * `PackagedVideo.playlistPath`: the audio is one fragmented MP4 too, and
+   * a reader that only needs its samples should not make FFmpeg walk every
+   * fragment through the Drive mount before the first one decodes.
+   */
+  playlistPath: string;
   durationSeconds: number;
 }
 
 /** The highest video rendition of a ready package, as a decoder input. */
 export interface PackagedVideo {
   path: string;
+  /**
+   * The rendition's own HLS playlist: the same media, with its fragment index
+   * already written out as byte ranges.
+   *
+   * A rendition is one fragmented MP4, and FFmpeg's MP4 demuxer finds a
+   * fragmented file's fragments by visiting every one of them before it
+   * decodes a frame — around 1,500 seeks for an hour of two-second fragments.
+   * On a local disk that is nothing. Through the Drive mount every seek is a
+   * ranged download, and opening one episode took two and a half minutes.
+   * The playlist names every fragment's offset in a single small read, so a
+   * reader that only needs the frames should open this instead.
+   */
+  playlistPath: string;
   width: number;
   height: number;
   durationSeconds: number;
@@ -462,6 +490,10 @@ export function createRenditionService({
     if (!best) return null;
     return {
       path: path.join(ready.versionRoot, ...best.mediaPath.split("/")),
+      playlistPath: path.join(
+        ready.versionRoot,
+        ...best.playlistPath.split("/"),
+      ),
       width: best.width,
       height: best.height,
       durationSeconds: best.durationSeconds,
@@ -489,21 +521,33 @@ export function createRenditionService({
       ...(rendition.title ? { title: rendition.title } : {}),
       isDefault: rendition.isDefault,
       isForced: rendition.isForced,
+      fromSidecar: rendition.sidecarFingerprint !== undefined,
       path: path.join(ready.versionRoot, ...rendition.subtitlePath.split("/")),
     }));
   };
 
   const findPackagedAudio: RenditionService["findPackagedAudio"] = async (
     media,
+    sourceStreamIndex,
   ) => {
     const ready = await readyPackageFor(media);
     if (!ready) return null;
     const renditions = ready.metadata.audioRenditions;
     const chosen =
-      renditions.find((rendition) => rendition.isDefault) ?? renditions[0];
+      (sourceStreamIndex === undefined
+        ? undefined
+        : renditions.find(
+            (rendition) => rendition.sourceStreamIndex === sourceStreamIndex,
+          )) ??
+      renditions.find((rendition) => rendition.isDefault) ??
+      renditions[0];
     if (!chosen) return null;
     return {
       path: path.join(ready.versionRoot, ...chosen.mediaPath.split("/")),
+      playlistPath: path.join(
+        ready.versionRoot,
+        ...chosen.playlistPath.split("/"),
+      ),
       durationSeconds: chosen.durationSeconds,
     };
   };

@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { RouteDefinition } from "../api/router";
 import { sendData } from "../api/envelope";
 import {
@@ -10,7 +11,13 @@ import type { TmdbClient } from "../metadata/tmdbClient";
 import type { JobQueue } from "../tasks/jobQueue";
 import { JOB_TYPES } from "../tasks/jobHandlers";
 import { OwnApiError } from "../ownApiHandler";
-import { loadTitleDetail, type LibraryAdminRepository } from "./libraryAdmin";
+import type { PackageIndex } from "../processing/packageIndex";
+import {
+  cacheSeriesCatalogue,
+  loadTitleDetail,
+  type LibraryAdminRepository,
+  type PackageStateLookup,
+} from "./libraryAdmin";
 import { TitleRemovalError, type TitleRemoval } from "./titleRemoval";
 
 const REMOVAL_STATUS: Record<TitleRemovalError["code"], number> = {
@@ -26,7 +33,35 @@ export function createLibraryAdminRoutes(options: {
   tmdb: TmdbClient | undefined;
   removal: TitleRemoval;
   queue: JobQueue;
+  /**
+   * The processing page's package index, so an episode is processed here
+   * exactly when it is processed there.
+   */
+  packages?: { index: PackageIndex; mediaRoot: string };
 }): RouteDefinition[] {
+  const catalogue = options.tmdb && cacheSeriesCatalogue(options.tmdb);
+  const packages = options.packages;
+  /*
+   * Never waits on the volume: an episode the index has not read yet is asked
+   * for in the background and reads as `unknown`, and the page's next poll a
+   * few seconds later gets the answer.
+   */
+  const packageState: PackageStateLookup | undefined =
+    packages &&
+    ((file) => {
+      packages.index.track([
+        {
+          mediaFileId: file.id,
+          sourcePath: path.resolve(
+            packages.mediaRoot,
+            ...file.relativePath.split("/"),
+          ),
+          kind: "episode",
+          fingerprint: file.fingerprint,
+        },
+      ]);
+      return packages.index.get(file.id).state;
+    });
   return [
     {
       /**
@@ -73,12 +108,31 @@ export function createLibraryAdminRoutes(options: {
         context.requirePrincipal();
         const detail = await loadTitleDetail(
           options.repository,
-          options.tmdb,
+          catalogue,
           requireUuid(context.params.itemId, "itemId"),
+          packageState ? { packageState } : {},
         );
         if (!detail)
           throw new OwnApiError("NOT_FOUND", "No such movie or show.", 404);
         sendData(context.response, context.requestId, detail);
+      },
+    },
+    {
+      /**
+       * A removal's deletion, which goes on after `/remove` has answered: the
+       * catalogue lets go at once, the bytes can take minutes on a Drive mount.
+       */
+      method: "GET",
+      path: "/library/removals/:itemId",
+      access: "admin",
+      handle: async (context) => {
+        context.requirePrincipal();
+        const status = options.removal.status(
+          requireUuid(context.params.itemId, "itemId"),
+        );
+        if (!status)
+          throw new OwnApiError("NOT_FOUND", "No such removal.", 404);
+        sendData(context.response, context.requestId, status);
       },
     },
     {

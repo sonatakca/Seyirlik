@@ -6,6 +6,16 @@ import type {
   VolumeIdentity,
 } from "../../../renditions/processing/storageIdentity";
 
+/** Job rows that still own retryable scratch; shared by startup and periodic cleanup. */
+export const WORKSPACE_CLAIMING_STATES = [
+  "pending",
+  "queued",
+  "running",
+  "paused",
+  "failed",
+  "cancelled",
+] as const;
+
 /**
  * The durable record of one media-processing job.
  *
@@ -117,6 +127,11 @@ export interface ProcessingJobRecord {
   etaSeconds: number | null;
   hardwareAdapter: string | null;
   videoEncoder: string | null;
+  /**
+   * The machine that planned this attempt (`SEYIRLIK_WORKER_NAME`, else its
+   * host name). Absent until a worker plans it.
+   */
+  processedBy?: string | null;
   decision: Record<string, unknown> | null;
   streamDecisions: Record<string, unknown> | null;
   validation: Record<string, unknown> | null;
@@ -129,6 +144,10 @@ export interface ProcessingJobRecord {
    * the disk could not answer — and nothing may present it as a perfect result.
    */
   sourceDamage: Record<string, unknown>[] | null;
+  /** One summary per finished build phase of this attempt. */
+  phaseHistory?: Record<string, unknown>[] | null;
+  /** The background upload to Drive after publication, while it is tracked. */
+  driveUpload?: Record<string, unknown> | null;
   /**
    * The scratch volume this job's workspace was claimed on.
    *
@@ -221,9 +240,11 @@ export interface ProcessingJobUpdate {
   etaSeconds?: number | null;
   hardwareAdapter?: string;
   videoEncoder?: string;
+  processedBy?: string | null;
   validation?: Record<string, unknown> | null;
   warnings?: string[];
   sourceDamage?: Record<string, unknown>[] | null;
+  phaseHistory?: Record<string, unknown>[] | null;
   scratchIdentity?: VolumeIdentity | null;
   errorCode?: string | null;
   errorMessage?: string | null;
@@ -262,8 +283,9 @@ const COLUMNS = `
   id, job_id, item_id, media_file_id, source_fingerprint, profile,
   state, stage, stage_progress, overall_progress,
   bytes_processed, output_bytes, estimated_output_bytes, estimated_staging_bytes,
-  speed, fps, eta_seconds, hardware_adapter, video_encoder,
+  speed, fps, eta_seconds, hardware_adapter, video_encoder, processed_by,
   decision, stream_decisions, validation, warnings, source_damage,
+  phase_history, drive_upload,
   error_code, error_message, staging_directory, published_version,
   attempts, cancellation_requested, pause_requested, paused_reason,
   epoch_count, epoch_index, completed_epochs, protected_seconds,
@@ -333,11 +355,14 @@ interface RawRow {
   eta_seconds: number | null;
   hardware_adapter: string | null;
   video_encoder: string | null;
+  processed_by: string | null;
   decision: Record<string, unknown> | null;
   stream_decisions: Record<string, unknown> | null;
   validation: Record<string, unknown> | null;
   warnings: string[] | null;
   source_damage: Record<string, unknown>[] | null;
+  phase_history: Record<string, unknown>[] | null;
+  drive_upload: Record<string, unknown> | null;
   scratch_volume_uuid: string | null;
   scratch_volume_medium: StorageMedium | null;
   scratch_volume_fs_type: string | null;
@@ -394,10 +419,13 @@ function toRecord(row: RawRow): ProcessingJobRecord {
     etaSeconds: row.eta_seconds,
     hardwareAdapter: row.hardware_adapter,
     videoEncoder: row.video_encoder,
+    processedBy: row.processed_by,
     decision: row.decision,
     streamDecisions: row.stream_decisions,
     validation: row.validation,
     sourceDamage: row.source_damage,
+    phaseHistory: row.phase_history,
+    driveUpload: row.drive_upload,
     /*
      * Only a row that recorded a UUID yields an identity. A medium without one
      * is not a weaker identity, it is none — the same rule the storage-incident
@@ -810,6 +838,8 @@ export function createProcessingJobStore(
         set("hardware_adapter", update.hardwareAdapter);
       if (update.videoEncoder !== undefined)
         set("video_encoder", update.videoEncoder);
+      if (update.processedBy !== undefined)
+        set("processed_by", update.processedBy);
       if (update.validation !== undefined) set("validation", update.validation);
       if (update.sourceDamage !== undefined) {
         set(
@@ -817,6 +847,14 @@ export function createProcessingJobStore(
           update.sourceDamage === null
             ? null
             : JSON.stringify(update.sourceDamage),
+        );
+      }
+      if (update.phaseHistory !== undefined) {
+        set(
+          "phase_history",
+          update.phaseHistory === null
+            ? null
+            : JSON.stringify(update.phaseHistory),
         );
       }
       if (update.scratchIdentity !== undefined) {
@@ -1003,6 +1041,8 @@ export function createProcessingJobStore(
             * not looked at the disk yet.
             */
            source_damage = NULL,
+           phase_history = NULL,
+           drive_upload = NULL,
            error_code = NULL,
            error_message = NULL,
            cancellation_requested = false,
@@ -1027,6 +1067,7 @@ export function createProcessingJobStore(
            stream_decisions = COALESCE($5::jsonb, stream_decisions),
            hardware_adapter = COALESCE($6, hardware_adapter),
            video_encoder = COALESCE($7, video_encoder),
+           processed_by = NULL,
            warnings = COALESCE($8::jsonb, warnings),
            updated_at = now()
          WHERE id = $1

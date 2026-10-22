@@ -68,6 +68,28 @@ const input = (overrides: Partial<DecideInput> = {}) =>
   });
 
 describe("decideProcessing", () => {
+  it("credits existing scratch without spending the reserve", () => {
+    const fresh = input().estimate;
+    const required =
+      fresh.outputBytes + fresh.stagingBytes + fresh.reserveBytes;
+    expect(
+      input({ freeBytes: required - 1024, inheritedBytes: 1024 }).estimate
+        .sufficient,
+    ).toBe(true);
+    expect(
+      input({ freeBytes: required - 1025, inheritedBytes: 1024 }).estimate
+        .sufficient,
+    ).toBe(false);
+    expect(
+      input({ freeBytes: fresh.reserveBytes - 1, inheritedBytes: required * 2 })
+        .estimate.sufficient,
+    ).toBe(false);
+    expect(
+      input({ freeBytes: required - 1, inheritedBytes: Number.NaN }).estimate
+        .sufficient,
+    ).toBe(false);
+  });
+
   /**
    * The summary describes the work, not the destination.
    *
@@ -218,6 +240,13 @@ describe("decideProcessing", () => {
 
     expect(decision.videoEncoder).toBe("libx265");
     expect(decision.hardwareAdapter).toBe("software");
+  });
+
+  it("keeps the same peak headroom as the checkpoint packager", () => {
+    const bytes = input().estimate.outputBytes;
+    const required = Math.ceil(bytes * 1.15 * 2) + DEFAULT_RESERVE_BYTES;
+    expect(input({ freeBytes: required - 1 }).estimate.sufficient).toBe(false);
+    expect(input({ freeBytes: required }).estimate.sufficient).toBe(true);
   });
 
   it("reports the disk impact of the package and its staging copy", () => {

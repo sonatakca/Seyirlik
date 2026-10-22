@@ -554,7 +554,14 @@ export function createTrickplayService({
       });
       if (packaged && packaged.durationSeconds > 0) {
         return {
-          path: packaged.path,
+          /*
+           * The playlist rather than the MP4 behind it. Both decode to the
+           * same frames, but the MP4 has to be walked fragment by fragment
+           * before its first one — once per parallel segment — and on the
+           * Drive mount that walk was minutes in which the job could report
+           * nothing. See `PackagedVideo.playlistPath`.
+           */
+          path: packaged.playlistPath,
           // A rendition carries exactly one video stream.
           map: "0:v:0",
           durationMs: Math.round(packaged.durationSeconds * 1_000),

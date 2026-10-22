@@ -1,6 +1,8 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { NotificationHost } from "./NotificationHost";
+import { MemoryRouter } from "react-router-dom";
+import { NotificationAnnouncer } from "./NotificationAnnouncer";
+import { NotificationCenter } from "./NotificationCenter";
 import {
   notify,
   resetNotificationsForTests,
@@ -17,10 +19,28 @@ afterEach(() => {
   cleanup();
   resetNotificationsForTests();
 });
-/** A card is a line until it is asked; every detail below lives behind this. */
+/** The centre, opened from its bell, as a person would find it. */
+function renderCentre() {
+  const view = render(
+    <MemoryRouter>
+      <NotificationCenter />
+      <NotificationAnnouncer />
+    </MemoryRouter>,
+  );
+  act(() => {
+    document.querySelector<HTMLButtonElement>("[aria-haspopup]")!.click();
+  });
+  return view;
+}
+
+/** A row is a line until it is asked; every detail below lives behind this. */
 function openCard() {
   act(() => {
-    document.querySelector<HTMLButtonElement>("[aria-expanded]")!.click();
+    document
+      .querySelector<HTMLButtonElement>(
+        "[data-notification-row] [aria-expanded]",
+      )!
+      .click();
   });
 }
 it.each(["en", "tr"] as const)(
@@ -46,7 +66,7 @@ it.each(["en", "tr"] as const)(
         finishedAt: null,
       },
     });
-    render(<NotificationHost />);
+    renderCentre();
     openCard();
     expect(screen.getByRole("progressbar")).toHaveAttribute(
       "aria-valuenow",
@@ -95,13 +115,13 @@ it("shows no table at all when every figure is still at zero", () => {
       finishedAt: null,
     },
   });
-  render(<NotificationHost />);
+  renderCentre();
   openCard();
   expect(document.querySelector("dl")).toBeNull();
 });
 it("announces meaningful changes but does not repeat the card at each poll", () => {
   language = "en";
-  render(<NotificationHost />);
+  renderCentre();
   const input = {
     key: "task:a",
     title: "Probe",
@@ -155,7 +175,7 @@ it("floors a percentage rather than rounding it up to a finished-looking number"
       finishedAt: null,
     },
   });
-  render(<NotificationHost />);
+  renderCentre();
   expect(screen.getByText("99%")).toBeInTheDocument();
   openCard();
   expect(screen.getByRole("progressbar")).toHaveAttribute(
@@ -177,7 +197,7 @@ it("marks unmeasurable progress explicitly and keeps it out of a progress bar", 
       finishedAt: null,
     },
   });
-  render(<NotificationHost />);
+  renderCentre();
   openCard();
   expect(screen.getByText("Progress not measurable yet")).toBeInTheDocument();
   expect(screen.queryByRole("progressbar")).toBeNull();
@@ -187,7 +207,7 @@ it("names the title a card is about, in the card and in the announcement", () =>
   // "Media processing · Queued" is true of twelve cards at once. Which episode
   // it is about is the part that makes it worth reading.
   language = "en";
-  render(<NotificationHost />);
+  renderCentre();
   act(() => {
     notify({
       key: "task:a",
@@ -269,10 +289,12 @@ it("shows how far along a job is without being opened", () => {
       finishedAt: null,
     },
   });
-  render(<NotificationHost />);
+  renderCentre();
   const bar = screen.getByRole("progressbar");
   expect(bar).toHaveAttribute("aria-valuenow", "76.2");
-  expect(bar.querySelector("div")).toHaveStyle({ width: "76.2%" });
+  expect(bar.querySelector("div")).toHaveStyle({
+    transform: "scaleX(0.762)",
+  });
   // Still one bar, not a second one, once the card is opened.
   openCard();
   expect(screen.getAllByRole("progressbar")).toHaveLength(1);
@@ -297,7 +319,7 @@ it("states the encode position on the source timeline as a clock", () => {
       finishedAt: null,
     },
   });
-  render(<NotificationHost />);
+  renderCentre();
   openCard();
   expect(screen.getByText("00:51:32 / 01:07:32")).toBeInTheDocument();
 });
@@ -327,7 +349,7 @@ it.each(["en", "tr"] as const)(
         finishedAt: null,
       },
     });
-    render(<NotificationHost />);
+    renderCentre();
     // The position is still shown; the rate — and the claim that it cannot be
     // measured — are not.
     expect(screen.getByRole("progressbar")).toHaveAttribute(
@@ -367,7 +389,7 @@ it("never spends the line on the word a spinner has already said", () => {
       finishedAt: null,
     },
   });
-  render(<NotificationHost />);
+  renderCentre();
   const line = screen.getByRole("button", { name: /House of the Dragon/ });
   expect(line.textContent).toContain("S01E08");
   expect(line.textContent).not.toContain("Running");
@@ -386,7 +408,7 @@ it("never spends the line on the word a spinner has already said", () => {
       finishedAt: null,
     },
   });
-  render(<NotificationHost />);
+  renderCentre();
   expect(screen.getAllByText("Paused").length).toBeGreaterThan(0);
 });
 
@@ -407,7 +429,7 @@ it("shows a figure for the phases that come after the picture", () => {
       finishedAt: null,
     },
   });
-  render(<NotificationHost />);
+  renderCentre();
   // Whole per cent: bytes assembled are not measured as finely as film is.
   expect(screen.getByText("8%")).toBeInTheDocument();
   expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "8");

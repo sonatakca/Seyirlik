@@ -91,6 +91,7 @@ export interface AdaptiveAudioRenditionMetadata {
 export interface AdaptiveSubtitleRenditionMetadata {
   id: string;
   sourceStreamIndex: number;
+  sidecarFingerprint?: string;
   language?: string;
   title?: string;
   isDefault: boolean;
@@ -497,9 +498,20 @@ function parseSubtitleRendition(
   if (language && !LANGUAGE_PATTERN.test(language)) {
     fail("Subtitle language is malformed.");
   }
+  const sidecarFingerprint = optionalString(
+    value.sidecarFingerprint,
+    "sidecarFingerprint",
+  );
+  if (
+    sidecarFingerprint !== undefined &&
+    !/^[a-f0-9]{64}$/.test(sidecarFingerprint)
+  ) {
+    fail("Subtitle sidecar fingerprint is malformed.");
+  }
   return {
     id,
     sourceStreamIndex,
+    ...(sidecarFingerprint ? { sidecarFingerprint } : {}),
     ...(language ? { language } : {}),
     ...(optionalString(value.title, "title") === undefined
       ? {}
@@ -526,6 +538,8 @@ export function parseAdaptiveMetadata(
      * incremental run's work directory is. Never set for a published package.
      */
     allowMissingAudio?: boolean;
+    /** Only for incremental scratch; published packages still require video. */
+    allowMissingVideo?: boolean;
     /**
      * Whether every rendition must sit at the location the build layout
      * dictates.
@@ -549,7 +563,7 @@ export function parseAdaptiveMetadata(
   if (!isRecord(value.storage)) fail("storage must be an object.");
   if (
     !Array.isArray(value.videoRenditions) ||
-    value.videoRenditions.length === 0
+    (!expected?.allowMissingVideo && value.videoRenditions.length === 0)
   ) {
     fail("videoRenditions must be a non-empty array.");
   }
@@ -587,6 +601,14 @@ export function parseAdaptiveMetadata(
             parseSubtitleRendition(entry, enforceCanonicalPaths),
           )
         : fail("subtitleRenditions must be an array.");
+  if (
+    videoRenditions.length +
+      audioRenditions.length +
+      subtitleRenditions.length ===
+    0
+  ) {
+    fail("The package must contain at least one rendition.");
+  }
 
   if (
     new Set(videoRenditions.map((entry) => entry.id)).size !==

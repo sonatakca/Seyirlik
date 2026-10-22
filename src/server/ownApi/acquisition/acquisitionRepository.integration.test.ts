@@ -266,6 +266,151 @@ integration("acquisitions in PostgreSQL", () => {
     expect(completed.rows[0]!.completed_at).toBeInstanceOf(Date);
   });
 
+  it("knows whether an episode already has a download, by its own title", async () => {
+    const episode = (n: number) => ({
+      ...input,
+      target: {
+        kind: "episode" as const,
+        title: "Replacement Show",
+        season: 1,
+        episode: n,
+      },
+    });
+    const first = await repository.create(episode(1));
+    expect(await repository.hasLiveAcquisitionFor(episode(1).target)).toBe(
+      true,
+    );
+    expect(await repository.hasLiveAcquisitionFor(episode(2).target)).toBe(
+      false,
+    );
+
+    // A failed download is not one: the episode is still wanted.
+    await repository.update(first.id, "planned", {
+      state: "failed",
+      failureClass: "missing-articles",
+    });
+    expect(await repository.hasLiveAcquisitionFor(episode(1).target)).toBe(
+      false,
+    );
+  });
+
+  it("keeps two seasons of one series apart when both name the series", async () => {
+    // A season pack and an episode the catalogue has no row for both point
+    // at their series, so the item alone cannot tell them apart.
+    const libraryId = randomUUID();
+    const seriesId = randomUUID();
+    await pool.query(
+      `INSERT INTO libraries (id, slug, name, kind) VALUES ($1,'tv','TV','series')`,
+      [libraryId],
+    );
+    await pool.query(
+      `INSERT INTO items (id, library_id, kind, source_key, title, sort_title)
+       VALUES ($1,$2,'series','series:sopranos','The Sopranos','sopranos')`,
+      [seriesId, libraryId],
+    );
+    const pack = (season: number) => ({
+      ...input,
+      target: {
+        kind: "season" as const,
+        itemId: seriesId,
+        title: "The Sopranos",
+        season,
+      },
+    });
+    const episode = (n: number) => ({
+      ...input,
+      target: {
+        kind: "episode" as const,
+        itemId: seriesId,
+        // A title the matching by name could not join on.
+        title: `Sopranos ${n}`,
+        season: 6,
+        episode: n,
+      },
+    });
+
+    const failed = await repository.create(pack(5));
+    await repository.update(failed.id, "planned", {
+      state: "failed",
+      failureClass: "missing-articles",
+    });
+    const other = await repository.create(pack(6));
+    expect(await repository.supersedeFailedFor(other.id)).toBe(0);
+    expect(await repository.hasLiveAcquisitionFor(pack(6).target)).toBe(true);
+    expect(await repository.hasLiveAcquisitionFor(pack(4).target)).toBe(false);
+
+    await repository.create(episode(2));
+    expect(await repository.hasLiveAcquisitionFor(episode(2).target)).toBe(
+      true,
+    );
+    expect(await repository.hasLiveAcquisitionFor(episode(3).target)).toBe(
+      false,
+    );
+
+    // The same season is still the same target.
+    const again = await repository.create(pack(5));
+    expect(await repository.supersedeFailedFor(again.id)).toBe(1);
+  });
+
+  it("stops counting a finished download once its import is done with it", async () => {
+    const pack = (season: number) => ({
+      ...input,
+      target: { kind: "season" as const, title: "Imported Show", season },
+    });
+    const finish = async (season: number) => {
+      const created = await repository.create(pack(season));
+      await repository.update(created.id, "planned", { state: "downloaded" });
+      return created.id;
+    };
+    const importOf = async (acquisitionId: string, state: string) =>
+      pool.query(
+        `INSERT INTO imports (id, acquisition_id, target_kind, target_title, target_season,
+           source_root, library_root, source_relative, state, idempotency_key)
+         VALUES ($1,$2,'season','Imported Show',1,'/d','/l','x',$3,$4)`,
+        [randomUUID(), acquisitionId, state, `k-${randomUUID()}`],
+      );
+
+    // Just downloaded, nothing has picked it up yet: still coming.
+    await finish(1);
+    expect(await repository.hasLiveAcquisitionFor(pack(1).target)).toBe(true);
+
+    // Being imported: still coming.
+    await importOf(await finish(2), "staging");
+    expect(await repository.hasLiveAcquisitionFor(pack(2).target)).toBe(true);
+
+    // Imported, or given up on: whatever it did not file is missing again.
+    await importOf(await finish(3), "complete");
+    expect(await repository.hasLiveAcquisitionFor(pack(3).target)).toBe(false);
+    await importOf(await finish(4), "failed");
+    expect(await repository.hasLiveAcquisitionFor(pack(4).target)).toBe(false);
+
+    // Downloaded long ago and never imported: no longer on its way.
+    const stale = await finish(5);
+    await pool.query(
+      "UPDATE acquisitions SET completed_at = now() - interval '2 days' WHERE id = $1",
+      [stale],
+    );
+    expect(await repository.hasLiveAcquisitionFor(pack(5).target)).toBe(false);
+  });
+
+  it("counts the replacements a title has had", async () => {
+    const season = {
+      ...input,
+      target: { kind: "season" as const, title: "Counted Show", season: 2 },
+    };
+    const original = await repository.create(season);
+    expect(await repository.replacementsFor(original.id)).toBe(0);
+    await repository.create({ ...season, origin: "fallback" });
+    await repository.create({ ...season, origin: "fallback" });
+    // Another season of the same show is another title.
+    await repository.create({
+      ...season,
+      target: { ...season.target, season: 3 },
+      origin: "fallback",
+    });
+    expect(await repository.replacementsFor(original.id)).toBe(2);
+  });
+
   it("returns nothing for an acquisition that does not exist", async () => {
     const absent = "00000000-0000-4000-8000-000000000000";
     expect(await repository.get(absent)).toBeNull();

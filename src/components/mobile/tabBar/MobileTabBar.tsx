@@ -1,5 +1,5 @@
 import type { RefObject } from "react";
-import { motion, useTransform } from "framer-motion";
+import { motion } from "framer-motion";
 import { TabButton } from "./TabButton";
 import { useTabBarMotion, useTabs } from "./useTabBar";
 
@@ -15,14 +15,15 @@ const INSET = 4;
 export function MobileTabBar() {
   const tabs = useTabs();
   const bar = useTabBarMotion({ tabs, inset: INSET });
-  const width = useTransform(() => bar.right.get() - bar.left.get());
   const showBeam = bar.activeIndex >= 0 || bar.scrubbing;
 
   return (
     <nav
       style={{ ["--tabbar-ground" as string]: "#0a0b0c" }}
       className={`fixed inset-x-0 bottom-0 z-50 touch-none select-none pb-[env(safe-area-inset-bottom)] transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] landscape:hidden focus-within:!translate-y-0 focus-within:!opacity-100 motion-reduce:transition-opacity ${
-        bar.hidden ? "pointer-events-none translate-y-full motion-reduce:translate-y-0 motion-reduce:opacity-0" : "translate-y-0"
+        bar.hidden
+          ? "pointer-events-none translate-y-full motion-reduce:translate-y-0 motion-reduce:opacity-0"
+          : "translate-y-0"
       }`}
     >
       {/* The wall: near-black glass, its top rim a whisper of hairline
@@ -45,9 +46,10 @@ export function MobileTabBar() {
         style={{ paddingInline: INSET }}
       >
         <motion.div
+          ref={bar.beamRef}
           aria-hidden="true"
-          className="pointer-events-none absolute inset-y-0 left-0"
-          style={{ x: bar.left, width }}
+          className="pointer-events-none absolute inset-y-0 left-0 origin-left"
+          style={{ width: bar.slot }}
           initial={false}
           animate={{ opacity: showBeam ? 1 : 0 }}
           transition={{ duration: 0.2 }}
@@ -72,6 +74,7 @@ export function MobileTabBar() {
           />
           {/* The lamp. */}
           <div
+            ref={bar.lampRef}
             className="absolute bottom-0 left-1/2 h-[3px] w-6 -translate-x-1/2 rounded-t-full"
             style={{
               background: "color-mix(in srgb, var(--accent-hover) 70%, white)",

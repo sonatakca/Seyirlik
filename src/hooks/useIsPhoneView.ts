@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 
 /**
- * A phone held upright: narrower than the hero's tablet layout begins. The
- * phone keeps its own poster-card hero and title page; a tablet, and a phone
- * on its side, get the desktop's hero laid out for their stage.
+ * Where the phone's own heroes are used: a phone, and a tablet held upright.
+ * Both get the poster-card home hero and the title page's whole backdrop
+ * with its copy beneath. A tablet on its side, a phone on its side and any
+ * desktop window, even a narrow tall one (it has no coarse pointer), keep the
+ * desktop's hero laid out for their stage.
  */
-const PHONE_VIEW_QUERY = "(max-width: 599px)";
+const PHONE_VIEW_QUERY =
+  "(max-width: 599px), (orientation: portrait) and (pointer: coarse)";
 
 function readIsPhoneView(): boolean {
   if (typeof window === "undefined" || !window.matchMedia) return false;

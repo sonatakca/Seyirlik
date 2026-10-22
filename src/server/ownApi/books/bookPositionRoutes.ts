@@ -3,16 +3,20 @@ import { sendData } from "../api/envelope";
 import type { RouteDefinition } from "../api/router";
 import {
   asObjectBody,
+  isUuid,
   optionalBodyString,
   requireBodyInteger,
   requireUuid,
   validationError,
 } from "../api/validation";
 import type { CatalogueRepository } from "../catalogue/catalogueRepository";
-import type {
-  BookPlace,
-  BookPosition,
-  BookPositionRepository,
+import {
+  READER_DEVICES,
+  type BookPlace,
+  type BookPosition,
+  type BookPositionRepository,
+  type ReaderDevice,
+  type ReadingSession,
 } from "./bookPositionRepository";
 
 export interface BookPositionRoutesOptions {
@@ -26,6 +30,22 @@ export interface BookPositionDto {
   fraction: number;
   /** ISO 8601. */
   readAt: string;
+}
+
+/** One opening of the book: the one that keeps the place, or this one. */
+export interface ReadingSessionDto {
+  id: string;
+  /** ISO 8601. */
+  openedAt: string;
+  device: ReaderDevice | null;
+}
+
+function toSessionDto(session: ReadingSession): ReadingSessionDto {
+  return {
+    id: session.sessionId,
+    openedAt: session.openedAt.toISOString(),
+    device: session.device,
+  };
 }
 
 function toDto(position: BookPosition | null): BookPositionDto | null {
@@ -71,6 +91,34 @@ function readPlace(body: Record<string, unknown>): BookPlace | null {
 
 /** The earliest moment a reading position can claim: nothing was read before Seyirlik had books. */
 const EARLIEST_READ_AT = Date.UTC(2020, 0, 1);
+
+function readSession(value: unknown): ReadingSession {
+  const session = asObjectBody(
+    value,
+    ["id", "openedAt", "device"],
+    "session is invalid.",
+  );
+  if (!isUuid(session.id)) {
+    throw validationError("session.id is invalid.");
+  }
+  const device = session.device ?? null;
+  if (
+    device !== null &&
+    !(READER_DEVICES as readonly unknown[]).includes(device)
+  ) {
+    throw validationError("session.device is invalid.");
+  }
+  return {
+    sessionId: session.id.toLowerCase(),
+    openedAt: new Date(
+      requireBodyInteger(session, "openedAt", {
+        min: EARLIEST_READ_AT,
+        max: Number.MAX_SAFE_INTEGER,
+      }),
+    ),
+    device: device as ReaderDevice | null,
+  };
+}
 
 export function createBookPositionRoutes({
   positions,
@@ -122,6 +170,7 @@ export function createBookPositionRoutes({
           "place",
           "fraction",
           "readAt",
+          "session",
         ]);
         const cfi = optionalBodyString(body, "cfi", { maxLength: 2_048 });
         if (cfi !== undefined && !/^epubcfi\(.+\)$/.test(cfi)) {
@@ -134,17 +183,43 @@ export function createBookPositionRoutes({
           max: Number.MAX_SAFE_INTEGER,
         });
 
-        const { accepted, position } = await positions.save(
+        const session =
+          body.session === undefined ? undefined : readSession(body.session);
+
+        const { accepted, position, superseded } = await positions.save(
           principal.userId,
           itemId,
           { cfi: cfi ?? null, place, fraction, readAt: new Date(readAt) },
+          session,
         );
 
-        // Losing to a later position is not an error: the reply carries that
-        // position, so the device that lost can move to it.
+        // Losing to a later position, or to a copy of the book opened later,
+        // is not an error: the reply carries that position and that copy, so
+        // the page that lost can say why and move on.
         sendData(context.response, context.requestId, {
           accepted,
           position: toDto(position),
+          superseded: superseded ? toSessionDto(superseded) : null,
+        });
+      },
+    },
+    {
+      method: "PUT",
+      path: "/books/:itemId/session",
+      access: "authenticated",
+      handle: async (context) => {
+        const principal = context.requirePrincipal();
+        const itemId = requireUuid(context.params.itemId, "itemId");
+        await requireBook(principal.userId, itemId);
+
+        const session = readSession(await context.readJson(1_024));
+        const claim = await positions.claim(principal.userId, itemId, session);
+
+        // Not keeping the place is not an error either: the reply says which
+        // copy keeps it.
+        sendData(context.response, context.requestId, {
+          owner: claim.owner,
+          session: toSessionDto(claim.session),
         });
       },
     },

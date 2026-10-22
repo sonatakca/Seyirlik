@@ -13,6 +13,7 @@ import {
   copyFile,
   mkdtemp,
   mkdir,
+  open,
   readFile,
   rm,
   stat,
@@ -624,6 +625,80 @@ describe("adaptive packaging refusals", () => {
     expect(result.status).toBe("deferred-for-storage");
     expect(result.versionDirectory).toBeUndefined();
   }, 120_000);
+});
+
+describe("resuming a package that never finished validating", () => {
+  it.each([
+    { withPackage: true, status: "ready" },
+    { withPackage: false, status: "deferred-for-storage" },
+  ])(
+    "counts the unverified package it replaces as free space: $withPackage",
+    async ({ withPackage, status }) => {
+      if (!ffmpegAvailable) return;
+      // A restart mid-validation leaves an assembled package with no verified
+      // marker. The packager removes it before re-assembling, so the
+      // preflight must not demand room for it as well.
+      const paths = await createPaths();
+      const titleRoot = await mkdtemp(path.join(workspace, "title-"));
+      const sourcePath = path.join(titleRoot, "source-sdr-25.mp4");
+      await copyFile(
+        path.join(getAdaptiveFixtureDirectory(), "source-sdr-25.mp4"),
+        sourcePath,
+      );
+      const fingerprint = await computeSourceFingerprint(
+        sourcePath,
+        await stat(sourcePath),
+      );
+      const workspaceId = "22222222-2222-4222-8222-222222222222";
+      const own = path.join(paths.workRoot, workspaceId);
+      await mkdir(own, { recursive: true });
+      await writeFile(
+        path.join(own, ".seyirlik-job.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          owner: "seyirlik-processing-job",
+          workspaceId,
+          sourceFingerprint: fingerprint,
+        }),
+      );
+      const assembled = path.join(
+        own,
+        `${ADAPTIVE_PROFILE_VERSION}-${fingerprint.slice(0, 16)}.verified-package`,
+      );
+      if (withPackage) {
+        await mkdir(assembled, { recursive: true });
+        // Sparse: its size is what counts, not its blocks.
+        const handle = await open(path.join(assembled, "video.m4s"), "w");
+        await handle.truncate(64 * 1024 * 1024 * 1024);
+        await handle.close();
+      }
+
+      const result = await packageAdaptiveRendition(
+        {
+          mediaId: MEDIA_ID,
+          relativePath: path.basename(sourcePath),
+          sourceFingerprint: fingerprint,
+          sourcePath,
+          workspaceId,
+        },
+        paths,
+        {
+          reserveBytes: 0,
+          preset: "ultrafast",
+          verifySourceFingerprint: false,
+          // Less room than one more copy of this package would take.
+          driveSpaceProvider: async () => ({ totalBytes: 1e12, freeBytes: 1 }),
+        },
+      );
+
+      expect(result.status).toBe(status);
+      if (withPackage) {
+        // The stale package was replaced, not kept beside the new one.
+        await expect(stat(path.join(assembled, "video.m4s"))).rejects.toThrow();
+      }
+    },
+    180_000,
+  );
 });
 
 describe("resume behaviour", () => {

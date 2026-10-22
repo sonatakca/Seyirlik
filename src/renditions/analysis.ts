@@ -40,6 +40,7 @@ import {
 } from "./adaptive/inspect";
 import { resolveTitleRoot } from "./adaptive/titleRoot";
 import { ADAPTIVE_PROFILE_VERSION } from "./adaptive/profile";
+import { planRetainedSidecarSubtitles } from "./adaptive/processor";
 import { SEGMENT_TARGET_SECONDS } from "../lib/playback-planner/gopPolicy";
 
 export interface RenditionPaths {
@@ -358,6 +359,7 @@ export async function analyseRenditionLibrary({
                 : "ready"
               : "pending";
       const adaptiveInspection = await inspectAdaptivePackage({
+        sidecarSubtitles: await planRetainedSidecarSubtitles(source.filePath),
         /*
          * A movie's package sits beside its source; a source that shares its
          * folder with others — an episode in a season folder — has its own

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -118,6 +118,9 @@ describe("SeriesLibraryDetails", () => {
       Studios: [{ Name: "Example Studio" }],
     } as MediaItem;
 
+    const watchedSlot = document.body.appendChild(
+      document.createElement("span"),
+    );
     render(
       <MemoryRouter>
         <SeriesLibraryDetails
@@ -125,6 +128,8 @@ describe("SeriesLibraryDetails", () => {
           variant="desktop"
           canonicalPath="/library/movie-1"
           onInitialReady={onInitialReady}
+          watchedSlot={watchedSlot}
+          watchedSlotLook="dock"
         />
       </MemoryRouter>,
     );
@@ -136,6 +141,14 @@ describe("SeriesLibraryDetails", () => {
       screen.getByRole("button", { name: "Scroll Similar left" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Cast and crew")).toBeInTheDocument();
+    // Similar titles close the page, after the title's own cast and facts.
+    expect(
+      screen
+        .getByRole("heading", { name: "Information" })
+        .compareDocumentPosition(
+          screen.getByRole("heading", { name: "Similar" }),
+        ),
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(screen.getByText("About")).toBeInTheDocument();
     expect(screen.getByText("Movie overview")).toBeInTheDocument();
     // A person credited twice is one card with both credits.
@@ -148,9 +161,10 @@ describe("SeriesLibraryDetails", () => {
     expect(screen.getByText("Director")).toBeInTheDocument();
     // No headshot: the frame holds an icon rather than a broken image.
     expect(screen.queryByAltText("Example Director")).not.toBeInTheDocument();
+    // In the hero's place for it, beside the dock.
     expect(
-      screen.getByRole("button", { name: "Mark as watched" }),
-    ).toBeInTheDocument();
+      within(watchedSlot).getByRole("button", { name: "Mark as watched" }),
+    ).toHaveClass("hero-dock-action");
 
     expect(
       screen.queryByRole("button", { name: "Scroll Episodes left" }),
@@ -180,18 +194,23 @@ describe("SeriesLibraryDetails", () => {
       Overview: "Show overview",
     };
 
+    const watchedSlot = document.body.appendChild(
+      document.createElement("span"),
+    );
     render(
       <MemoryRouter>
         <SeriesLibraryDetails
           initialItem={series}
           variant="desktop"
           canonicalPath="/shows/series-1"
+          watchedSlot={watchedSlot}
+          watchedSlotLook="dock"
         />
       </MemoryRouter>,
     );
 
     expect(
-      await screen.findByRole("button", {
+      await within(watchedSlot).findByRole("button", {
         name: "Mark whole show as watched",
       }),
     ).toBeInTheDocument();

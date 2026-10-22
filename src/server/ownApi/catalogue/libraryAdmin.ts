@@ -16,6 +16,7 @@ import {
   type MonitoringChoice,
 } from "../releases/monitoring";
 import { normalizeLanguage } from "../../../renditions/processing/languages";
+import type { ProcessingPackageState } from "../processing/packageIndex";
 import { MEDIA_STATUS_SQL, mediaAvailableSql } from "./mediaAvailability";
 
 export type LibraryTitleKind = "movie" | "series" | "book";
@@ -36,6 +37,8 @@ export interface HoldingFacts {
   /** Playable titles (a film, or each episode) on disk, and how many have trickplay sheets. */
   files: number;
   trickplayFiles: number;
+  /** Playable titles whose trickplay is queued or being generated. */
+  pendingTrickplay: number;
 }
 
 export interface LibraryTitle extends HoldingFacts {
@@ -133,7 +136,13 @@ const HOLDING_COLUMNS = `
       AND EXISTS (SELECT 1 FROM trickplay_sets ts WHERE ts.media_file_id = f.id)) AS "trickplayFiles",
   ARRAY(SELECT DISTINCT w.language FROM subtitle_wants w JOIN media_files f ON f.id = w.media_file_id
     JOIN items fam ON fam.id = f.item_id
-    WHERE ${FAMILY("item")} AND w.active ORDER BY 1) AS "pendingSubtitles"`;
+    WHERE ${FAMILY("item")} AND w.active ORDER BY 1) AS "pendingSubtitles",
+  -- A title's trickplay job is keyed by the title, so a queued or running one
+  -- is found by its dedupe key alone.
+  (SELECT count(*)::int FROM items fam
+    WHERE ${FAMILY("item")} AND fam.kind IN ('movie', 'episode')
+      AND EXISTS (SELECT 1 FROM jobs tj WHERE tj.dedupe_key = 'trickplay.generate:' || fam.id::text
+        AND tj.status IN ('queued', 'running'))) AS "pendingTrickplay"`;
 
 type HoldingRow = Omit<HoldingFacts, "sizeBytes"> & {
   sizeBytes: string | number;
@@ -161,6 +170,7 @@ function holding(row: HoldingRow): HoldingFacts {
     pendingSubtitles: languageSet(row.pendingSubtitles),
     files: row.files,
     trickplayFiles: row.trickplayFiles,
+    pendingTrickplay: row.pendingTrickplay,
   };
 }
 
@@ -178,6 +188,7 @@ const NOTHING_HELD = (status: string): HoldingFacts => ({
   pendingSubtitles: [],
   files: 0,
   trickplayFiles: 0,
+  pendingTrickplay: 0,
 });
 
 type TitleRow = HoldingRow & {
@@ -247,16 +258,25 @@ export function createLibraryAdminRepository(
   db: DatabaseExecutor,
   options: {
     /**
-     * Whether a stored image's file is still there. Generated storage is
-     * rebuilt rather than backed up, so a row can outlive its file — which
-     * reads as a title with no poster.
+     * Whether a stored image can still be drawn: its file, or a cached
+     * variant of it. Generated storage is rebuilt rather than backed up, so a
+     * row can outlive both — which reads as a title with no poster.
      */
-    artworkExists?: (storageKey: string) => Promise<boolean>;
+    artworkExists?: (image: {
+      storageKey: string;
+      contentHash: string;
+    }) => Promise<boolean>;
   } = {},
 ) {
   const present = async (row: TitleRow) =>
     row.coverKey !== null &&
-    (options.artworkExists ? await options.artworkExists(row.coverKey) : true);
+    row.coverTag !== null &&
+    (options.artworkExists
+      ? await options.artworkExists({
+          storageKey: row.coverKey,
+          contentHash: row.coverTag,
+        })
+      : true);
   const toTitles = (rows: TitleRow[]) =>
     Promise.all(rows.map(async (row) => toTitle(row, await present(row))));
 
@@ -303,21 +323,26 @@ export function createLibraryAdminRepository(
     /** The file a subtitle or a detail line is about: the largest live one. */
     async primaryFiles(
       itemIds: readonly string[],
-    ): Promise<Map<string, { id: string; relativePath: string }>> {
-      const files = new Map<string, { id: string; relativePath: string }>();
+    ): Promise<Map<string, PrimaryFile>> {
+      const files = new Map<string, PrimaryFile>();
       if (itemIds.length === 0) return files;
       const result = await db.query<{
         item_id: string;
         id: string;
         relative_path: string;
+        fingerprint: string | null;
       }>(
-        `SELECT DISTINCT ON (item_id) item_id, id, relative_path FROM media_files
+        `SELECT DISTINCT ON (item_id) item_id, id, relative_path, fingerprint FROM media_files
          WHERE item_id = ANY($1::uuid[]) AND missing_since IS NULL AND size_bytes > 0
          ORDER BY item_id, is_primary DESC, size_bytes DESC`,
         [[...itemIds]],
       );
       for (const row of result.rows)
-        files.set(row.item_id, { id: row.id, relativePath: row.relative_path });
+        files.set(row.item_id, {
+          id: row.id,
+          relativePath: row.relative_path,
+          fingerprint: row.fingerprint,
+        });
       return files;
     },
 
@@ -340,6 +365,31 @@ export function createLibraryAdminRepository(
            ${HOLDING_COLUMNS}
          FROM items item WHERE item.series_id = $1 AND item.kind = 'episode'
          ORDER BY item.parent_index_number NULLS LAST, item.index_number NULLS LAST, item.sort_title`,
+        [seriesId],
+      );
+      return result.rows;
+    },
+
+    /**
+     * Downloads and imports that name the series itself rather than an
+     * episode: a season pack, or an episode the catalogue has no row for yet.
+     * A null episode covers the whole season.
+     */
+    async seriesWork(seriesId: string) {
+      const result = await db.query<{
+        stage: "downloading" | "importing";
+        season: number | null;
+        episode: number | null;
+      }>(
+        `SELECT 'downloading' AS stage, a.target_season AS season, a.target_episode AS episode
+           FROM acquisitions a
+          WHERE a.target_item_id = $1 AND a.target_kind IN ('season', 'episode')
+            AND a.state NOT IN ('downloaded', 'cancelled', 'superseded', 'failed')
+         UNION ALL
+         SELECT 'importing', imp.target_season, imp.target_episode
+           FROM imports imp
+          WHERE imp.target_item_id = $1 AND imp.target_kind IN ('season', 'episode')
+            AND imp.state NOT IN ('complete', 'cancelled', 'failed')`,
         [seriesId],
       );
       return result.rows;
@@ -388,9 +438,82 @@ export type LibraryAdminRepository = ReturnType<
   typeof createLibraryAdminRepository
 >;
 
+export interface PrimaryFile {
+  id: string;
+  relativePath: string;
+  fingerprint: string | null;
+}
+
+/** What the processing page's package index knows about one file's package. */
+export type PackageStateLookup = (file: PrimaryFile) => ProcessingPackageState;
+
+/**
+ * An episode's status, with "processed" read from its package.
+ *
+ * `MEDIA_STATUS_SQL` calls a title ready when a succeeded job published it,
+ * but that row is history: the processing page deletes it on request, and a
+ * title packaged before the catalogue was rebuilt never had one. The package
+ * on disk is what playback serves and what the processing page reports, so
+ * once the index has read it, it decides; until then the job history stands.
+ */
+export function packagedStatus(
+  status: string,
+  processing: number,
+  state: ProcessingPackageState,
+): string {
+  if (state === "complete") return "ready";
+  if (state === "unknown" || status !== "ready") return status;
+  return processing > 0 ? "processing" : "downloaded";
+}
+
 function baseName(relativePath: string | undefined): string | null {
   if (!relativePath) return null;
   return relativePath.split("/").pop() ?? null;
+}
+
+/** What a title page needs from TMDB: a show's seasons and their episodes. */
+export type SeriesCatalogue = Pick<
+  TmdbClient,
+  "getSeries" | "getSeasonEpisodes" | "buildImageUrl"
+>;
+
+/**
+ * TMDB's seasons and episodes, kept for a few minutes.
+ *
+ * An open title page asks for itself every few seconds to stay live, and what
+ * TMDB lists for a show changes over days, so asking it each time would be a
+ * call per season every few seconds for nothing. A failed answer is not kept.
+ */
+export function cacheSeriesCatalogue(
+  tmdb: SeriesCatalogue,
+  ttlMs = 10 * 60_000,
+  now = () => Date.now(),
+): SeriesCatalogue {
+  const entries = new Map<string, { at: number; value: Promise<unknown> }>();
+  const remember = <T>(key: string, load: () => Promise<T>): Promise<T> => {
+    const hit = entries.get(key);
+    if (hit && now() - hit.at < ttlMs) return hit.value as Promise<T>;
+    if (entries.size > 500)
+      for (const [stale, entry] of entries)
+        if (now() - entry.at >= ttlMs) entries.delete(stale);
+    const value = load();
+    entries.set(key, { at: now(), value });
+    value.catch(() => {
+      if (entries.get(key)?.value === value) entries.delete(key);
+    });
+    return value;
+  };
+  return {
+    getSeries: (providerId, language) =>
+      remember(`series:${providerId}:${language ?? ""}`, () =>
+        tmdb.getSeries(providerId, language),
+      ),
+    getSeasonEpisodes: (providerId, seasonNumber) =>
+      remember(`season:${providerId}:${seasonNumber}`, () =>
+        tmdb.getSeasonEpisodes(providerId, seasonNumber),
+      ),
+    buildImageUrl: (imagePath, size) => tmdb.buildImageUrl(imagePath, size),
+  };
 }
 
 /**
@@ -403,10 +526,11 @@ function baseName(relativePath: string | undefined): string | null {
  */
 export async function loadTitleDetail(
   repository: LibraryAdminRepository,
-  tmdb: TmdbClient | undefined,
+  tmdb: SeriesCatalogue | undefined,
   itemId: string,
-  now = new Date(),
+  options: { now?: Date; packageState?: PackageStateLookup } = {},
 ): Promise<LibraryTitleDetail | null> {
+  const now = options.now ?? new Date();
   const title = await repository.getTitle(itemId);
   if (!title) return null;
   if (title.kind !== "series") {
@@ -420,9 +544,10 @@ export async function loadTitleDetail(
     };
   }
 
-  const [rows, monitoring] = await Promise.all([
+  const [rows, monitoring, seriesWork] = await Promise.all([
     repository.listEpisodes(title.id),
     repository.monitoring(title.id),
+    repository.seriesWork(title.id),
   ]);
   const files = await repository.primaryFiles(rows.map((row) => row.id));
   const seasonIds = new Map<number, string>();
@@ -433,6 +558,13 @@ export async function loadTitleDetail(
   const unnumbered: LibraryEpisode[] = [];
   for (const row of rows) {
     const file = files.get(row.id);
+    const facts = holding(row);
+    if (file && options.packageState)
+      facts.status = packagedStatus(
+        facts.status,
+        facts.processing,
+        options.packageState(file),
+      );
     const episode: LibraryEpisode = {
       id: row.id,
       seasonNumber: row.season ?? 0,
@@ -444,7 +576,7 @@ export async function loadTitleDetail(
       monitored: true,
       hasThumb: row.hasThumb,
       stillUrl: null,
-      ...holding(row),
+      ...facts,
     };
     if (row.season === null || row.episode === null) unnumbered.push(episode);
     else episodes.set(`${row.season}:${row.episode}`, episode);
@@ -505,6 +637,19 @@ export async function loadTitleDetail(
     } catch {
       // The disk is still the truth; TMDB only adds the rows it is missing.
       catalogueComplete = false;
+    }
+  }
+
+  // Work addressed to the series reaches the episodes it covers that are not
+  // held yet, so a season pack or an uncatalogued episode reads as on its way.
+  for (const episode of episodes.values()) {
+    if (episode.hasMedia) continue;
+    for (const work of seriesWork) {
+      if (
+        work.season === episode.seasonNumber &&
+        (work.episode === null || work.episode === episode.episodeNumber)
+      )
+        episode[work.stage] += 1;
     }
   }
 

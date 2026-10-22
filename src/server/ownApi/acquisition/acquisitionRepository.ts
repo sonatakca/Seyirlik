@@ -51,6 +51,10 @@ export interface CreateAcquisitionInput {
 export interface AcquisitionSummary extends AcquisitionRecord {
   readonly targetTitle: string;
   readonly targetKind: string;
+  readonly targetItemId?: string;
+  readonly targetYear?: number;
+  readonly targetSeason?: number;
+  readonly targetEpisode?: number;
   readonly origin: string;
   readonly failureClass?: string;
   readonly failureDetail?: string;
@@ -107,6 +111,18 @@ export interface AcquisitionRepository extends AcquisitionStore {
    * the page say a title needs attention while it is downloading.
    */
   supersedeFailedFor(acquisitionId: string): Promise<number>;
+  /**
+   * Whether this target already has a download that is running or done.
+   *
+   * Asked before a season is replaced episode by episode, so an episode that
+   * is already downloading, or already downloaded, is not fetched twice.
+   */
+  hasLiveAcquisitionFor(target: AcquisitionTarget): Promise<boolean>;
+  /**
+   * How many replacements this acquisition's target has had: the fallback
+   * acquisitions for the same title. Bounds automatic retries per title.
+   */
+  replacementsFor(acquisitionId: string): Promise<number>;
   /** What was asked for, and against which profile — enough to ask again. */
   searchContext(id: string): Promise<{
     target: AcquisitionTarget;
@@ -129,6 +145,10 @@ interface Row {
   failure_detail: string | null;
   target_title: string;
   target_kind: string;
+  target_item_id: string | null;
+  target_year: number | null;
+  target_season: number | null;
+  target_episode: number | null;
   origin: string;
   created_at: Date;
   updated_at: Date;
@@ -136,8 +156,8 @@ interface Row {
 
 const COLUMNS = `id, state, indexer_id, release_guid, release_title,
   idempotency_key, external_id, attempt, download_path, size_bytes,
-  failure_class, failure_detail, target_title, target_kind, origin,
-  created_at, updated_at`;
+  failure_class, failure_detail, target_title, target_kind, target_item_id,
+  target_year, target_season, target_episode, origin, created_at, updated_at`;
 
 function toSummary(row: Row): AcquisitionSummary {
   const size = row.size_bytes === null ? undefined : Number(row.size_bytes);
@@ -156,6 +176,14 @@ function toSummary(row: Row): AcquisitionSummary {
     ...(row.failure_detail ? { failureDetail: row.failure_detail } : {}),
     targetTitle: row.target_title,
     targetKind: row.target_kind,
+    ...(row.target_item_id === null
+      ? {}
+      : { targetItemId: row.target_item_id }),
+    ...(row.target_year === null ? {} : { targetYear: row.target_year }),
+    ...(row.target_season === null ? {} : { targetSeason: row.target_season }),
+    ...(row.target_episode === null
+      ? {}
+      : { targetEpisode: row.target_episode }),
     origin: row.origin,
     createdAtMs: row.created_at.getTime(),
     updatedAtMs: row.updated_at.getTime(),
@@ -350,7 +378,10 @@ export function createAcquisitionRepository(
       /*
        * The same target: the catalogue item when both name one, otherwise
        * the kind, title, season and episode. A year counts only when both
-       * rows recorded one, because a search by hand may leave it out.
+       * rows recorded one, because a search by hand may leave it out. The
+       * item alone is not enough: a season pack, and an episode the catalogue
+       * has no row for yet, name their series, so two seasons of one show
+       * share an item and differ only in their numbers.
        */
       const result = await pool.query<{ acquisition_id: string }>(
         `WITH newer AS (SELECT * FROM acquisitions WHERE id = $1),
@@ -362,7 +393,9 @@ export function createAcquisitionRepository(
               AND a.state = 'failed'
               AND a.target_kind = n.target_kind
               AND (
-                (a.target_item_id IS NOT NULL AND a.target_item_id = n.target_item_id)
+                (a.target_item_id IS NOT NULL AND a.target_item_id = n.target_item_id
+                 AND a.target_season IS NOT DISTINCT FROM n.target_season
+                 AND a.target_episode IS NOT DISTINCT FROM n.target_episode)
                 OR (
                   lower(a.target_title) = lower(n.target_title)
                   AND (a.target_year IS NULL OR n.target_year IS NULL
@@ -382,6 +415,78 @@ export function createAcquisitionRepository(
         [acquisitionId],
       );
       return result.rows.length;
+    },
+
+    async hasLiveAcquisitionFor(target) {
+      /*
+       * The same matching `supersedeFailedFor` uses: the catalogue item when
+       * both name one, otherwise kind, title, season and episode.
+       *
+       * `downloaded` never changes again, so it cannot mean "still coming" on
+       * its own. A finished download covers its target while its import is
+       * under way, or for a day while it waits for one; after that, whatever
+       * the import did not file is missing again. A season pack that filed
+       * half its episodes used to block every later search of its season.
+       */
+      const result = await pool.query<{ live: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM acquisitions a
+            WHERE a.state NOT IN ('failed','cancelled','superseded')
+              AND (
+                a.state <> 'downloaded'
+                OR EXISTS (SELECT 1 FROM imports i WHERE i.acquisition_id = a.id
+                             AND i.state NOT IN ('complete','cancelled','failed'))
+                OR (NOT EXISTS (SELECT 1 FROM imports i WHERE i.acquisition_id = a.id)
+                    AND a.completed_at > now() - interval '1 day')
+              )
+              AND a.target_kind = $1
+              AND (
+                ($2::uuid IS NOT NULL AND a.target_item_id = $2::uuid
+                 AND a.target_season IS NOT DISTINCT FROM $5::int
+                 AND a.target_episode IS NOT DISTINCT FROM $6::int)
+                OR (
+                  lower(a.target_title) = lower($3)
+                  AND (a.target_year IS NULL OR $4::int IS NULL
+                       OR a.target_year = $4::int)
+                  AND a.target_season IS NOT DISTINCT FROM $5::int
+                  AND a.target_episode IS NOT DISTINCT FROM $6::int
+                )
+              )
+         ) AS live`,
+        [
+          target.kind,
+          target.itemId ?? null,
+          target.title,
+          target.year ?? null,
+          target.season ?? null,
+          target.episode ?? null,
+        ],
+      );
+      return result.rows[0]?.live === true;
+    },
+
+    async replacementsFor(acquisitionId) {
+      const result = await pool.query<{ count: string }>(
+        `WITH this AS (SELECT * FROM acquisitions WHERE id = $1)
+         SELECT count(*) AS count
+           FROM acquisitions a, this n
+          WHERE a.origin = 'fallback'
+            AND a.target_kind = n.target_kind
+            AND (
+              (a.target_item_id IS NOT NULL AND a.target_item_id = n.target_item_id
+               AND a.target_season IS NOT DISTINCT FROM n.target_season
+               AND a.target_episode IS NOT DISTINCT FROM n.target_episode)
+              OR (
+                lower(a.target_title) = lower(n.target_title)
+                AND (a.target_year IS NULL OR n.target_year IS NULL
+                     OR a.target_year = n.target_year)
+                AND a.target_season IS NOT DISTINCT FROM n.target_season
+                AND a.target_episode IS NOT DISTINCT FROM n.target_episode
+              )
+            )`,
+        [acquisitionId],
+      );
+      return Number(result.rows[0]?.count ?? 0);
     },
 
     async searchContext(id) {

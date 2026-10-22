@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import path from "node:path";
 import type { IncomingMessage } from "node:http";
 import type { OwnApiRouteHandler } from "./ownApiHandler";
@@ -41,6 +41,8 @@ import { migrateTitleArtwork } from "./images/titleArtworkMigration";
 import { createBookRoutes } from "./books/bookRoutes";
 import { createBookPositionRepository } from "./books/bookPositionRepository";
 import { createBookPositionRoutes } from "./books/bookPositionRoutes";
+import { createBookMarkRepository } from "./books/bookMarkRepository";
+import { createBookMarkRoutes } from "./books/bookMarkRoutes";
 import { createBookSearch } from "./books/bookSearch";
 import { createBookSearchProcess } from "./books/bookSearchProcess";
 import { createBookSearchRoutes } from "./books/bookSearchRoutes";
@@ -65,17 +67,50 @@ import {
 } from "./libraries/libraryRepository";
 import { createJobQueue } from "./tasks/jobQueue";
 import { createWorker } from "./tasks/worker";
+import { createJobHandlers, JOB_TYPES } from "./tasks/jobHandlers";
 import {
-  createJobHandlers,
-  JOB_TYPES,
-  MEDIA_LANE_JOB_TYPES,
-  TRICKPLAY_LANE_JOB_TYPES,
-} from "./tasks/jobHandlers";
+  ownsLibrary,
+  ownsProcessing,
+  parseWorkerRole,
+  workerLanes,
+} from "./tasks/workerRole";
+import { parseDeleteMissing, parseRescanMinutes } from "./scanner/scanSettings";
+import {
+  deviceLossEvidence,
+  jobsToPauseOnLoss,
+} from "./processing/storageLoss";
 import { createTaskRoutes } from "./tasks/taskRoutes";
-import { createProcessingJobStore } from "./processing/jobStore";
-import { createProcessingRoutes } from "./processing/processingRoutes";
+import {
+  createProcessingJobStore,
+  WORKSPACE_CLAIMING_STATES,
+} from "./processing/jobStore";
+import {
+  createHardwareDetector,
+  createProcessingRoutes,
+} from "./processing/processingRoutes";
+import { createProcessingEnqueuer } from "./processing/processingEnqueue";
+import { createPackageIndex } from "./processing/packageIndex";
+import {
+  createImportProcessingStore,
+  createImportProcessingSweep,
+} from "./imports/importProcessing";
 import { createProcessingJobRunner } from "./processing/jobRunner";
-import { pruneLiveProgress } from "./processing/liveProgress";
+import {
+  createDatabaseDriveUploadStore,
+  createDriveRcClient,
+  createDriveUploadTracker,
+  driveRcConfigFromEnvironment,
+} from "./processing/driveUpload";
+import {
+  createDatabaseSourceCleanupStore,
+  createSourceCleanup,
+  packageGapsOnDrive,
+} from "./processing/sourceCleanup";
+import {
+  createDatabaseLiveProgressStore,
+  pruneLiveProgress,
+  shareLiveProgress,
+} from "./processing/liveProgress";
 import {
   resolveTitleRoot,
   titleRootLayoutForKind,
@@ -140,9 +175,22 @@ import { createIndexerRoutes } from "./indexers/indexerRoutes";
 import { createPolicyRepository } from "./releases/policyRepository";
 import { createReleaseRoutes } from "./releases/releaseRoutes";
 import { createBlocklistRepository } from "./releases/blocklistRepository";
+import {
+  createAcquisitionFallback,
+  createCatalogueEpisodeLookup,
+} from "./acquisition/acquisitionFallback";
 import { createMonitoringRepository } from "./releases/monitoringRepository";
 import { createWantedRoutes } from "./catalogue/wantedRoutes";
-import { createLibraryAdminRepository } from "./catalogue/libraryAdmin";
+import {
+  cacheSeriesCatalogue,
+  createLibraryAdminRepository,
+  loadTitleDetail,
+} from "./catalogue/libraryAdmin";
+import {
+  createMissingSearchJobHandler,
+  MISSING_SEARCH_JOB_TYPE,
+  missingEpisodePlan,
+} from "./acquisition/missingEpisodes";
 import { createLibraryAdminRoutes } from "./catalogue/libraryAdminRoutes";
 import { createTitleRemoval } from "./catalogue/titleRemoval";
 import { createMonitoringRoutes } from "./releases/monitoringRoutes";
@@ -162,6 +210,7 @@ import {
   disabledSubtitleJobTypes,
 } from "./subtitles/subtitleRuntime";
 import { createSubtitleRoutes } from "./subtitles/subtitleRoutes";
+import type { TitleReferences } from "./subtitles/subtitleReferences";
 import { createSubtitleUploader } from "./subtitles/subtitleUpload";
 import { createProviderSessionVault } from "./subtitles/providerSessionVault";
 import {
@@ -176,6 +225,7 @@ import type {
 import type { PlaybackRefreshBoundary } from "./playback/playbackRefresh";
 import { createImportRepository } from "./imports/importRepository";
 import { createImportService } from "./imports/importService";
+import { ownedFolderForItem } from "./imports/importFolder";
 import { createImportOperations } from "./imports/importOperations";
 import { createNodeReadFileSystem } from "./imports/importFileSystem";
 import {
@@ -296,6 +346,12 @@ const ACQUISITION_RECONCILE_INTERVAL_MS = 30_000;
  * changes on its own between one look and the next.
  */
 const IMPORT_RECONCILE_INTERVAL_MS = 120_000;
+/**
+ * How often to look for imported files the library has registered and
+ * processing has not been asked about. A listing of a handful of rows, so a
+ * newly registered episode is queued within a minute.
+ */
+const IMPORT_PROCESSING_INTERVAL_MS = 30_000;
 /** Leftovers accumulate over days; a pass every six hours keeps up with them. */
 const GARBAGE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 /** Long enough after a start that the startup sweep and recovery are done. */
@@ -386,6 +442,21 @@ export async function createNativeRuntime({
 
   const libraries = createLibraryRepository(pool);
   const definitions = parseLibraryDefinitions(environment.SEYIRLIK_LIBRARIES);
+
+  /*
+   * Which half of the queue this process's worker takes, and the two settings
+   * that make a partial library on a cloud mount safe to scan. See
+   * `workerRole.ts` and `ReconcileOptions.deleteMissing`.
+   */
+  const workerRole = parseWorkerRole(environment.SEYIRLIK_WORKER_ROLE);
+  const processingWorker = ownsProcessing(runWorker, workerRole);
+  const libraryWorker = ownsLibrary(runWorker, workerRole);
+  const deleteMissingTitles = parseDeleteMissing(
+    environment.SEYIRLIK_CATALOGUE_DELETE_MISSING,
+  );
+  const libraryRescanMs = parseRescanMinutes(
+    environment.SEYIRLIK_LIBRARY_RESCAN_MINUTES,
+  );
   if (definitions.length > 0) {
     await libraries.provision(definitions);
   }
@@ -398,6 +469,7 @@ export async function createNativeRuntime({
   const images = createImageRepository(pool);
   const userState = createUserStateRepository(pool);
   const bookPositions = createBookPositionRepository(pool);
+  const bookMarks = createBookMarkRepository(pool);
   // Nothing starts until a book is first searched: the model downloads into
   // generated storage then, and runs in its own low-priority process.
   const bookSearch = createBookSearch({
@@ -484,7 +556,7 @@ export async function createNativeRuntime({
     legacyLogsRoot:
       environment.SEYIRLIK_RENDITION_LOGS_ROOT?.trim() ||
       path.join(mediaRoot, ".seyirlik", "logs"),
-    allowUnavailable: !runWorker,
+    allowUnavailable: !processingWorker,
   });
   const processingJobs = createProcessingJobStore(pool);
 
@@ -795,7 +867,8 @@ export async function createNativeRuntime({
        * nothing is running. Only the acting on it is gated below.
        */
       const active = await processingJobs.listActive().catch(() => []);
-      if (active.length > 0) {
+      const evidence = deviceLossEvidence(processingWorker, active);
+      if (evidence) {
         /*
          * Missing at idle is a clean unmount. Missing while an encoder or
          * probe has the source open is device loss during a read, which is
@@ -806,13 +879,13 @@ export async function createNativeRuntime({
         await storageGuard.reportFailure({
           kind: "storage-device-lost",
           detail: `${storageWatchdog.missingRoots.join(", ") || "The storage"} disappeared while processing was active.`,
-          processingJobId: active[0]?.id,
+          processingJobId: evidence.id,
         });
       } else {
         await storageGuard.observeAvailability(false);
       }
-      if (!runWorker) return;
-      for (const job of active) {
+      if (!processingWorker) return;
+      for (const job of jobsToPauseOnLoss(active)) {
         await processingJobs.requestPause(
           job.id,
           storageGuard.health.state === "quarantined"
@@ -823,7 +896,7 @@ export async function createNativeRuntime({
     },
     onRestored: async () => {
       await storageGuard.observeAvailability(true);
-      if (!runWorker) return;
+      if (!processingWorker) return;
       /*
        * Only the jobs the watchdog itself paused: a job an operator paused by
        * hand stays paused, because the drive returning does not answer why a
@@ -915,7 +988,7 @@ export async function createNativeRuntime({
    * cached copy of it, so each one has to re-read the row in the state where
    * its copy can be wrong in the direction that does harm. The two are mirror
    * images, because raising a hold and lifting one happen in different
-   * processes: only the worker raises (the `!runWorker` returns in the
+   * processes: only the worker raises (the `!processingWorker` returns in the
    * watchdog above), and only the API server lifts, on the two recovery
    * presses.
    *
@@ -941,7 +1014,7 @@ export async function createNativeRuntime({
   const releaseTimer = setInterval(() => {
     if (
       !shouldRereadIncident({
-        runWorker,
+        runWorker: processingWorker,
         mayStartWork: storageGuard.mayStartWork(),
       })
     ) {
@@ -951,7 +1024,7 @@ export async function createNativeRuntime({
       const before = storageGuard.health.state;
       await storageGuard.reload();
       if (
-        runWorker &&
+        processingWorker &&
         before !== storageGuard.health.state &&
         storageGuard.mayStartWork()
       ) {
@@ -977,14 +1050,14 @@ export async function createNativeRuntime({
    * Only the worker sweeps, and only at startup, because this is the one
    * moment when nothing is running and the set of jobs that could still claim
    * a workspace is knowable. A workspace whose job is pending, queued, running
-   * or paused is left exactly where it is however old it looks: a job parked
+   * or paused, failed or cancelled is kept for retry however old it looks. A job parked
    * for a drive that has been unplugged for a month owns the most valuable
    * directory on the volume, and it is precisely the one an age-based sweep
    * would take.
    */
   const sweepAbandonedScratch = async (): Promise<void> => {
     const live = new Set<string>();
-    for (const state of ["pending", "queued", "running", "paused"] as const) {
+    for (const state of WORKSPACE_CLAIMING_STATES) {
       for (const job of await processingJobs.list({ state, limit: 10_000 })) {
         live.add(job.id);
       }
@@ -1002,7 +1075,7 @@ export async function createNativeRuntime({
 
   // Same ownership rule: the process that will run the work is the one that
   // decides what to do with work the last run left behind.
-  if (runWorker) {
+  if (processingWorker) {
     await sweepAbandonedScratch().catch((error) => {
       // Never fatal: scratch that is not released is wasted space, while a
       // worker that will not start is a library that does not process at all.
@@ -1025,6 +1098,97 @@ export async function createNativeRuntime({
    * found it would animate a bar from a frozen speed as though the encode were
    * still going, so anything belonging to a job that is not active goes.
    */
+  // The encoder may be another machine (the helper laptop), so live samples
+  // also travel through the database for the API to read.
+  shareLiveProgress(createDatabaseLiveProgressStore(pool));
+
+  /*
+   * Where publication lands in a Drive mount's write-back cache, the upload
+   * that follows is tracked from here. Only on the machine that encodes, and
+   * only where the mount's remote control is configured.
+   */
+  const driveRc = processingWorker
+    ? driveRcConfigFromEnvironment(environment)
+    : null;
+  const driveRcClient = driveRc ? createDriveRcClient(driveRc) : null;
+
+  /*
+   * The enqueuer as the machine that encodes sees it: its own mount, scratch
+   * and encoder. The import sweep queues work through it, and a source is
+   * removed through it once its package is on Drive.
+   */
+  const workerEnqueuer = processingWorker
+    ? createProcessingEnqueuer({
+        catalogue,
+        store: processingJobs,
+        queue,
+        mediaRoot: path.resolve(mediaRoot),
+        workRoot: storageRoles.jobsRoot,
+        ffprobePath:
+          ffprobePath ?? environment.SEYIRLIK_FFPROBE_PATH ?? "ffprobe",
+        hardware: createHardwareDetector(
+          ffmpegPath ?? environment.SEYIRLIK_FFMPEG_PATH ?? "ffmpeg",
+        ),
+        storageGuard,
+      })
+    : null;
+
+  /*
+   * Where uploads are followed and the helper deletes sources, a source goes
+   * once Drive is checked to hold its whole package. See `sourceCleanup.ts`.
+   */
+  const sourceCleanup =
+    driveRc?.deleteSource && driveRcClient && workerEnqueuer
+      ? createSourceCleanup({
+          jobs: processingJobs,
+          enqueuer: workerEnqueuer,
+          store: createDatabaseSourceCleanupStore(pool),
+          verifyOnDrive: (titleRoot, manifest) =>
+            packageGapsOnDrive({
+              client: driveRcClient,
+              mountRoot: driveRc.mountRoot,
+              titleRoot,
+              manifest,
+            }),
+          mayDelete: async () =>
+            storageGuard.mayStartWork() && (await storageWatchdog.poll()),
+        })
+      : undefined;
+
+  const driveUploads =
+    driveRc && driveRcClient
+      ? createDriveUploadTracker({
+          config: {
+            ...driveRc,
+            // Only mark uploads for deletion where something will act on it.
+            deleteSource: sourceCleanup !== undefined,
+          },
+          client: driveRcClient,
+          store: createDatabaseDriveUploadStore(pool),
+          onFinished: (processingJobId, upload) => {
+            const minutes = Math.max(
+              1,
+              Math.round(
+                ((upload.finishedAtMs ?? upload.updatedAtMs) -
+                  upload.startedAtMs) /
+                  60_000,
+              ),
+            );
+            void processingJobs
+              .appendEvent({
+                processingJobId,
+                stage: "complete",
+                message: `Uploaded to Google Drive in about ${minutes} min.`,
+              })
+              .catch(() => undefined)
+              .then(() => sourceCleanup?.afterUpload(processingJobId, upload));
+          },
+        })
+      : undefined;
+  if (driveUploads) void driveUploads.resume().catch(() => undefined);
+  // Uploads that finished while no worker was left to decide their source.
+  if (sourceCleanup) void sourceCleanup.resume().catch(() => undefined);
+
   void pruneLiveProgress(
     (await processingJobs.listActive()).map((job) => job.id),
   ).catch(() => undefined);
@@ -1079,6 +1243,13 @@ export async function createNativeRuntime({
   const indexerSearch = createIndexerSearchService(indexerRegistry);
   const releasePolicies = createPolicyRepository(pool);
   const releaseBlocklist = createBlocklistRepository(pool);
+  const seasonEpisodes = createCatalogueEpisodeLookup(pool);
+  const monitoringRepository = createMonitoringRepository(pool);
+  const libraryAdminRepository = createLibraryAdminRepository(pool, {
+    artworkExists: (image) => imageStorage.hasSource(image),
+  });
+  // The missing-episode search reads the same detail the season strip does.
+  const missingCatalogue = tmdb && cacheSeriesCatalogue(tmdb);
 
   /*
    * The download client, when one is configured.
@@ -1107,6 +1278,15 @@ export async function createNativeRuntime({
             indexers: indexerRegistry,
             sab,
             category: sabnzbdConfig.category,
+          }),
+          fallback: createAcquisitionFallback({
+            repository,
+            search: indexerSearch,
+            policies: releasePolicies,
+            blocklist: releaseBlocklist,
+            queue,
+            episodesOf: seasonEpisodes,
+            submitJobType: ACQUISITION_JOB_TYPES.submit,
           }),
         };
       })()
@@ -1143,6 +1323,13 @@ export async function createNativeRuntime({
             targetFor: async (importId) => {
               const record = await repository.get(importId);
               if (!record) return null;
+              const folder = record.targetItemId
+                ? await ownedFolderForItem(
+                    pool,
+                    record.targetItemId,
+                    record.libraryRoot,
+                  )
+                : undefined;
               return {
                 kind: record.targetKind as "movie" | "season" | "episode",
                 title: record.targetTitle,
@@ -1158,6 +1345,9 @@ export async function createNativeRuntime({
                 ...(record.targetEpisode === undefined
                   ? {}
                   : { episode: record.targetEpisode }),
+                // The folder the item is already keyed to, so the scan finds
+                // the same title rather than making a second one.
+                ...(folder ? { folder } : {}),
               };
             },
             policy: {
@@ -1191,6 +1381,7 @@ export async function createNativeRuntime({
     providers: availableSubtitleProviders,
     sessions: subtitleSessions ?? subtitleVault?.manager,
     playback: playbackRefresh,
+    catalogue: scanStore,
     /*
      * Re-timing an existing subtitle needs two things searching for one does
      * not: the catalogue's own list of a file's tracks, which is what an
@@ -1199,6 +1390,68 @@ export async function createNativeRuntime({
      * so a deployment without them mounts no sync routes at all.
      */
     sync: { catalogue, ffmpegPath: ffmpegPath ?? "ffmpeg" },
+    /*
+     * What a subtitle is timed against, from the package first: its audio
+     * rendition (the same print as the source, read through its playlist in
+     * about twenty seconds over the Drive mount, where a DTS source can take
+     * minutes) and its copies of the video's own text subtitles. The source
+     * only for a title not packaged yet: processing removes it.
+     */
+    references: (() => {
+      const located = async (mediaFileId: string, relativePath: string) => {
+        const file = await catalogue.getFileById(mediaFileId);
+        if (!file || file.relativePath !== relativePath) return null;
+        const root = path.resolve(mediaRoot);
+        const sourcePath = path.resolve(root, ...relativePath.split("/"));
+        if (!sourcePath.startsWith(root + path.sep)) return null;
+        return {
+          file,
+          sourcePath,
+          media: {
+            mediaId: file.id,
+            filePath: sourcePath,
+            size: Number(file.sizeBytes),
+            mtimeMs: Number(file.mtimeMs),
+          },
+        };
+      };
+      return {
+        audio: async ({ mediaFileId, relativePath, sourceStreamIndex }) => {
+          const found = await located(mediaFileId, relativePath);
+          if (!found) return null;
+          const packaged = await renditions
+            .findPackagedAudio(found.media, sourceStreamIndex)
+            .catch(() => null);
+          if (packaged) return { path: packaged.playlistPath, streamIndex: 0 };
+          const present = await stat(found.sourcePath).then(
+            (stats) => stats.isFile(),
+            () => false,
+          );
+          if (!present) return null;
+          const audio = (await catalogue.listStreams(found.file.id)).filter(
+            (stream) => stream.kind === "audio" && !stream.isExternal,
+          );
+          const chosen =
+            audio.find((stream) => stream.streamIndex === sourceStreamIndex) ??
+            audio.find((stream) => stream.isDefault) ??
+            audio[0];
+          return chosen
+            ? { path: found.sourcePath, streamIndex: chosen.streamIndex }
+            : null;
+        },
+        embeddedSubtitles: async ({ mediaFileId, relativePath }) => {
+          const found = await located(mediaFileId, relativePath);
+          if (!found || !renditions.findPackagedSubtitles) return [];
+          return (await renditions.findPackagedSubtitles(found.media))
+            .filter((subtitle) => !subtitle.fromSidecar)
+            .map((subtitle) => ({
+              streamIndex: subtitle.streamIndex,
+              language: subtitle.language ?? null,
+              path: subtitle.path,
+            }));
+        },
+      } satisfies TitleReferences;
+    })(),
   });
 
   /*
@@ -1271,6 +1524,26 @@ export async function createNativeRuntime({
       : undefined;
 
   /*
+   * Imported films and episodes, queued for processing once the library scan
+   * has registered them — through the same enqueuer the processing buttons
+   * use, run here by the machine that encodes (`workerEnqueuer`). The first
+   * pass after a start is also the backfill: every committed import file
+   * nothing has decided on yet.
+   */
+  const queueImportedProcessing =
+    importing && importConfig?.autoProcess && workerEnqueuer
+      ? createImportProcessingSweep({
+          store: createImportProcessingStore(pool),
+          enqueueAll: workerEnqueuer.enqueueAll,
+          libraryRoots: definitions
+            .filter(
+              (entry) => entry.kind === "movies" || entry.kind === "series",
+            )
+            .flatMap((entry) => entry.roots),
+        })
+      : undefined;
+
+  /*
    * Books handed over from another computer land in the first configured Books
    * library, and that library is scanned so they appear. Without a Books
    * library there is nowhere to put one, so the route does not exist.
@@ -1320,17 +1593,12 @@ export async function createNativeRuntime({
 
   /*
    * Seyirlik's own leftovers, removed by what owns them rather than by age:
-   * encode workspaces no live job answers to, downloads nothing will import,
+   * encode workspaces no retryable job answers to, downloads nothing will import,
    * and temporary folders it made and did not get to remove. Each candidate is
    * asked about again immediately before it goes, so a job retried or a
    * download resumed a moment earlier keeps what it needs.
    */
-  const LIVE_PROCESSING_STATES = new Set([
-    "pending",
-    "queued",
-    "running",
-    "paused",
-  ]);
+  const LIVE_PROCESSING_STATES = new Set<string>(WORKSPACE_CLAIMING_STATES);
   const collectGarbageJob = createGarbageJobHandler({
     jobsRoot: storageRoles.jobsRoot,
     isWorkspaceClaimed: async (workspaceId) => {
@@ -1384,20 +1652,11 @@ export async function createNativeRuntime({
      * measured beside `TRICKPLAY_LANE_JOB_TYPES`. What is left is discovery,
      * reconciliation and bookkeeping: several libraries can be read at once,
      * and none of them has any reason to wait for an encode to finish.
+     *
+     * A `light` or `heavy` worker runs only its half of these; see
+     * `workerRole.ts`.
      */
-    lanes: [
-      { name: "media", jobTypes: MEDIA_LANE_JOB_TYPES, concurrency: 1 },
-      { name: "trickplay", jobTypes: TRICKPLAY_LANE_JOB_TYPES, concurrency: 1 },
-      {
-        name: "library",
-        excludeJobTypes: [
-          ...MEDIA_LANE_JOB_TYPES,
-          ...TRICKPLAY_LANE_JOB_TYPES,
-          ...disabledSubtitleJobTypes(subtitleConfig),
-        ],
-        concurrency: 3,
-      },
-    ],
+    lanes: workerLanes(workerRole, disabledSubtitleJobTypes(subtitleConfig)),
     handlers: {
       ...createJobHandlers({
         libraries,
@@ -1408,6 +1667,9 @@ export async function createNativeRuntime({
          */
         storageGuard,
         processingRunner: createProcessingJobRunner({
+          // How the processing page names this machine beside its encoder.
+          workerName: environment.SEYIRLIK_WORKER_NAME?.trim() || hostname(),
+          ...(driveUploads ? { driveUploads } : {}),
           store: processingJobs,
           paths: renditionPaths,
           mediaRoot,
@@ -1461,6 +1723,7 @@ export async function createNativeRuntime({
         trickplayService: trickplay,
         segmentService: segments,
         ...(writesFiles(nfoConfig.mode) ? { nfoService } : {}),
+        deleteMissing: deleteMissingTitles,
       }),
       ...createNfoJobHandlers(nfoService),
       ...(subtitles?.handlers ?? {}),
@@ -1468,7 +1731,23 @@ export async function createNativeRuntime({
         ? createAcquisitionJobHandlers(
             acquisition.service,
             acquisition.repository,
+            {
+              // A release that can never complete is replaced by the next
+              // acceptable one without waiting for an operator.
+              fallback: acquisition.fallback,
+              blocklist: releaseBlocklist,
+              queue,
+            },
           )
+        : {}),
+      // Searching indexers and writing rows: the server's worker runs it, not
+      // the helper beside SABnzbd (see missingEpisodes.ts).
+      ...(acquisition
+        ? {
+            [MISSING_SEARCH_JOB_TYPE]: createMissingSearchJobHandler(
+              acquisition.fallback,
+            ),
+          }
         : {}),
       [GARBAGE_JOB_TYPES.collect]: collectGarbageJob,
       ...(importing
@@ -1477,6 +1756,9 @@ export async function createNativeRuntime({
               ? { handOff: handOffFinishedDownloads }
               : {}),
             onImported: scanAfterImport,
+            ...(queueImportedProcessing
+              ? { queueProcessing: queueImportedProcessing }
+              : {}),
           })
         : {}),
     },
@@ -1514,6 +1796,30 @@ export async function createNativeRuntime({
     }
   };
 
+  const titleRemoval = createTitleRemoval({
+    pool,
+    mediaRoot,
+    renditionRoot,
+    stateRoot: renditionStateRoot,
+    removeImage: (storageKey) => imageStorage.remove(storageKey),
+    ...(acquisition
+      ? {
+          cancelAcquisition: (acquisitionId: string) =>
+            acquisition.service.cancel(acquisitionId),
+        }
+      : {}),
+  });
+  // A deploy in the middle of a removal leaves its folder staged; finish it.
+  void titleRemoval
+    .sweepInterrupted()
+    .catch((error: unknown) =>
+      console.error("title.removal.sweep_failed", { error }),
+    );
+
+  // One reading of the media volume, so the library and the processing page
+  // cannot disagree about which titles are processed.
+  const packageIndex = createPackageIndex();
+
   const routes: RouteDefinition[] = [
     ...createCatalogueRoutes({
       service: catalogueService,
@@ -1529,6 +1835,7 @@ export async function createNativeRuntime({
     ...createCurationRoutes({ curation, catalogue }),
     ...createProgressRoutes({ userState, catalogue }),
     ...createBookPositionRoutes({ positions: bookPositions, catalogue }),
+    ...createBookMarkRoutes({ marks: bookMarks, catalogue }),
     ...createPlaybackRoutes({
       catalogue,
       sessions: playbackSessions,
@@ -1618,32 +1925,16 @@ export async function createNativeRuntime({
       search: indexerSearch,
       policies: releasePolicies,
       blocklist: releaseBlocklist,
+      ...(tmdb ? { tmdb } : {}),
     }),
-    ...createMonitoringRoutes(createMonitoringRepository(pool)),
+    ...createMonitoringRoutes(monitoringRepository),
     ...createWantedRoutes(pool, tmdb),
     ...createLibraryAdminRoutes({
-      repository: createLibraryAdminRepository(pool, {
-        artworkExists: (storageKey) =>
-          stat(imageStorage.resolve(storageKey)).then(
-            (stats) => stats.isFile(),
-            () => false,
-          ),
-      }),
+      repository: libraryAdminRepository,
       tmdb,
       queue,
-      removal: createTitleRemoval({
-        pool,
-        mediaRoot,
-        renditionRoot,
-        stateRoot: renditionStateRoot,
-        removeImage: (storageKey) => imageStorage.remove(storageKey),
-        ...(acquisition
-          ? {
-              cancelAcquisition: (acquisitionId: string) =>
-                acquisition.service.cancel(acquisitionId),
-            }
-          : {}),
-      }),
+      removal: titleRemoval,
+      packages: { index: packageIndex, mediaRoot },
     }),
     ...(acquisition
       ? createAcquisitionRoutes({
@@ -1655,6 +1946,19 @@ export async function createNativeRuntime({
           search: indexerSearch,
           policies: releasePolicies,
           blocklist: releaseBlocklist,
+          episodesOf: seasonEpisodes,
+          missingEpisodes: async (itemId, season) => {
+            const detail = await loadTitleDetail(
+              libraryAdminRepository,
+              missingCatalogue,
+              itemId,
+            );
+            return detail?.kind === "series"
+              ? missingEpisodePlan(detail, season)
+              : null;
+          },
+          profileOf: async (itemId) =>
+            (await monitoringRepository.readTitle(itemId))?.profileId,
         })
       : []),
     ...(importing && importStarter
@@ -1727,8 +2031,12 @@ export async function createNativeRuntime({
       store: processingJobs,
       queue,
       mediaRoot,
-      renditionRoot,
+      workRoot: storageRoles.jobsRoot,
       ...(ffmpegPath ? { ffmpegPath } : {}),
+      // A `light` worker here means encodes run on another machine, whose own
+      // scratch is what a job will spend.
+      processingElsewhere: workerRole === "light",
+      packageIndex,
     }),
     ...(tmdb
       ? [
@@ -1843,7 +2151,7 @@ export async function createNativeRuntime({
    * not polling something that changes on its own.
    */
   const importReconcileTimer =
-    importing && runWorker
+    importing && processingWorker
       ? setInterval(() => {
           void queue
             .enqueue({
@@ -1867,17 +2175,17 @@ export async function createNativeRuntime({
         dedupeKey: GARBAGE_JOB_TYPES.collect,
       })
       .catch(() => undefined);
-  const garbageFirstPass = runWorker
+  const garbageFirstPass = processingWorker
     ? setTimeout(enqueueGarbageCollection, GARBAGE_FIRST_PASS_DELAY_MS)
     : undefined;
   garbageFirstPass?.unref();
-  const garbageTimer = runWorker
+  const garbageTimer = processingWorker
     ? setInterval(enqueueGarbageCollection, GARBAGE_INTERVAL_MS)
     : undefined;
   garbageTimer?.unref();
 
   const acquisitionReconcileTimer =
-    acquisition && runWorker
+    acquisition && processingWorker
       ? setInterval(() => {
           void queue
             .enqueue({
@@ -1898,6 +2206,42 @@ export async function createNativeRuntime({
         }, ACQUISITION_RECONCILE_INTERVAL_MS)
       : undefined;
   acquisitionReconcileTimer?.unref();
+
+  const importProcessingTimer = queueImportedProcessing
+    ? setInterval(() => {
+        void queue
+          .enqueue({
+            jobType: IMPORT_JOB_TYPES.process,
+            dedupeKey: IMPORT_JOB_TYPES.process,
+          })
+          .catch(() => undefined);
+      }, IMPORT_PROCESSING_INTERVAL_MS)
+    : undefined;
+  importProcessingTimer?.unref();
+
+  /*
+   * Every library, on a timer, where the library lives on a cloud mount.
+   *
+   * There the scan is the availability check: the mount shows a file only once
+   * it has finished uploading, so a title appears when its bytes are really on
+   * Drive and is hidden again if they go. The same job the Library page starts,
+   * collapsed onto one already queued or running for that library.
+   */
+  const libraryRescanTimer =
+    libraryWorker && libraryRescanMs !== null
+      ? setInterval(() => {
+          void (async () => {
+            for (const library of await libraries.listAll()) {
+              await queue.enqueue({
+                jobType: JOB_TYPES.libraryScan,
+                payload: { libraryId: library.id },
+                dedupeKey: `${JOB_TYPES.libraryScan}:${library.id}`,
+              });
+            }
+          })().catch(() => undefined);
+        }, libraryRescanMs)
+      : undefined;
+  libraryRescanTimer?.unref();
 
   let closed = false;
 
@@ -1930,6 +2274,8 @@ export async function createNativeRuntime({
       bookSearch.close();
       if (acquisitionReconcileTimer) clearInterval(acquisitionReconcileTimer);
       if (importReconcileTimer) clearInterval(importReconcileTimer);
+      if (importProcessingTimer) clearInterval(importProcessingTimer);
+      if (libraryRescanTimer) clearInterval(libraryRescanTimer);
       if (garbageFirstPass) clearTimeout(garbageFirstPass);
       if (garbageTimer) clearInterval(garbageTimer);
       storageWatchdog.stop();

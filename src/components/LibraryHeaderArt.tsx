@@ -357,7 +357,11 @@ export function LibraryHeaderArt({
             isPainted ? " is-painted" : ""
           }${reduceMotion ? " is-still" : ""}`}
         >
-          <canvas ref={canvasRef} className="library-art__barcode-canvas" />
+          <div className="library-art__barcode-reveal">
+            <div className="library-art__barcode-counter">
+              <canvas ref={canvasRef} className="library-art__barcode-canvas" />
+            </div>
+          </div>
         </div>
       </div>
     </div>

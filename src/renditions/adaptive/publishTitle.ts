@@ -164,6 +164,7 @@ export interface TitleAudioRendition extends TitleManifestRendition {
 
 export interface TitleSubtitleRendition extends TitleManifestRendition {
   sourceStreamIndex: number;
+  sidecarFingerprint?: string;
   language?: string;
   title?: string;
   isDefault: boolean;
@@ -785,6 +786,9 @@ export async function publishTitlePackage({
         isDefault: rendition.isDefault,
         isForced: rendition.isForced,
         isHearingImpaired: rendition.isHearingImpaired,
+        ...(rendition.sidecarFingerprint
+          ? { sidecarFingerprint: rendition.sidecarFingerprint }
+          : {}),
       });
     }
 
@@ -1489,6 +1493,9 @@ export async function publishAdditionalRenditions({
       isDefault: rendition.isDefault,
       isForced: rendition.isForced,
       isHearingImpaired: rendition.isHearingImpaired,
+      ...(rendition.sidecarFingerprint
+        ? { sidecarFingerprint: rendition.sidecarFingerprint }
+        : {}),
     })),
     storage: { totalBytes },
   };

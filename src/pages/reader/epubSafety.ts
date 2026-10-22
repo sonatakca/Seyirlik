@@ -19,8 +19,16 @@
 export const BOOK_CONTENT_SECURITY_POLICY =
   "script-src 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'";
 
-const REMOVED_ELEMENTS = "script, iframe, frame, frameset, object, embed, applet";
-const URL_ATTRIBUTES = ["href", "src", "action", "formaction", "data", "xlink:href"];
+const REMOVED_ELEMENTS =
+  "script, iframe, frame, frameset, object, embed, applet";
+const URL_ATTRIBUTES = [
+  "href",
+  "src",
+  "action",
+  "formaction",
+  "data",
+  "xlink:href",
+];
 const POLICY_TAG = `<meta http-equiv="Content-Security-Policy" content="${BOOK_CONTENT_SECURITY_POLICY}" />`;
 
 function isScriptUrl(value: string): boolean {
@@ -32,7 +40,9 @@ function isScriptUrl(value: string): boolean {
 }
 
 function clean(document: Document): void {
-  document.querySelectorAll(REMOVED_ELEMENTS).forEach((element) => element.remove());
+  document
+    .querySelectorAll(REMOVED_ELEMENTS)
+    .forEach((element) => element.remove());
 
   for (const element of Array.from(document.getElementsByTagName("*"))) {
     for (const attribute of Array.from(element.attributes)) {
@@ -58,7 +68,10 @@ function insertPolicy(document: Document): void {
     head = namespace
       ? document.createElementNS(namespace, "head")
       : document.createElement("head");
-    document.documentElement.insertBefore(head, document.documentElement.firstChild);
+    document.documentElement.insertBefore(
+      head,
+      document.documentElement.firstChild,
+    );
   }
 
   const meta = namespace

@@ -200,3 +200,63 @@ describe.skipIf(!ffmpegAvailable)(
     });
   },
 );
+
+describe("listening to a title whose source is gone", () => {
+  it("decodes the package's default audio through its playlist, not its M4A", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "seyirlik-segments-"));
+    try {
+      const decoded: Array<{ path: string; map: string }> = [];
+      const service = createSegmentService({
+        pool: recordingPool([]),
+        mediaRoot: root,
+        catalogue: {
+          listProcessableTitles: async () => [
+            {
+              itemId: "episode-1",
+              kind: "episode",
+              title: "Episode 1",
+              sortTitle: "Episode 1",
+              indexNumber: 1,
+              seasonId: "season-1",
+              mediaFileId: "file-1",
+              // Never written: packaging consumed the source.
+              relativePath: "episode1.mkv",
+              probeState: "probed",
+              durationMs: "3600000",
+              runtimeMs: null,
+              itemMissingSince: null,
+              fileMissingSince: null,
+            } as unknown as ProcessableTitleRow,
+          ],
+          listChapters: async () => [],
+          listStreams: async () => [],
+          getFileById: async () =>
+            ({ id: "file-1", sizeBytes: "1", mtimeMs: "1" }) as never,
+        },
+        findPackagedAudio: async () => ({
+          path: path.join(root, "audio", "track-1.m4a"),
+          playlistPath: path.join(root, ".seyirlik", "audio", "track-1.m3u8"),
+          durationSeconds: 3_600,
+        }),
+        decodeWindow: async (input) => {
+          decoded.push(input);
+          return null;
+        },
+      });
+
+      await service.detectSeason("season-1");
+
+      // The playlist's byte ranges are the fragment index the MP4 demuxer
+      // would otherwise rebuild with a seek per fragment, through Drive.
+      expect(decoded.length).toBeGreaterThan(0);
+      for (const input of decoded) {
+        expect(input).toEqual({
+          path: path.join(root, ".seyirlik", "audio", "track-1.m3u8"),
+          map: "0:a:0",
+        });
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

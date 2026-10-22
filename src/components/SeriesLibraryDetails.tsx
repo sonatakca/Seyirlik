@@ -113,11 +113,12 @@ interface SeriesLibraryDetailsProps {
   canonicalPath: string;
   onInitialReady?: () => void;
   /**
-   * A phone's title hero has a place for the watched button in its action
-   * row; given (even while still null), the button goes there instead of
-   * floating over the picture.
+   * The title hero's place for the watched button: a phone's action row, or
+   * the bar over a wider hero's dock. Null until the hero has drawn it.
    */
-  watchedSlot?: HTMLElement | null;
+  watchedSlot: HTMLElement | null;
+  /** Which of the two the slot is, for the button's look. */
+  watchedSlotLook: "phone" | "dock";
 }
 
 interface MediaShelfProps {
@@ -332,6 +333,7 @@ export function SeriesLibraryDetails({
   canonicalPath,
   onInitialReady,
   watchedSlot,
+  watchedSlotLook,
 }: SeriesLibraryDetailsProps) {
   const { language, t } = useLanguage();
   const [series, setSeries] = useState<SeriesDetailsItem | null>(null);
@@ -713,9 +715,8 @@ export function SeriesLibraryDetails({
 
   return (
     <div className={isDesktop ? "pb-14" : "pb-7"}>
-      {watchedSlot !== undefined ? (
-        canChangeWatchedStatus && watchedSlot ? (
-          createPortal(
+      {canChangeWatchedStatus && watchedSlot
+        ? createPortal(
             <WatchedStatusButton
               scope={isMovie ? "item" : "show"}
               action={isDetailsItemWatched ? "remove" : "mark"}
@@ -733,51 +734,20 @@ export function SeriesLibraryDetails({
               showLabel
               confirm={!isMovie}
               onReset={handleWatchedStatusChange}
-              shortLabel={t("details.watchedShort")}
-              iconSize={PHONE_TITLE_ACTION_ICON}
-              icon={
-                isDetailsItemWatched ? (
-                  <Check size={PHONE_TITLE_ACTION_ICON} strokeWidth={2.2} />
-                ) : undefined
-              }
-              className={PHONE_TITLE_HERO_ACTION}
+              {...(watchedSlotLook === "phone"
+                ? {
+                    shortLabel: t("details.watchedShort"),
+                    iconSize: PHONE_TITLE_ACTION_ICON,
+                    icon: isDetailsItemWatched ? (
+                      <Check size={PHONE_TITLE_ACTION_ICON} strokeWidth={2.2} />
+                    ) : undefined,
+                    className: PHONE_TITLE_HERO_ACTION,
+                  }
+                : { iconSize: 15, className: "hero-dock-action" })}
             />,
             watchedSlot,
           )
-        ) : null
-      ) : canChangeWatchedStatus ? (
-        <div
-          className={
-            isDesktop
-              ? "fixed right-5 top-24 z-[80] lg:right-8"
-              : "fixed right-4 top-[calc(4.5rem+env(safe-area-inset-top))] z-[80]"
-          }
-        >
-          <WatchedStatusButton
-            scope={isMovie ? "item" : "show"}
-            action={isDetailsItemWatched ? "remove" : "mark"}
-            item={isMovie ? series : undefined}
-            seriesId={isMovie ? undefined : series.Id}
-            label={
-              isDetailsItemWatched
-                ? isMovie
-                  ? t("details.removeWatchedStatus")
-                  : t("details.removeWatchedStatusForShow")
-                : isMovie
-                  ? t("details.markWatchedStatus")
-                  : t("details.markWatchedStatusForShow")
-            }
-            showLabel
-            confirm={!isMovie}
-            onReset={handleWatchedStatusChange}
-            className={
-              isDesktop
-                ? "inline-flex min-h-10 items-center justify-center gap-2 rounded-full border border-white/12 bg-black/55 px-4 text-sm font-black text-white shadow-player-controls backdrop-blur-2xl transition hover:border-white/20 hover:bg-white/[0.14] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                : "inline-flex min-h-10 items-center justify-center gap-2 rounded-full border border-white/12 bg-black/55 px-3 text-xs font-black text-white shadow-player-controls backdrop-blur-2xl transition active:scale-[0.985] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-            }
-          />
-        </div>
-      ) : null}
+        : null}
 
       {!isDesktop ? trailerShelf : null}
 
@@ -831,30 +801,6 @@ export function SeriesLibraryDetails({
       ) : null}
 
       {isDesktop ? trailerShelf : null}
-
-      {similarItems.length > 0 ? (
-        <MediaShelf title={labels.similar} variant={variant}>
-          {similarItems.map((item, index) => (
-            <div key={item.Id} className="snap-start">
-              {isDesktop ? (
-                <MediaCard
-                  item={item}
-                  to={getRouteForItem(item)}
-                  variant="poster"
-                  index={index}
-                  animateIn
-                />
-              ) : (
-                <MobileMediaCard
-                  item={item}
-                  to={getRouteForItem(item)}
-                  variant="poster"
-                />
-              )}
-            </div>
-          ))}
-        </MediaShelf>
-      ) : null}
 
       {cast.length > 0 ? (
         <MediaShelf title={labels.cast} variant={variant}>
@@ -974,6 +920,34 @@ export function SeriesLibraryDetails({
           </dl>
         </div>
       </MotionReveal>
+
+      {/* Other titles come last, once this one has been told in full; the
+          gap above matches the one between the last shelf and "About". */}
+      {similarItems.length > 0 ? (
+        <div className={isDesktop ? "mt-6" : "mt-4"}>
+          <MediaShelf title={labels.similar} variant={variant}>
+            {similarItems.map((item, index) => (
+              <div key={item.Id} className="snap-start">
+                {isDesktop ? (
+                  <MediaCard
+                    item={item}
+                    to={getRouteForItem(item)}
+                    variant="poster"
+                    index={index}
+                    animateIn
+                  />
+                ) : (
+                  <MobileMediaCard
+                    item={item}
+                    to={getRouteForItem(item)}
+                    variant="poster"
+                  />
+                )}
+              </div>
+            ))}
+          </MediaShelf>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -21,7 +21,6 @@ export default {
         "cinematic-card": "var(--shadow-cinematic-card)",
         "cinematic-card-hover": "var(--shadow-cinematic-card-hover)",
         "floating-panel": "var(--shadow-floating-panel)",
-        "navbar-glass": "var(--shadow-navbar-glass)",
         "artwork-glow": "var(--shadow-artwork-glow)",
         "player-controls": "var(--shadow-player-controls)",
         "button-glow": "var(--shadow-button-glow)",

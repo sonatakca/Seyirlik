@@ -1,5 +1,7 @@
-import { NotificationHistoryButton } from "../notifications/NotificationHistoryButton";
-import { useEffect, useRef, useState } from "react";
+import { NotificationCenter } from "../notifications/NotificationCenter";
+import { useLayoutEffect, useRef } from "react";
+import { useReducedMotion } from "framer-motion";
+import { useNavbarScrolled } from "../../hooks/useNavbarScrolled";
 import { Search } from "lucide-react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useLanguage } from "../../i18n/LanguageContext";
@@ -7,7 +9,7 @@ import { AccountMenu } from "../AccountMenu";
 import { AppUpdateButton } from "../AppUpdateButton";
 import { AnimatedText } from "../AnimatedText";
 import { AnimatedWidth } from "../AnimatedWidth";
-import { LanguageSwitch } from "../LanguageSwitch";
+import { NavbarSurface } from "../NavbarSurface";
 import { NavbarWordmark } from "../NavbarWordmark";
 import { openSearchOverlay } from "../../lib/searchModel";
 import { SlidingIndicator } from "../ui/SlidingIndicator";
@@ -22,7 +24,7 @@ const isMacPlatform =
 export function DesktopNavbar() {
   const navigate = useNavigate();
   const { t } = useLanguage();
-  const [hasScrolled, setHasScrolled] = useState(false);
+  const hasScrolled = useNavbarScrolled();
   const libraryRoutes = {
     movies: "/movies",
     series: "/shows",
@@ -30,6 +32,29 @@ export function DesktopNavbar() {
   };
   const location = useLocation();
   const navLinksRef = useRef<HTMLDivElement | null>(null);
+  const navRef = useRef<HTMLElement | null>(null);
+  const shouldReduceMotion = useReducedMotion();
+  const wasScrolledRef = useRef(hasScrolled);
+
+  // The contents' 8px drop. `top` takes its new value at once and a
+  // compositor transform carries the bar there from where it was, ending at
+  // no transform: a transform at rest would anchor the menus' fixed panels to
+  // the bar, and transitioning `top` itself re-laid out the header on every
+  // frame of the move.
+  useLayoutEffect(() => {
+    const nav = navRef.current;
+    const was = wasScrolledRef.current;
+    wasScrolledRef.current = hasScrolled;
+    if (!nav || was === hasScrolled || shouldReduceMotion) return;
+    if (typeof nav.animate !== "function") return;
+    nav.animate(
+      [
+        { transform: `translateY(${hasScrolled ? 8 : -8}px)` },
+        { transform: "translateY(0px)" },
+      ],
+      { duration: 300, easing: "ease-out" },
+    );
+  }, [hasScrolled, shouldReduceMotion]);
   const navLinks = [
     { to: "/home", label: t("nav.home") },
     { to: libraryRoutes.movies, label: t("nav.movies") },
@@ -40,19 +65,6 @@ export function DesktopNavbar() {
   ];
   const devClickCountRef = useRef(0);
   const devClickTimerRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    const updateScrolledState = () => {
-      setHasScrolled(window.scrollY > 12);
-    };
-
-    updateScrolledState();
-    window.addEventListener("scroll", updateScrolledState, { passive: true });
-
-    return () => {
-      window.removeEventListener("scroll", updateScrolledState);
-    };
-  }, []);
 
   const handleBrandEasterEggClick = () => {
     devClickCountRef.current += 1;
@@ -79,21 +91,28 @@ export function DesktopNavbar() {
   };
 
   return (
-    <header
-      className={`fixed inset-x-0 top-0 z-40 select-none pt-[env(safe-area-inset-top)] transition-[background-color,border-color,box-shadow,backdrop-filter] ease-out [-webkit-tap-highlight-color:transparent] ${
-        hasScrolled
-          ? "duration-700 border-b border-white/[0.08] bg-black/75 shadow-navbar-glass backdrop-blur-2xl"
-          : "duration-500 border-b border-transparent bg-transparent shadow-none backdrop-blur-0"
-      }`}
-    >
-      <nav className="mx-auto flex h-16 w-full max-w-[1600px] items-center gap-3 px-4 sm:h-20 sm:gap-8 sm:px-6 lg:px-8">
+    <header className="fixed inset-x-0 top-0 z-40 select-none pt-[env(safe-area-inset-top)] [-webkit-tap-highlight-color:transparent]">
+      <NavbarSurface shown={hasScrolled} variant="desktop" />
+      {/* Clear, the bar sits over a floating backdrop that starts 8px down,
+          so its contents drop by as much to stand as far inside its top edge
+          as inside its side. `top`, not a resting transform: a transform
+          would anchor the menus' fixed panels to the bar. */}
+      <nav
+        ref={navRef}
+        className={`relative z-[1] mx-auto flex h-16 w-full max-w-[1600px] items-center gap-3 px-4 sm:h-20 sm:gap-8 sm:px-6 lg:px-8 ${
+          hasScrolled ? "top-0" : "top-2"
+        }`}
+      >
         <Link
           to="/home"
           className="flex min-w-0 shrink-0 items-center"
           aria-label={t("nav.brandHome")}
         >
           <span className="flex h-10 shrink-0 items-center sm:h-12">
-            <NavbarWordmark className="h-8 sm:h-11" />
+            <NavbarWordmark
+              className="h-8 sm:h-11"
+              overArtwork={!hasScrolled}
+            />
           </span>
         </Link>
 
@@ -111,7 +130,7 @@ export function DesktopNavbar() {
               key={link.to}
               to={link.to}
               className={({ isActive }) =>
-                `text-sm font-semibold transition-colors duration-200 [filter:drop-shadow(0_1px_2px_rgba(0,0,0,0.6))_drop-shadow(0_3px_14px_rgba(0,0,0,0.5))] ${
+                `text-sm font-semibold transition-colors duration-200 navbar-ink-shadow ${
                   isActive ? "text-white" : "text-white/72 hover:text-white"
                 } ${"className" in link ? link.className : ""}`
               }
@@ -136,7 +155,7 @@ export function DesktopNavbar() {
             measureKey={location.pathname}
           >
             {/* The links' shadow too, so the line keeps its edge where they do. */}
-            <span className="absolute -bottom-2 left-1/2 h-[2px] w-[calc(100%+0.25rem)] -translate-x-1/2 rounded-full bg-white/90 shadow-[0_0_12px_rgba(255,255,255,0.35)] [filter:drop-shadow(0_1px_2px_rgba(0,0,0,0.6))_drop-shadow(0_3px_14px_rgba(0,0,0,0.5))]" />
+            <span className="absolute -bottom-2 left-1/2 h-[2px] w-[calc(100%+0.25rem)] -translate-x-1/2 rounded-full bg-white/90 navbar-ink-shadow" />
           </SlidingIndicator>
         </div>
 
@@ -153,13 +172,11 @@ export function DesktopNavbar() {
               aria-label={t("search.open")}
               className="inline-flex min-h-9 w-9 items-center justify-center rounded-full text-white/72 transition-[background-color,color,box-shadow,transform] duration-200 hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-2 focus:ring-offset-black sm:min-h-10 sm:w-10"
             >
-              <Search size={18} className="shrink-0" />
+              <Search size={18} className="navbar-ink-shadow shrink-0" />
             </button>
           </Tooltip>
 
-          <LanguageSwitch />
-
-          <NotificationHistoryButton />
+          <NotificationCenter />
 
           {/* The name doubles as the way into /dev: five quick presses. */}
           <AccountMenu onTriggerClick={handleBrandEasterEggClick} />

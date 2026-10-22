@@ -215,3 +215,75 @@ export function etaParts(
   const minutes = Math.round(seconds / 60);
   return { hours: Math.floor(minutes / 60), minutes: minutes % 60 };
 }
+
+/**
+ * What a download is for, as a person would name it.
+ *
+ * The download client knows a job only by an idempotency key, which is right
+ * for it and meaningless to anyone reading the queue. This is the name the
+ * page leads with: the title, then which episode, season or year.
+ */
+export function targetLabel(target: {
+  readonly kind: string;
+  readonly title: string;
+  readonly year?: number;
+  readonly season?: number;
+  readonly episode?: number;
+}): {
+  title: string;
+  /** "S01E03", or the season number alone, or the year. */
+  episodeCode?: string;
+  season?: number;
+  year?: number;
+} {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  if (
+    target.kind === "episode" &&
+    target.season !== undefined &&
+    target.episode !== undefined
+  ) {
+    return {
+      title: target.title,
+      episodeCode: `S${pad(target.season)}E${pad(target.episode)}`,
+    };
+  }
+  if (target.kind === "season" && target.season !== undefined) {
+    return { title: target.title, season: target.season };
+  }
+  return {
+    title: target.title,
+    ...(target.year === undefined ? {} : { year: target.year }),
+  };
+}
+
+/**
+ * Where a drag put one row, as a place in the download client's queue.
+ *
+ * The list on the page holds only Seyirlik's queued downloads, while the
+ * client's queue can hold other jobs between them. So the place is read from
+ * the row the dragged one now stands in for: moving onto the slot of the row
+ * at index k means taking that row's place in the client's queue, which the
+ * client does by removing the moved job and inserting it there.
+ *
+ * Returns null when the order did not change, or changed by more than one
+ * row moving (which a single drag cannot do).
+ */
+export function queueMoveFor(
+  before: readonly { id: string; queuePosition: number }[],
+  after: readonly string[],
+): { id: string; position: number } | null {
+  const ids = before.map((row) => row.id);
+  if (ids.length !== after.length) return null;
+  if (ids.every((id, index) => id === after[index])) return null;
+  for (const id of ids) {
+    const from = ids.indexOf(id);
+    const to = after.indexOf(id);
+    if (from === to) continue;
+    const moved = ids.filter((other) => other !== id);
+    moved.splice(to, 0, id);
+    if (moved.every((other, index) => other === after[index])) {
+      return { id, position: before[to]!.queuePosition };
+    }
+  }
+  return null;
+}

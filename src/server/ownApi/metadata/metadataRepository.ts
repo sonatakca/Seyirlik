@@ -15,6 +15,7 @@ export interface MetadataTarget {
   parentIndexNumber: number | null;
   /** Existing title directory, relative to the media root, when the item owns one. */
   titleRoot?: string;
+  metadataState?: string;
 }
 
 export interface TitleMetadataUpdate {
@@ -60,7 +61,7 @@ export interface MetadataRepository {
 
 const TARGET_COLUMNS = `
   id, kind, title, production_year, provider_ids, locked_fields,
-  series_id, index_number, parent_index_number, source_key,
+  series_id, index_number, parent_index_number, source_key, metadata_state,
   (SELECT relative_path FROM media_files
    WHERE media_files.item_id = items.id AND media_files.is_primary = true
    ORDER BY media_files.created_at LIMIT 1) AS primary_relative_path,
@@ -84,6 +85,7 @@ interface RawTargetRow {
   index_number: number | null;
   parent_index_number: number | null;
   source_key: string;
+  metadata_state: string;
   primary_relative_path: string | null;
   descendant_relative_path: string | null;
 }
@@ -107,6 +109,7 @@ function toTarget(row: RawTargetRow): MetadataTarget {
     indexNumber: row.index_number,
     parentIndexNumber: row.parent_index_number,
     ...(titleRoot ? { titleRoot } : {}),
+    ...(row.metadata_state ? { metadataState: row.metadata_state } : {}),
   };
 }
 
@@ -127,9 +130,23 @@ export function createMetadataRepository(
       }
 
       const result = await pool.query<RawTargetRow>(
+        /*
+         * A series identified before some of its episodes arrived is pending
+         * again until they are described: its episodes are only ever filled
+         * in by the series' own refresh, and a matched series is never
+         * selected for one otherwise.
+         */
         `SELECT ${TARGET_COLUMNS} FROM items
-         WHERE metadata_state = 'pending'
-           AND kind IN ('movie', 'series')
+         WHERE (
+             (metadata_state = 'pending' AND kind IN ('movie', 'series'))
+             OR (metadata_state = 'matched' AND kind = 'series'
+                 AND EXISTS (
+                   SELECT 1 FROM items episode
+                    WHERE episode.series_id = items.id
+                      AND episode.kind = 'episode'
+                      AND episode.metadata_state = 'pending'
+                      AND episode.missing_since IS NULL))
+           )
            AND missing_since IS NULL
            ${libraryFilter}
          ORDER BY date_created

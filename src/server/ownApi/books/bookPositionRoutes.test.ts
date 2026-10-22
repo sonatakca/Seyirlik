@@ -5,6 +5,7 @@ import type { OwnApiError } from "../ownApiHandler";
 import type {
   BookPosition,
   BookPositionRepository,
+  ReadingSession,
 } from "./bookPositionRepository";
 import { createBookPositionRoutes } from "./bookPositionRoutes";
 
@@ -24,27 +25,60 @@ function setup() {
   } as unknown as CatalogueRepository;
 
   const stored = new Map<string, BookPosition>();
+  const sessions = new Map<string, ReadingSession>();
   const saves: BookPosition[] = [];
+  const claims: ReadingSession[] = [];
+  // The rule as user_book_sessions applies it, opened last keeps the place;
+  // the SQL itself is proven against PostgreSQL in the integration test.
+  const claim = (key: string, session: ReadingSession) => {
+    claims.push(session);
+    const current = sessions.get(key);
+    if (
+      !current ||
+      current.sessionId === session.sessionId ||
+      session.openedAt > current.openedAt
+    ) {
+      sessions.set(key, session);
+    }
+    const now = sessions.get(key) as ReadingSession;
+    return { owner: now.sessionId === session.sessionId, session: now };
+  };
   const positions: BookPositionRepository = {
     get: async (userId, itemId) => stored.get(`${userId}:${itemId}`) ?? null,
-    save: async (userId, itemId, position) => {
-      saves.push(position);
+    claim: async (userId, itemId, session) =>
+      claim(`${userId}:${itemId}`, session),
+    save: async (userId, itemId, position, session) => {
       const key = `${userId}:${itemId}`;
+      if (session) {
+        const result = claim(key, session);
+        if (!result.owner) {
+          return {
+            accepted: false,
+            position: stored.get(key) ?? null,
+            superseded: result.session,
+          };
+        }
+      }
+      saves.push(position);
       const current = stored.get(key);
       const accepted = !current || position.readAt >= current.readAt;
       if (accepted) stored.set(key, position);
-      return { accepted, position: stored.get(key) ?? null };
+      return { accepted, position: stored.get(key) ?? null, superseded: null };
     },
   };
 
   const routes = createBookPositionRoutes({ positions, catalogue });
-  const route = (method: string) =>
+  const route = (method: string, path = "/books/:itemId/position") =>
     routes.find(
-      (entry) =>
-        entry.method === method && entry.path === "/books/:itemId/position",
+      (entry) => entry.method === method && entry.path === path,
     ) as RouteDefinition;
 
-  async function call(method: "GET" | "PUT", itemId: string, body?: unknown) {
+  async function call(
+    method: "GET" | "PUT",
+    itemId: string,
+    body?: unknown,
+    path = "/books/:itemId/position",
+  ) {
     const captured: { status: number; body: unknown } = {
       status: 0,
       body: null,
@@ -72,15 +106,19 @@ function setup() {
     } as unknown as RouteContext;
 
     try {
-      await route(method).handle(context);
+      await route(method, path).handle(context);
       return { ...captured, error: undefined as OwnApiError | undefined };
     } catch (error) {
       return { ...captured, error: error as OwnApiError };
     }
   }
 
-  return { call, route, saves };
+  return { call, route, saves, claims };
 }
+
+const SESSION_PATH = "/books/:itemId/session";
+const DESK = "66666666-6666-4666-8666-666666666666";
+const PHONE = "77777777-7777-4777-8777-777777777777";
 
 const place = { section: 3, block: 0, offset: -184 };
 
@@ -197,5 +235,110 @@ describe("book reading positions", () => {
   it("rejects an id that is not a UUID", async () => {
     const { call } = setup();
     expect((await call("GET", "nope")).error?.statusCode).toBe(422);
+  });
+
+  it("lets the copy opened last keep the place, and tells an older one who has it", async () => {
+    const { call, route } = setup();
+    expect(route("PUT", SESSION_PATH).access).toBe("authenticated");
+    expect(route("PUT", SESSION_PATH).skipCsrf).toBeUndefined();
+
+    const desk = await call(
+      "PUT",
+      BOOK,
+      { id: DESK, openedAt: NOW, device: "mac" },
+      SESSION_PATH,
+    );
+    expect(desk.body).toMatchObject({
+      data: { owner: true, session: { id: DESK, device: "mac" } },
+    });
+
+    const phone = await call(
+      "PUT",
+      BOOK,
+      { id: PHONE, openedAt: NOW + 60_000, device: "iphone" },
+      SESSION_PATH,
+    );
+    expect(phone.body).toMatchObject({ data: { owner: true } });
+
+    const deskAgain = await call(
+      "PUT",
+      BOOK,
+      { id: DESK, openedAt: NOW, device: "mac" },
+      SESSION_PATH,
+    );
+    expect(deskAgain.error).toBeUndefined();
+    expect(deskAgain.body).toMatchObject({
+      data: {
+        owner: false,
+        session: {
+          id: PHONE,
+          openedAt: new Date(NOW + 60_000).toISOString(),
+          device: "iphone",
+        },
+      },
+    });
+  });
+
+  it("refuses a save from a copy opened before the one that keeps the place", async () => {
+    const { call, saves } = setup();
+    await call(
+      "PUT",
+      BOOK,
+      { id: PHONE, openedAt: NOW + 60_000, device: "iphone" },
+      SESSION_PATH,
+    );
+    const stale = await call("PUT", BOOK, {
+      place,
+      fraction: 0.1,
+      readAt: NOW + 120_000,
+      session: { id: DESK, openedAt: NOW, device: "mac" },
+    });
+    expect(stale.error).toBeUndefined();
+    expect(stale.body).toMatchObject({
+      data: {
+        accepted: false,
+        position: null,
+        superseded: { id: PHONE, device: "iphone" },
+      },
+    });
+    expect(saves).toHaveLength(0);
+
+    const owner = await call("PUT", BOOK, {
+      place,
+      fraction: 0.2,
+      readAt: NOW + 120_000,
+      session: { id: PHONE, openedAt: NOW + 60_000, device: "iphone" },
+    });
+    expect(owner.body).toMatchObject({
+      data: { accepted: true, superseded: null },
+    });
+  });
+
+  it("refuses a malformed session before claiming anything", async () => {
+    const { call, claims } = setup();
+    const bad = [
+      { id: "nope", openedAt: NOW },
+      { id: DESK },
+      { id: DESK, openedAt: 12 },
+      { id: DESK, openedAt: NOW, device: "toaster" },
+      { id: DESK, openedAt: NOW, extra: 1 },
+      [DESK],
+      null,
+    ];
+    for (const body of bad) {
+      const { error } = await call("PUT", BOOK, body, SESSION_PATH);
+      expect(error?.statusCode, JSON.stringify(body)).toBe(422);
+      const save = await call("PUT", BOOK, {
+        fraction: 0.5,
+        readAt: NOW,
+        session: body,
+      });
+      expect(save.error?.statusCode, JSON.stringify(body)).toBe(422);
+    }
+    expect(claims).toHaveLength(0);
+    expect(
+      (await call("PUT", MOVIE, { id: DESK, openedAt: NOW }, SESSION_PATH))
+        .error?.statusCode,
+    ).toBe(404);
   });
 });

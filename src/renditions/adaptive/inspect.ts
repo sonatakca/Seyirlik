@@ -26,6 +26,11 @@ import { ADAPTIVE_PROFILE_VERSION } from "./profile";
 import { TITLE_PACKAGE_DIRECTORY } from "./titleLayout";
 import { TITLE_BUILD_RECORD } from "./publishTitle";
 import { resolvePublishedTitleRoot } from "./publishedRoot";
+import {
+  sidecarSubtitleIsCurrent,
+  type SidecarSubtitle,
+} from "./sidecarSubtitles";
+import { subtitleRenditionId } from "./profile";
 
 export type AdaptiveInspectionStatus =
   | "missing"
@@ -46,12 +51,15 @@ export interface InspectAdaptiveOptions {
   titleRoot: string;
   sourceFingerprint: string;
   profileVersion?: string;
+  /** Supplied by build analysis; playback keeps its inexpensive disk checks. */
+  sidecarSubtitles?: readonly SidecarSubtitle[];
 }
 
 export async function inspectAdaptivePackage({
   titleRoot,
   sourceFingerprint,
   profileVersion = ADAPTIVE_PROFILE_VERSION,
+  sidecarSubtitles = [],
 }: InspectAdaptiveOptions): Promise<AdaptiveInspection> {
   let versionRoot: string;
   let recordText: string;
@@ -108,6 +116,10 @@ export async function inspectAdaptivePackage({
   for (const rendition of [
     ...metadata.videoRenditions,
     ...metadata.audioRenditions,
+    ...(metadata.subtitleRenditions ?? []).map((track) => ({
+      ...track,
+      mediaPath: track.subtitlePath,
+    })),
   ]) {
     for (const [relativePath, expectedSize] of [
       [rendition.mediaPath, rendition.fileSizeBytes] as const,
@@ -131,6 +143,26 @@ export async function inspectAdaptivePackage({
         };
       }
     }
+  }
+
+  if (
+    sidecarSubtitles.some(
+      (sidecar) =>
+        !sidecarSubtitleIsCurrent(
+          sidecar,
+          metadata.subtitleRenditions?.find(
+            (track) => track.id === subtitleRenditionId(sidecar.streamIndex),
+          ),
+        ),
+    )
+  ) {
+    return {
+      status: "stale",
+      versionRoot,
+      metadata,
+      reason:
+        "Retained sidecar subtitles were added or changed since publication.",
+    };
   }
 
   const masterStats = await stat(

@@ -1,6 +1,7 @@
 import { useState, type MouseEvent } from "react";
-import { Play, RotateCcw } from "lucide-react";
-import { motion, useReducedMotion } from "framer-motion";
+import { createPortal } from "react-dom";
+import { Info, Play, RotateCcw } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Link, useNavigate } from "react-router-dom";
 import { useLanguage } from "../../i18n/LanguageContext";
 import { useCroppedTransparentImage } from "../../hooks/useCroppedTransparentImage";
@@ -24,7 +25,11 @@ import {
   heroPlayState,
 } from "../home/HeroActions";
 import { HERO_MOTION } from "../home/homeHeroModel";
-import { stageLogoFilter, useLogoShadow } from "../home/logoShadowStyle";
+import {
+  stageLogoFilter,
+  stageLogoReach,
+  useLogoShadow,
+} from "../home/logoShadowStyle";
 import { useSmartContinueItems } from "../home/useSmartContinueItems";
 import {
   PHONE_TITLE_HERO_ACTION,
@@ -44,23 +49,11 @@ import {
   phoneTitleFacts,
 } from "./phoneTitleHeroRows";
 
-/**
- * A phone's title page hero. The backdrop starts under the navbar and runs
- * the full width, with no shade, fade or dimming on it; the only thing
- * drawn on the picture is the title's logo, at its foot on the left,
- * standing on the same halo the desktop stage gives it (measured against
- * the picture behind it), and back, over its corner. The facts, the
- * overview and the actions stand under the picture, on the room: play the
- * full width, naming the time left when the title is under way, and under
- * it start over, My List, watched and download, each a mark over its name.
- *
- * The rows are fixed in height (`phoneTitleHeroRows`), so the skeleton
- * (`PhoneTitleHeroSkeleton`) takes the same classes and lands to the pixel.
- */
-
+/** A floating artwork card: clean backdrop, then its reflected copy, with a fixed centre dock. */
 export function PhoneTitleHero({
   item,
   onWatchedSlot,
+  onShowDetails,
   isRevealed = true,
 }: {
   item: MediaItem;
@@ -69,6 +62,7 @@ export function PhoneTitleHero({
    * render there, since they hold whether the title is watched.
    */
   onWatchedSlot?: (element: HTMLSpanElement | null) => void;
+  onShowDetails?: () => void;
   /**
    * False while the page keeps the hero hidden behind its skeleton, so the
    * fades are not spent unseen.
@@ -110,6 +104,7 @@ export function PhoneTitleHero({
     artwork?.url,
     PHONE_TITLE_LOGO_REGION,
   );
+  const logoReach = stageLogoReach(logoShadow);
 
   const { playItem, playLabel, shortPlayLabel, canStartOver, progress } =
     heroPlayState(item, smartContinueItems, t);
@@ -135,192 +130,256 @@ export function PhoneTitleHero({
   });
 
   return (
-    <section className={PHONE_TITLE_HERO_SECTION}>
-      <div className={PHONE_TITLE_HERO_FRAME}>
-        <div className={PHONE_TITLE_HERO_PICTURE}>
-          <div className="absolute inset-0 bg-white/[0.04]">
-            {artwork?.type === "backdrop" ? (
-              <motion.img
-                key={artwork.url}
-                src={artwork.url}
-                alt=""
-                loading="eager"
-                decoding="async"
-                draggable={false}
-                className="absolute inset-0 h-full w-full select-none object-cover"
-                initial={false}
-                animate={{ opacity: isArtworkShown ? 1 : 0 }}
-                transition={{
-                  duration: reduceMotion ? 0 : 0.45,
-                  ease: "easeOut",
-                }}
-                onLoad={() => setLoadedUrl(artwork.url)}
-                onError={() =>
-                  setFailed((current) => [...current, artwork.url])
-                }
-              />
-            ) : artwork ? (
-              // A title without a backdrop: its poster, whole, on a wash of its
-              // own colours rather than cropped to a strip of its middle.
-              <motion.div
-                key={artwork.url}
-                aria-hidden="true"
-                className="absolute inset-0"
-                initial={false}
-                animate={{ opacity: isArtworkShown ? 1 : 0 }}
-                transition={{
-                  duration: reduceMotion ? 0 : 0.45,
-                  ease: "easeOut",
-                }}
-              >
-                <img
+    <>
+      <section className={PHONE_TITLE_HERO_SECTION}>
+        <div className={PHONE_TITLE_HERO_FRAME}>
+          <div className={PHONE_TITLE_HERO_PICTURE}>
+            <div className="absolute inset-0 bg-white/[0.04]">
+              {artwork?.type === "backdrop" ? (
+                <motion.img
+                  key={artwork.url}
                   src={artwork.url}
                   alt=""
-                  className="absolute inset-0 h-full w-full scale-125 object-cover blur-2xl saturate-150"
-                />
-                <img
-                  src={artwork.url}
-                  alt=""
+                  loading="eager"
+                  decoding="async"
                   draggable={false}
-                  className="absolute inset-0 h-full w-full select-none object-contain"
+                  className="absolute inset-0 h-full w-full select-none object-cover"
+                  initial={false}
+                  animate={{ opacity: isArtworkShown ? 1 : 0 }}
+                  transition={{
+                    duration: reduceMotion ? 0 : 0.45,
+                    ease: "easeOut",
+                  }}
                   onLoad={() => setLoadedUrl(artwork.url)}
                   onError={() =>
                     setFailed((current) => [...current, artwork.url])
                   }
                 />
+              ) : artwork ? (
+                // A title without a backdrop: its poster, whole, on a wash of its
+                // own colours rather than cropped to a strip of its middle.
+                <motion.div
+                  key={artwork.url}
+                  aria-hidden="true"
+                  className="absolute inset-0"
+                  initial={false}
+                  animate={{ opacity: isArtworkShown ? 1 : 0 }}
+                  transition={{
+                    duration: reduceMotion ? 0 : 0.45,
+                    ease: "easeOut",
+                  }}
+                >
+                  <img
+                    src={artwork.url}
+                    alt=""
+                    className="absolute inset-0 h-full w-full scale-125 object-cover blur-2xl saturate-150"
+                  />
+                  <img
+                    src={artwork.url}
+                    alt=""
+                    draggable={false}
+                    className="absolute inset-0 h-full w-full select-none object-contain"
+                    onLoad={() => setLoadedUrl(artwork.url)}
+                    onError={() =>
+                      setFailed((current) => [...current, artwork.url])
+                    }
+                  />
+                </motion.div>
+              ) : null}
+            </div>
+          </div>
+
+          <motion.div
+            className={PHONE_TITLE_HERO_COPY}
+            initial="initial"
+            animate={isRevealed ? "animate" : "initial"}
+          >
+            <div className="phone-title-reflection" aria-hidden="true">
+              {artwork ? <img src={artwork.url} alt="" /> : null}
+            </div>
+            <motion.h1
+              className={PHONE_TITLE_HERO_LOGO_BOX}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: isRevealed ? 1 : 0 }}
+              transition={{
+                duration: reduceMotion ? 0.2 : HERO_MOTION.copyEnterS,
+                ease: "easeOut",
+              }}
+            >
+              {logoUrl ? (
+                // The halo goes on a frame padded by its reach over the whole
+                // logo box, never on the image: iOS WebKit can clip a filtered
+                // element to its own box. Its content box is the logo box, so
+                // max-h-full and max-w-full still measure against it. The fade
+                // stays on the image: on the frame, WebKit drew the logo's
+                // edges a fraction of a pixel differently once it had settled.
+                <div
+                  className="relative flex w-full items-end"
+                  style={{
+                    width: `calc(100% + ${logoReach * 2}px)`,
+                    flexShrink: 0,
+                    padding: logoReach,
+                    margin: -logoReach,
+                    filter: stageLogoFilter(logoShadow, 1),
+                  }}
+                >
+                  <img
+                    src={logoUrl}
+                    alt={title}
+                    draggable={false}
+                    onLoad={() => setIsLogoLoaded(true)}
+                    onError={() => setIsLogoLoaded(false)}
+                    className={`block h-auto max-h-36 w-full select-none object-contain object-bottom transition-opacity duration-300 ${
+                      isLogoLoaded ? "opacity-100" : "opacity-0"
+                    }`}
+                  />
+                </div>
+              ) : (
+                <span className="text-cinematic-title line-clamp-2 text-center text-[1.375rem] font-black uppercase leading-[0.9] text-white [font-stretch:78%]">
+                  {title}
+                </span>
+              )}
+            </motion.h1>
+            {facts ? (
+              <motion.div variants={line(0)} className={PHONE_TITLE_HERO_FACTS}>
+                <p className="text-[0.8125rem] font-bold leading-5 tracking-[0.04em] text-white/[0.72]">
+                  {facts}
+                </p>
               </motion.div>
             ) : null}
-          </div>
-          <motion.h1
-            className={PHONE_TITLE_HERO_LOGO_BOX}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: isRevealed ? 1 : 0 }}
-            transition={{
-              duration: reduceMotion ? 0.2 : HERO_MOTION.copyEnterS,
-              ease: "easeOut",
-            }}
-          >
-            {logoUrl ? (
-              <img
-                src={logoUrl}
-                alt={title}
-                draggable={false}
-                onLoad={() => setIsLogoLoaded(true)}
-                onError={() => setIsLogoLoaded(false)}
-                className={`block max-h-full max-w-full select-none object-contain object-left-bottom transition-opacity duration-300 ${
-                  isLogoLoaded ? "opacity-100" : "opacity-0"
-                }`}
-                style={{ filter: stageLogoFilter(logoShadow, 1) }}
-              />
-            ) : (
-              <span className="text-cinematic-title line-clamp-2 text-[1.375rem] font-black uppercase leading-[0.9] text-white [font-stretch:78%]">
-                {title}
-              </span>
-            )}
-          </motion.h1>
-        </div>
-      </div>
-
-      <motion.div
-        className={PHONE_TITLE_HERO_COPY}
-        initial="initial"
-        animate={isRevealed ? "animate" : "initial"}
-      >
-        {facts ? (
-          <motion.div variants={line(0)} className={PHONE_TITLE_HERO_FACTS}>
-            <p className="truncate text-[0.8125rem] font-bold leading-5 tracking-[0.04em] text-white/[0.72]">
-              {facts}
-            </p>
+            {overview ? (
+              <motion.p
+                variants={line(1)}
+                className={`${PHONE_TITLE_HERO_OVERVIEW} text-[0.9375rem] font-semibold leading-6 text-white/[0.9]`}
+              >
+                {overview}
+              </motion.p>
+            ) : null}
           </motion.div>
-        ) : null}
-        {overview ? (
-          <motion.p
-            variants={line(1)}
-            className={`${PHONE_TITLE_HERO_OVERVIEW} line-clamp-3 text-[0.9375rem] font-medium leading-6 text-white/[0.7]`}
-          >
-            {overview}
-          </motion.p>
-        ) : null}
-        <motion.div variants={line(2)} className={PHONE_TITLE_HERO_ACTIONS}>
-          <span className={`flex ${PHONE_TITLE_HERO_PLAY} ${HERO_PRESS}`}>
-            <Link
-              to={playTo}
-              onClick={handlePlay}
-              aria-label={
-                progress
-                  ? `${playLabel}, ${t("hero.timeLeft").replace("{time}", progress.left)}`
-                  : playLabel
-              }
-              className={`relative flex h-full w-full min-w-0 items-center justify-center gap-2 rounded-full px-6 text-[0.9375rem] font-bold ${HERO_PLAY} ${HERO_FOCUS}`}
-            >
-              <Play size={18} fill="currentColor" className="shrink-0" />
-              {/* Under way, it names what it resumes (a series' episode, or
-                  the verb) and how long is left, as the desktop's does. */}
-              <span className="truncate">
-                {progress ? shortPlayLabel : playLabel}
-              </span>
-              {progress ? (
-                <>
-                  <span
-                    className={`${PLAY_TIME_LEFT} shrink-0 text-[0.84375rem] text-zinc-500`}
-                  >
-                    <span aria-hidden="true">·&nbsp; </span>
-                    {t("hero.timeLeft").replace("{time}", progress.left)}
-                  </span>
-                  <span
-                    aria-hidden="true"
-                    className="absolute inset-x-7 bottom-[7px] h-[2px] overflow-hidden rounded-full bg-zinc-950/[0.12]"
-                  >
-                    <span
-                      className="block h-full rounded-full bg-zinc-950"
-                      style={{ width: `${Math.max(3, progress.share * 100)}%` }}
-                    />
-                  </span>
-                </>
-              ) : null}
-            </Link>
-          </span>
-          <div className={PHONE_TITLE_HERO_ROW}>
-            {canStartOver ? (
-              <span className={PHONE_TITLE_HERO_ACTION_SLOT}>
-                <Link
-                  to={`${playTo}${playTo.includes("?") ? "&" : "?"}start=0`}
-                  aria-label={t("details.playFromBeginning")}
-                  className={PHONE_TITLE_HERO_ACTION}
+        </div>
+      </section>
+      {typeof document !== "undefined"
+        ? createPortal(
+            <AnimatePresence>
+              {isRevealed ? (
+                <motion.div
+                  className={PHONE_TITLE_HERO_ACTIONS}
+                  initial={{ opacity: 0 }}
+                  animate={{
+                    opacity: 1,
+                    transition: {
+                      duration: reduceMotion ? 0 : HERO_MOTION.copyEnterS,
+                    },
+                  }}
+                  exit={{
+                    opacity: 0,
+                    transition: {
+                      duration: reduceMotion ? 0 : HERO_MOTION.copyExitS,
+                    },
+                  }}
                 >
-                  <RotateCcw size={PHONE_TITLE_ACTION_ICON} strokeWidth={2} />
-                  <span>{t("details.startOverShort")}</span>
-                </Link>
-              </span>
-            ) : null}
-            <span className={PHONE_TITLE_HERO_ACTION_SLOT}>
-              <FavouriteButton
-                item={item}
-                iconSize={PHONE_TITLE_ACTION_ICON}
-                showLabel
-                shortLabel={t("myList.title")}
-                className={PHONE_TITLE_HERO_ACTION}
-              />
-            </span>
-            {/* The page's details own whether the title is watched; they
+                  <div className="hero-dock hero-dock-compact">
+                    <span
+                      className={`flex ${PHONE_TITLE_HERO_PLAY} ${HERO_PRESS}`}
+                    >
+                      <Link
+                        to={playTo}
+                        onClick={handlePlay}
+                        aria-label={
+                          progress
+                            ? `${playLabel}, ${t("hero.timeLeft").replace("{time}", progress.left)}`
+                            : playLabel
+                        }
+                        className={`hero-dock-play ${HERO_PLAY} ${HERO_FOCUS}`}
+                      >
+                        <Play
+                          size={18}
+                          fill="currentColor"
+                          className="relative shrink-0"
+                        />
+                        <span className="relative truncate">
+                          {progress ? shortPlayLabel : playLabel}
+                        </span>
+                        {progress ? (
+                          <>
+                            <span
+                              className={`${PLAY_TIME_LEFT} relative shrink-0 text-xs text-zinc-500`}
+                            >
+                              <span aria-hidden="true">·&nbsp; </span>
+                              {t("hero.timeLeft").replace(
+                                "{time}",
+                                progress.left,
+                              )}
+                            </span>
+                            <span
+                              aria-hidden="true"
+                              className="hero-dock-watched"
+                              style={{
+                                width: `${Math.min(100, Math.max(0, progress.share * 100))}%`,
+                              }}
+                            />
+                          </>
+                        ) : null}
+                      </Link>
+                    </span>
+                    {canStartOver ? (
+                      <span className="hero-dock-restart">
+                        <Link
+                          to={`${playTo}${playTo.includes("?") ? "&" : "?"}start=0`}
+                          aria-label={t("details.playFromBeginning")}
+                          className={PHONE_TITLE_HERO_ACTION}
+                        >
+                          <RotateCcw
+                            size={PHONE_TITLE_ACTION_ICON}
+                            strokeWidth={2}
+                          />
+                          <span>{t("details.restartWatching")}</span>
+                        </Link>
+                      </span>
+                    ) : null}
+                    <div className={PHONE_TITLE_HERO_ROW}>
+                      {onShowDetails ? (
+                        <button
+                          type="button"
+                          onClick={onShowDetails}
+                          className={PHONE_TITLE_HERO_ACTION}
+                        >
+                          <Info size={PHONE_TITLE_ACTION_ICON} />
+                          <span>{t("common.details")}</span>
+                        </button>
+                      ) : null}
+                      <span className={PHONE_TITLE_HERO_ACTION_SLOT}>
+                        <FavouriteButton
+                          item={item}
+                          iconSize={PHONE_TITLE_ACTION_ICON}
+                          showLabel
+                          shortLabel={t("myList.title")}
+                          className={PHONE_TITLE_HERO_ACTION}
+                        />
+                      </span>
+                      {/* The page's details own whether the title is watched; they
                 put their button here. */}
-            <span
-              ref={onWatchedSlot}
-              className={PHONE_TITLE_HERO_ACTION_SLOT}
-            />
-            {item.Type === "Movie" && isOfflineSupported() ? (
-              <span className={PHONE_TITLE_HERO_ACTION_SLOT}>
-                <DownloadButton
-                  item={item}
-                  iconSize={PHONE_TITLE_ACTION_ICON}
-                  showLabel
-                  className={PHONE_TITLE_HERO_ACTION}
-                />
-              </span>
-            ) : null}
-          </div>
-        </motion.div>
-      </motion.div>
-    </section>
+                      <span
+                        ref={onWatchedSlot}
+                        className={PHONE_TITLE_HERO_ACTION_SLOT}
+                      />
+                      {item.Type === "Movie" && isOfflineSupported() ? (
+                        <span className="hero-dock-extra">
+                          <DownloadButton
+                            item={item}
+                            iconSize={PHONE_TITLE_ACTION_ICON}
+                            className={PHONE_TITLE_HERO_ACTION}
+                          />
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                </motion.div>
+              ) : null}
+            </AnimatePresence>,
+            document.body,
+          )
+        : null}
+    </>
   );
 }

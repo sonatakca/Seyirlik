@@ -73,6 +73,10 @@ export interface SabQueueSnapshot {
   /** Across the whole queue; SABnzbd does not split it per job. */
   readonly speedBytesPerSecond?: number;
   readonly paused: boolean;
+  /** Still to come down, across the whole queue. */
+  readonly remainingBytes?: number;
+  /** Free space where SABnzbd downloads to. */
+  readonly freeBytes?: number;
 }
 
 export interface SabSubmission {
@@ -98,6 +102,19 @@ export interface SabnzbdClient {
   /** Searches the queue then the history for a job by its exact name. */
   findByName(name: string, signal?: AbortSignal): Promise<SabJob | undefined>;
   getJob(nzoId: string, signal?: AbortSignal): Promise<SabJob | undefined>;
+  /** Holds one queued job. The caller is responsible for it being Seyirlik's. */
+  pauseJob(nzoId: string, signal?: AbortSignal): Promise<void>;
+  /** Lets one held job download again. Same responsibility. */
+  resumeJob(nzoId: string, signal?: AbortSignal): Promise<void>;
+  /**
+   * Moves a queued job to a place in the queue, from 0, and returns the place
+   * SABnzbd actually gave it — which differs when a priority stands in the
+   * way. Same responsibility.
+   */
+  moveJob(nzoId: string, index: number, signal?: AbortSignal): Promise<number>;
+  /** Stops the whole queue, as SABnzbd's own pause button does. */
+  pauseQueue(signal?: AbortSignal): Promise<void>;
+  resumeQueue(signal?: AbortSignal): Promise<void>;
   /** Removes a job. The caller is responsible for it being Seyirlik's. */
   remove(
     nzoId: string,
@@ -303,12 +320,19 @@ export function createSabnzbdClient({
     const queue = (payload as { queue?: Record<string, unknown> })?.queue;
     // KB/s, in SABnzbd's binary kilobytes.
     const kilobytes = toNumber(queue?.kbpersec);
+    const remaining = megabytesToBytes(queue?.mbleft);
+    // GB, in SABnzbd's binary gigabytes.
+    const freeGigabytes = toNumber(queue?.diskspace1);
     return {
       jobs: parseQueue(payload),
       ...(kilobytes === undefined
         ? {}
         : { speedBytesPerSecond: Math.round(kilobytes * 1024) }),
       paused: queue?.paused === true || queue?.paused === "true",
+      ...(remaining === undefined ? {} : { remainingBytes: remaining }),
+      ...(freeGigabytes === undefined
+        ? {}
+        : { freeBytes: Math.round(freeGigabytes * 1024 ** 3) }),
     };
   }
 
@@ -436,6 +460,46 @@ export function createSabnzbdClient({
       return (await this.listHistory(200, signal)).find(
         (job) => job.nzoId === nzoId,
       );
+    },
+
+    async pauseJob(nzoId, signal) {
+      if (!nzoId) throw new SabError("bad-request", "No job was named.");
+      await call({ mode: "queue", name: "pause", value: nzoId }, signal);
+    },
+
+    async resumeJob(nzoId, signal) {
+      if (!nzoId) throw new SabError("bad-request", "No job was named.");
+      await call({ mode: "queue", name: "resume", value: nzoId }, signal);
+    },
+
+    async moveJob(nzoId, index, signal) {
+      if (!nzoId) throw new SabError("bad-request", "No job was named.");
+      if (!Number.isInteger(index) || index < 0) {
+        throw new SabError("bad-request", "A queue place starts at 0.");
+      }
+      /*
+       * `switch` takes a second job or, as here, a place in the queue. It
+       * answers with where the job ended up, or -1 when it found no such job.
+       */
+      const payload = await call(
+        { mode: "switch", value: nzoId, value2: String(index) },
+        signal,
+      );
+      const position = toNumber(
+        (payload as { result?: { position?: unknown } })?.result?.position,
+      );
+      if (position === undefined || position < 0) {
+        throw new SabError("rejected", "SABnzbd did not move the job.");
+      }
+      return position;
+    },
+
+    async pauseQueue(signal) {
+      await call({ mode: "pause" }, signal);
+    },
+
+    async resumeQueue(signal) {
+      await call({ mode: "resume" }, signal);
     },
 
     async remove(nzoId, options = {}) {

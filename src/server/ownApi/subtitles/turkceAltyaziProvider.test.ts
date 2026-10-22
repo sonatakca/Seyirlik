@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createProviderSession } from "./subtitleProvider";
 import type { SubtitleQuery } from "./subtitleProvider";
 import {
+  chooseEntry,
   createTurkceAltyaziProvider,
   episodeOf,
   parseSearchResults,
@@ -219,6 +220,69 @@ describe("TürkçeAltyazı page parsing", () => {
   });
 });
 
+describe("choosing a file out of a download", () => {
+  const file = (name: string, text = name) => ({
+    name,
+    bytes: new TextEncoder().encode(text),
+  });
+  const episode = (episode: number, releaseGroup: string | null = null) => ({
+    releaseGroup,
+    identity: { title: "The Sopranos", year: 1999, season: 1, episode },
+  });
+  // The names of a real thirteen-file pack (TürkçeAltyazı 375975).
+  const pack = Array.from({ length: 13 }, (_, i) =>
+    file(
+      `The.Sopranos.S01E${String(i + 1).padStart(2, "0")}.720p.BluRay.x264-UNIT3D.srt`,
+    ),
+  );
+
+  it("takes this episode out of a season pack", () => {
+    expect(chooseEntry(pack, episode(12))?.name).toBe(
+      "The.Sopranos.S01E12.720p.BluRay.x264-UNIT3D.srt",
+    );
+  });
+
+  it("refuses a pack that does not hold this episode", () => {
+    expect(chooseEntry(pack, episode(14))).toBeNull();
+  });
+
+  it("takes the release group's copy when a pack times one episode twice", () => {
+    const twice = [
+      file("Show.S01E02.720p.BluRay.x264-DON.srt"),
+      file("Show.S01E02.INTERNAL.BDRip.x264-ARCHiViST.srt"),
+    ];
+    expect(chooseEntry(twice, episode(2, "archivist"))?.name).toBe(
+      "Show.S01E02.INTERNAL.BDRip.x264-ARCHiViST.srt",
+    );
+    expect(chooseEntry(twice, episode(2, "NTb"))).toBeNull();
+    expect(chooseEntry(twice, episode(2))).toBeNull();
+  });
+
+  it("treats byte-identical copies as one file", () => {
+    const copies = [
+      file("Show.S01E02.srt", "same"),
+      file("Show/S01/Show.S01E02.srt", "same"),
+    ];
+    expect(chooseEntry(copies, episode(2))?.name).toBe("Show.S01E02.srt");
+  });
+
+  it("never takes half of a film split over two files", () => {
+    const film = {
+      releaseGroup: "SPARKS",
+      identity: { title: "Film", year: 1999, season: null, episode: null },
+    };
+    expect(
+      chooseEntry(
+        [file("Film.CD1-SPARKS.srt"), file("Film.CD2-SPARKS.srt")],
+        film,
+      ),
+    ).toBeNull();
+    expect(chooseEntry([file("Film-SPARKS.srt")], film)?.name).toBe(
+      "Film-SPARKS.srt",
+    );
+  });
+});
+
 describe("TürkçeAltyazı search", () => {
   it("finds a film by IMDb id and offers only same-language single-file subtitles", async () => {
     const { provider, requests } = fakeSite((url) => {
@@ -399,6 +463,18 @@ describe("TürkçeAltyazı download", () => {
     expect((await provider.download(candidate, null)).outcome).toBe(
       "needs-authentication",
     );
+  });
+
+  it("treats a one-line refusal of the file as this candidate failing, not the session", async () => {
+    const { provider } = fakeSite((url) =>
+      url.pathname === "/ind"
+        ? html("İlginç hatalar oluştu!")
+        : html(subPage({ description: "" })),
+    );
+    expect(await provider.download(candidate, null)).toMatchObject({
+      outcome: "error",
+      retryable: false,
+    });
   });
 
   it("refuses a candidate id it did not issue", async () => {

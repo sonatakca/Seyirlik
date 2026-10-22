@@ -4,7 +4,8 @@ import {
   clampLogoLayout,
   getLogoLayoutStyle,
   getLogoShadowBackdropStyle,
-  getLogoShadowFilter,
+  getLogoShadowFrameStyle,
+  getLogoShadowReach,
   moveLogoLayout,
   resizeLogoLayout,
   type LogoLayout,
@@ -64,7 +65,7 @@ export function LogoLayoutEditor({
     "move" | ResizeCorner | null
   >(null);
   const guidesVisible = showGuides || activeGesture !== null;
-  const shadowFilter = getLogoShadowFilter(layout.shadow);
+  const shadowFrame = getLogoShadowFrameStyle(layout.shadow);
   const shadowBackdropStyle = getLogoShadowBackdropStyle(layout.shadow);
 
   /**
@@ -184,59 +185,71 @@ export function LogoLayoutEditor({
       {/* Nothing over the artwork: the card has no scrim, so a preview with one
           would show the logo more legible than it will ever be. */}
 
+      {/* Padded by the shadow's reach so a layer made of it holds the whole
+          shadow (see getLogoLayoutStyle); the handle inside is the logo's
+          own box, and the only part that takes the pointer. */}
       <div
-        role="application"
-        tabIndex={disabled ? -1 : 0}
-        aria-label={t("logoLayout.dragHandleLabel")}
-        style={getLogoLayoutStyle(layout)}
-        onPointerDown={(event) => beginGesture(event, "move")}
-        onPointerMove={continueGesture}
-        onPointerUp={endGesture}
-        onPointerCancel={endGesture}
-        onKeyDown={handleKeyDown}
-        className={`absolute touch-none outline-none ring-offset-2 ring-offset-black focus-visible:ring-2 focus-visible:ring-sky-300 ${
-          disabled ? "cursor-default" : "cursor-move"
-        } ${
-          activeGesture
-            ? "ring-2 ring-sky-300"
-            : guidesVisible
-              ? "ring-1 ring-white/30"
-              : ""
-        }`}
+        style={getLogoLayoutStyle(layout, getLogoShadowReach(layout.shadow))}
+        className="pointer-events-none absolute"
       >
-        {shadowBackdropStyle ? (
-          <span
-            aria-hidden="true"
-            data-logo-shadow-backdrop="true"
-            style={shadowBackdropStyle}
-            className="pointer-events-none absolute inset-[6%] rounded-[45%]"
-          />
-        ) : null}
+        <div
+          role="application"
+          tabIndex={disabled ? -1 : 0}
+          aria-label={t("logoLayout.dragHandleLabel")}
+          onPointerDown={(event) => beginGesture(event, "move")}
+          onPointerMove={continueGesture}
+          onPointerUp={endGesture}
+          onPointerCancel={endGesture}
+          onKeyDown={handleKeyDown}
+          className={`pointer-events-auto relative flow-root touch-none outline-none ring-offset-2 ring-offset-black focus-visible:ring-2 focus-visible:ring-sky-300 ${
+            disabled ? "cursor-default" : "cursor-move"
+          } ${
+            activeGesture
+              ? "ring-2 ring-sky-300"
+              : guidesVisible
+                ? "ring-1 ring-white/30"
+                : ""
+          }`}
+        >
+          {shadowBackdropStyle ? (
+            <span
+              aria-hidden="true"
+              data-logo-shadow-backdrop="true"
+              style={shadowBackdropStyle}
+              className="pointer-events-none absolute inset-[6%] rounded-[45%]"
+            />
+          ) : null}
 
-        <img
-          src={logoUrl}
-          alt={title}
-          draggable={false}
-          style={shadowFilter ? { filter: shadowFilter } : undefined}
-          className="pointer-events-none relative z-10 block h-auto w-full object-contain"
-        />
+          <div
+            data-logo-shadow="true"
+            style={shadowFrame}
+            className="pointer-events-none relative z-10"
+          >
+            <img
+              src={logoUrl}
+              alt={title}
+              draggable={false}
+              className="block h-auto w-full object-contain"
+            />
+          </div>
 
-        {!disabled
-          ? CORNERS.map((corner) => (
-              <span
-                key={corner}
-                role="presentation"
-                data-logo-guide="corner"
-                onPointerDown={(event) => beginGesture(event, corner)}
-                onPointerMove={continueGesture}
-                onPointerUp={endGesture}
-                onPointerCancel={endGesture}
-                className={`absolute z-20 h-3 w-3 touch-none rounded-full border border-black/60 bg-sky-300 ${
-                  guidesVisible ? "" : "opacity-0"
-                } ${CORNER_CLASSES[corner]}`}
-              />
-            ))
-          : null}
+          {!disabled
+            ? CORNERS.map((corner) => (
+                <span
+                  key={corner}
+                  role="presentation"
+                  data-logo-guide="corner"
+                  onPointerDown={(event) => beginGesture(event, corner)}
+                  onPointerMove={continueGesture}
+                  onPointerUp={endGesture}
+                  onPointerCancel={endGesture}
+                  className={`absolute z-20 h-3 w-3 touch-none rounded-full border border-black/60 bg-sky-300 ${
+                    guidesVisible ? "" : "opacity-0"
+                  } ${CORNER_CLASSES[corner]}`}
+                />
+              ))
+            : null}
+        </div>
       </div>
     </div>
   );

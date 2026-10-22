@@ -448,3 +448,68 @@ describe("how far a download has got", () => {
     });
   });
 });
+
+describe("steering the queue", () => {
+  it("reads what is left and the free space alongside the jobs", async () => {
+    const { sab } = client(() =>
+      json({
+        queue: {
+          paused: false,
+          mbleft: "2048",
+          diskspace1: "491.5",
+          slots: [],
+        },
+      }),
+    );
+    expect(await sab.queueSnapshot()).toMatchObject({
+      remainingBytes: 2048 * 1024 * 1024,
+      freeBytes: Math.round(491.5 * 1024 ** 3),
+    });
+  });
+
+  it("holds and releases one job by its identifier", async () => {
+    const { sab, calls } = client(() => json({ status: true }));
+    await sab.pauseJob("SABnzbd_nzo_aaa");
+    await sab.resumeJob("SABnzbd_nzo_aaa");
+    expect(
+      calls.map((url) => [
+        url.searchParams.get("mode"),
+        url.searchParams.get("name"),
+        url.searchParams.get("value"),
+      ]),
+    ).toEqual([
+      ["queue", "pause", "SABnzbd_nzo_aaa"],
+      ["queue", "resume", "SABnzbd_nzo_aaa"],
+    ]);
+  });
+
+  it("moves a job to a place and reports where it landed", async () => {
+    const { sab, calls } = client(() =>
+      json({ result: { position: 2, priority: 0 } }),
+    );
+    expect(await sab.moveJob("SABnzbd_nzo_aaa", 3)).toBe(2);
+    expect(calls[0]!.searchParams.get("mode")).toBe("switch");
+    expect(calls[0]!.searchParams.get("value")).toBe("SABnzbd_nzo_aaa");
+    expect(calls[0]!.searchParams.get("value2")).toBe("3");
+  });
+
+  it("reports a move SABnzbd could not make as refused", async () => {
+    const { sab } = client(() => json({ result: { position: -1 } }));
+    await expect(sab.moveJob("gone", 0)).rejects.toMatchObject({
+      kind: "rejected",
+    });
+    await expect(sab.moveJob("x", -1)).rejects.toMatchObject({
+      kind: "bad-request",
+    });
+  });
+
+  it("pauses and resumes the whole queue", async () => {
+    const { sab, calls } = client(() => json({ status: true }));
+    await sab.pauseQueue();
+    await sab.resumeQueue();
+    expect(calls.map((url) => url.searchParams.get("mode"))).toEqual([
+      "pause",
+      "resume",
+    ]);
+  });
+});

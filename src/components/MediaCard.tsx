@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
+import { move, REST, settle } from "../lib/compositorMotion";
 import { Link } from "react-router-dom";
 import {
+  getCardLogoOverlayImageUrl,
   getLogoImageUrl,
   getPrimaryImageUrl,
   getThumbImageUrl,
@@ -25,7 +27,8 @@ import {
   getLogoLayout,
   getLogoLayoutStyle,
   getLogoShadowBackdropStyle,
-  getLogoShadowFilter,
+  getLogoShadowFrameStyle,
+  getLogoShadowReach,
 } from "../lib/logoLayout";
 import { useLanguage } from "../i18n/LanguageContext";
 import type { TranslationKey } from "../i18n/translations";
@@ -36,6 +39,9 @@ import { RestartWatchingButton } from "./RestartWatchingButton";
 import { DownloadButton } from "./offline/DownloadButton";
 import { isOfflineSupported } from "../lib/offline/offlineLibrary";
 import { WatchedIndicator } from "./WatchedIndicator";
+
+// A press starts at rest, so it names its start (see compositorMotion).
+const CARD_PRESS = { transform: [REST, move({ scale: 0.985 })] };
 
 interface MediaCardProps {
   item: MediaItem;
@@ -231,8 +237,10 @@ export function MediaCard({
   const displayTitle = episodeDisplayTitle ?? title;
 
   const itemCounts = getCountLabel(item, t);
-  const progressPercent = getItemProgressPercent(item);
   const isWatched = isItemCompleted(item);
+  // Progress is for something still under way. A finished title says so with
+  // its seal; a full bar beside it would only say it again.
+  const progressPercent = isWatched ? null : getItemProgressPercent(item);
   const isContinueWatchingCard = Boolean(onClearContinueWatching);
   const runtimeLabel = formatRuntime(item.RunTimeTicks, mediaFormatLabels);
   const episodeSeasonLabel = getEpisodeSeasonLabel(item, t);
@@ -295,7 +303,15 @@ export function MediaCard({
   );
 
   const logoLayout = getLogoLayout(item);
-  const logoShadowFilter = getLogoShadowFilter(
+  const logoOverlayUrl =
+    logoUrl &&
+    logoLayout &&
+    logoLayout.shadow > 0 &&
+    variant !== "landscape" &&
+    !isEpisode
+      ? getCardLogoOverlayImageUrl(logoUrl, item.Id, logoLayout, 600)
+      : null;
+  const logoShadowFrame = getLogoShadowFrameStyle(
     logoLayout?.shadow ?? DEFAULT_LOGO_SHADOW,
   );
   const logoShadowBackdropStyle = logoLayout
@@ -346,8 +362,8 @@ export function MediaCard({
           transition: { duration: 0.01 },
         }
       : {
-          initial: { opacity: 0, y: 14, scale: 0.985 },
-          whileInView: { opacity: 1, y: 0, scale: 1 },
+          initial: { opacity: 0, transform: move({ y: 14, scale: 0.985 }) },
+          whileInView: { opacity: 1, ...settle },
           viewport: { once: true, margin: "80px" },
           transition: {
             duration: 0.3,
@@ -393,17 +409,11 @@ export function MediaCard({
     return (
       <motion.div
         data-flip-key={item.Id}
-        className={`h-full min-w-0 shrink-0 ${sizeClass}`}
-        whileTap={shouldReduceMotion ? undefined : { scale: 0.985 }}
+        className={`relative isolate h-full min-w-0 shrink-0 hover:z-10 focus-within:z-10 ${sizeClass}`}
+        whileTap={shouldReduceMotion ? undefined : CARD_PRESS}
         {...motionProps}
       >
-        <div
-          className={`media-card-cinematic group relative grid aspect-[4/3] h-full min-w-0 grid-cols-2 scroll-ml-4 transform-gpu overflow-hidden rounded-xl border bg-[var(--surface)] shadow-cinematic-card transition-[border-color,box-shadow,transform] duration-300 will-change-transform hover:-translate-y-1.5 hover:scale-[1.012] hover:border-white/20 motion-reduce:hover:translate-y-0 motion-reduce:hover:scale-100 ${
-            isWatched
-              ? "border-emerald-300/70 ring-2 ring-emerald-300/45"
-              : "border-white/10"
-          }`}
-        >
+        <div className="media-card-cinematic media-card-lifted group relative grid aspect-[4/3] h-full min-w-0 grid-cols-2 scroll-ml-4 transform-gpu overflow-hidden rounded-xl border border-white/10 bg-[var(--surface)] transition-transform duration-300 will-change-transform hover:-translate-y-1.5 hover:scale-[1.012] motion-reduce:hover:translate-y-0 motion-reduce:hover:scale-100">
           <Link
             to={primaryCardTo}
             aria-label={`${primaryActionLabel} ${title}`}
@@ -533,6 +543,7 @@ export function MediaCard({
             </div>
           ) : null}
         </div>
+        <CardLiftShadow lift="translateY(-0.375rem) scale(1.012)" />
       </motion.div>
     );
   };
@@ -570,39 +581,62 @@ export function MediaCard({
 
     return (
       <>
-        {logoUrl && logoLayout ? (
+        {logoOverlayUrl ? (
+          <img
+            data-logo-overlay="true"
+            src={logoOverlayUrl}
+            alt={displayTitle}
+            loading="lazy"
+            decoding="async"
+            className="pointer-events-none absolute inset-0 z-20 h-full w-full"
+          />
+        ) : logoUrl && logoLayout ? (
           <div
             data-logo-layout="true"
-            style={getLogoLayoutStyle(logoLayout)}
+            style={getLogoLayoutStyle(
+              logoLayout,
+              getLogoShadowReach(logoLayout.shadow),
+            )}
             className="pointer-events-none absolute z-20"
           >
-            {logoShadowBackdropStyle ? (
-              <span
-                aria-hidden="true"
-                data-logo-shadow-backdrop="true"
-                style={logoShadowBackdropStyle}
-                className="absolute inset-[6%] rounded-[45%]"
-              />
-            ) : null}
+            <div className="relative flow-root">
+              {logoShadowBackdropStyle ? (
+                <span
+                  aria-hidden="true"
+                  data-logo-shadow-backdrop="true"
+                  style={logoShadowBackdropStyle}
+                  className="absolute inset-[6%] rounded-[45%]"
+                />
+              ) : null}
+              <div
+                data-logo-shadow="true"
+                style={logoShadowFrame}
+                className="relative z-10"
+              >
+                <img
+                  src={logoUrl}
+                  alt={displayTitle}
+                  className="block h-auto w-full object-contain"
+                />
+              </div>
+            </div>
+          </div>
+        ) : logoUrl ? (
+          // Nothing sits behind the logo any more — no gradient, no tags — so
+          // its own shadow is the only thing separating it from the artwork.
+          // The frame spans the card; the logo is centred on its foot, and
+          // its height follows its width so the aspect ratio is preserved.
+          <div
+            data-logo-shadow="true"
+            style={logoShadowFrame}
+            className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex items-end justify-center"
+          >
             <img
               src={logoUrl}
               alt={displayTitle}
-              style={
-                logoShadowFilter ? { filter: logoShadowFilter } : undefined
-              }
-              className="relative z-10 block h-auto w-full object-contain"
+              className="h-auto max-h-16 w-auto max-w-[80%] object-contain sm:max-h-24"
             />
           </div>
-        ) : logoUrl ? (
-          <img
-            src={logoUrl}
-            alt={displayTitle}
-            style={logoShadowFilter ? { filter: logoShadowFilter } : undefined}
-            // Nothing sits behind the logo any more — no gradient, no tags — so
-            // its own shadow is the only thing separating it from the artwork.
-            // Height follows width so the aspect ratio is preserved.
-            className="pointer-events-none absolute inset-x-0 bottom-4 z-20 mx-auto h-auto max-h-16 w-auto max-w-[80%] object-contain sm:max-h-24"
-          />
         ) : (
           // A card with neither logo nor title would be unidentifiable, so the
           // title stands in — carrying its own shadow for the same reason.
@@ -623,19 +657,15 @@ export function MediaCard({
   return (
     <motion.div
       data-flip-key={item.Id}
-      className={`h-full min-w-0 shrink-0 ${sizeClass}`}
-      whileTap={shouldReduceMotion ? undefined : { scale: 0.985 }}
+      className={`relative isolate h-full min-w-0 shrink-0 hover:z-10 focus-within:z-10 ${sizeClass}`}
+      whileTap={shouldReduceMotion ? undefined : CARD_PRESS}
       {...motionProps}
     >
       <div
-        className={`media-card-cinematic group relative h-full w-full min-w-0 scroll-ml-4 transform-gpu overflow-hidden rounded-xl border bg-[var(--surface)] shadow-cinematic-card transition-[border-color,box-shadow,transform] duration-300 will-change-transform hover:border-white/20 motion-reduce:hover:translate-y-0 motion-reduce:hover:scale-100 ${
+        className={`media-card-cinematic media-card-lifted group relative h-full w-full min-w-0 scroll-ml-4 transform-gpu overflow-hidden rounded-xl border border-white/10 bg-[var(--surface)] transition-transform duration-300 will-change-transform motion-reduce:hover:translate-y-0 motion-reduce:hover:scale-100 ${
           isEpisode
             ? "flex flex-col hover:-translate-y-1"
             : `block ${aspectClass} hover:-translate-y-1.5 hover:scale-[1.025]`
-        } ${
-          isWatched
-            ? "border-emerald-300/70 ring-2 ring-emerald-300/45 shadow-[0_0_0_1px_rgba(52,211,153,0.28),0_22px_60px_rgba(16,185,129,0.2)]"
-            : "border-white/10"
         }`}
       >
         <Link
@@ -682,11 +712,17 @@ export function MediaCard({
           )}
         </div>
 
-        <div className="absolute right-3 top-3 z-30 sm:right-4 sm:top-4">
+        <div
+          className={`absolute right-3 top-3 z-30 sm:right-4 sm:top-4 ${
+            canPlay && showRestartWatching
+              ? "transition-opacity duration-200 group-hover:opacity-0 group-focus-within:opacity-0"
+              : ""
+          }`}
+        >
           <WatchedIndicator
-            item={item}
-            className="px-2 py-0.5 text-[0.56rem] tracking-[0.14em] sm:px-2.5 sm:py-1 sm:text-[0.62rem]"
-            iconSize={12}
+            isWatched={isWatched}
+            reveal="hover"
+            size={variant === "poster" ? "md" : "sm"}
           />
         </div>
 
@@ -799,6 +835,29 @@ export function MediaCard({
           ) : null}
         </div>
       </div>
+      <CardLiftShadow
+        lift={
+          isEpisode
+            ? "translateY(-0.25rem)"
+            : "translateY(-0.375rem) scale(1.025)"
+        }
+      />
     </motion.div>
+  );
+}
+
+/**
+ * The shadow a hovered card stands on, and its brighter edge, drawn once on a
+ * layer behind the card and faded in with opacity, lifted with the card's own
+ * transform. The card's box-shadow and border colour used to be transitioned
+ * instead, which repainted the card and its 120px blur on every frame.
+ */
+function CardLiftShadow({ lift }: { lift: string }) {
+  return (
+    <div
+      aria-hidden="true"
+      className="media-card-lift-shadow"
+      style={{ "--card-lift": lift } as React.CSSProperties}
+    />
   );
 }

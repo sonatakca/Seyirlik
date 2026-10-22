@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import { motion } from "framer-motion";
+import { move, settle } from "../../lib/compositorMotion";
 import { Search, SlidersHorizontal } from "lucide-react";
 import { BackButton } from "../../components/BackButton";
 import { ErrorMessage } from "../../components/ErrorMessage";
@@ -250,6 +251,8 @@ export function DesktopLibraryPage({
   const [chosenSortBy, setSortBy] = useState<LibrarySortMode | null>(null);
   const [readyDetailsId, setReadyDetailsId] = useState<string | null>(null);
   const seriesDetailsRef = useRef<HTMLDivElement | null>(null);
+  // Where the title hero takes the details' watched button.
+  const [watchedSlot, setWatchedSlot] = useState<HTMLSpanElement | null>(null);
   const location = useLocation();
 
   /*
@@ -580,12 +583,12 @@ export function DesktopLibraryPage({
           }
         >
           <div className="layout-no-offset flex min-w-0 flex-col">
-            <BackButton className="fixed left-5 top-24 z-[80] lg:left-8" />
-
-            <div className="full-bleed relative min-h-[100svh]">
+            <div className="full-bleed relative flow-root">
               <TitleHero
                 key={data.library.Id}
                 item={data.library}
+                backTo={data.library.Type === "Movie" ? "/movies" : "/shows"}
+                onWatchedSlot={setWatchedSlot}
                 isRevealed={isInitialDetailsReady}
                 onShowDetails={() =>
                   seriesDetailsRef.current?.scrollIntoView({
@@ -603,6 +606,8 @@ export function DesktopLibraryPage({
               <SeriesLibraryDetails
                 initialItem={data.library}
                 variant="desktop"
+                watchedSlot={watchedSlot}
+                watchedSlotLook="dock"
                 canonicalPath={canonicalPath}
                 onInitialReady={() => setReadyDetailsId(activeId ?? null)}
               />
@@ -756,15 +761,15 @@ export function DesktopLibraryPage({
                   className="cinematic-logo-shadow z-30 h-auto max-h-10 max-w-[min(10rem,42vw)] transform-gpu object-contain will-change-transform sm:max-h-20 sm:max-w-[min(18rem,40vw)]"
                   initial={{
                     opacity: 0,
-                    scale: 0.98,
+                    transform: move({ scale: 0.98 }),
                   }}
                   animate={{
                     opacity: 1,
-                    scale: 1,
+                    ...settle,
                   }}
                   transition={{
                     opacity: { duration: 0.55, ease: [0.22, 1, 0.36, 1] },
-                    scale: { duration: 0.6, ease: [0.16, 1, 0.3, 1] },
+                    transform: { duration: 0.6, ease: [0.16, 1, 0.3, 1] },
                   }}
                 />
 
@@ -773,11 +778,12 @@ export function DesktopLibraryPage({
                   className="z-10 h-10 w-px shrink-0 origin-center bg-gradient-to-b from-transparent via-white/24 to-transparent will-change-transform sm:h-14"
                   initial={{
                     opacity: 0,
-                    scaleY: 0.55,
+                    transform: "scaleY(0.55)",
                   }}
                   animate={{
                     opacity: 1,
-                    scaleY: 1,
+                    transform: "scaleY(1)",
+                    transitionEnd: { transform: "none" },
                   }}
                   transition={{
                     duration: 0.78,
@@ -787,16 +793,14 @@ export function DesktopLibraryPage({
                 />
 
                 <motion.div
-                  className="relative z-20 transform-gpu will-change-[transform,opacity,filter]"
+                  className="relative z-20 transform-gpu will-change-[transform,opacity]"
                   initial={{
                     opacity: 0,
-                    scale: 0.975,
-                    filter: "blur(6px)",
+                    transform: move({ scale: 0.975 }),
                   }}
                   animate={{
                     opacity: 1,
-                    scale: 1,
-                    filter: "blur(0px)",
+                    ...settle,
                   }}
                   transition={{
                     duration: 0.95,
@@ -864,11 +868,7 @@ export function DesktopLibraryPage({
           direction="up"
           delay={0.03}
         >
-          <WatchedIndicator
-            isWatched
-            className="px-5 py-2 text-sm tracking-[0.16em]"
-            iconSize={18}
-          />
+          <WatchedIndicator isWatched size="lg" />
         </MotionReveal>
       ) : null}
 

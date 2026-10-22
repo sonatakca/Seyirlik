@@ -1,11 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLanguage } from "../../i18n/LanguageContext";
-import {
-  formatBytes,
-  removeLibraryTitle,
-  type LibraryTitle,
-  type TitleRemovalReport,
-} from "../../lib/libraryAdminApi";
+import { formatBytes, type LibraryTitle } from "../../lib/libraryAdminApi";
+import { removalFailureKey, startTitleRemoval } from "./titleRemovalProgress";
 
 /**
  * The one irreversible action on the Wanted page.
@@ -13,50 +9,55 @@ import {
  * The title has to be typed, not clicked: a mis-aimed click can land on any
  * button, but it cannot spell a film's name. The server checks the same thing,
  * so this dialog is a courtesy and not the control.
+ *
+ * It waits only for the server to take the title out of the catalogue, which
+ * is where a refusal comes from. Deleting the files follows in the corner card
+ * (`titleRemovalProgress`), and even the wait can be handed over to it: while
+ * the request is out, Cancel becomes "continue in background".
  */
 export function RemoveTitleDialog({
   title,
   onClose,
-  onRemoved,
 }: {
   title: LibraryTitle;
   onClose: () => void;
-  onRemoved: (report: TitleRemovalReport) => void;
 }) {
   const { t } = useLanguage();
   const [typed, setTyped] = useState("");
   const [working, setWorking] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const running = useRef<ReturnType<typeof startTitleRemoval> | null>(null);
   const matches = typed.trim() === title.title.trim();
+
+  // Closing while the request is out hands it to the corner card; it does not
+  // cancel anything, since the server may already be past the point of no return.
+  const close = useCallback(() => {
+    running.current?.hide();
+    onClose();
+  }, [onClose]);
 
   useEffect(() => {
     input.current?.focus();
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !working) onClose();
+      if (event.key === "Escape") close();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, working]);
+  }, [close]);
 
   async function remove() {
     setWorking(true);
     setFailure(null);
+    const removal = startTitleRemoval(title, typed, t);
+    running.current = removal;
     try {
-      onRemoved(await removeLibraryTitle(title.id, typed));
+      await removal.result;
+      running.current = null;
+      onClose();
     } catch (error) {
-      const code = (error as { code?: string }).code;
-      setFailure(
-        t(
-          code === "REMOVAL_BUSY"
-            ? "library.removeBusy"
-            : code === "REMOVAL_CONFIRMATION"
-              ? "library.removeMismatch"
-              : code === "REMOVAL_UNSAFE"
-                ? "library.removeUnsafe"
-                : "library.removeFailed",
-        ),
-      );
+      running.current = null;
+      setFailure(t(removalFailureKey(error)));
       setWorking(false);
     }
   }
@@ -65,7 +66,7 @@ export function RemoveTitleDialog({
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
       onClick={(event) => {
-        if (event.target === event.currentTarget && !working) onClose();
+        if (event.target === event.currentTarget) close();
       }}
     >
       <div
@@ -121,11 +122,10 @@ export function RemoveTitleDialog({
           <div className="flex justify-end gap-2">
             <button
               type="button"
-              onClick={onClose}
-              disabled={working}
+              onClick={close}
               className="min-h-10 rounded-lg px-4 text-sm font-bold text-white/75 hover:bg-white/[0.08] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
             >
-              {t("library.cancel")}
+              {working ? t("library.removeHide") : t("library.cancel")}
             </button>
             <button
               type="submit"

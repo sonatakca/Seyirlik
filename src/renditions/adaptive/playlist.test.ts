@@ -11,6 +11,43 @@ import type {
   AdaptiveVideoRenditionMetadata,
 } from "./metadata";
 
+it("permits a subtitle-only scratch master only with an explicit incremental option", () => {
+  const input = {
+    videoRenditions: [],
+    audioRenditions: [],
+    subtitleRenditions: [
+      {
+        id: "subtitle-1000",
+        sourceStreamIndex: 1000,
+        language: "tur",
+        isDefault: false,
+        isForced: false,
+        isHearingImpaired: false,
+        codec: "webvtt" as const,
+        durationSeconds: 10,
+        playlistPath: "subtitles/subtitle-1000/playlist.m3u8",
+        subtitlePath: "subtitles/subtitle-1000/subtitles.vtt",
+        fileSizeBytes: 100,
+      },
+    ],
+    videoCodecStrings: new Map<string, string>(),
+    audioCodecStrings: new Map<string, string>(),
+  };
+  expect(() => buildMasterPlaylist(input)).toThrow(/at least one video/);
+  const master = buildMasterPlaylist({ ...input, allowMissingVideo: true });
+  expect(() => parseMasterPlaylist(master)).toThrow(/no variants/);
+  expect(
+    parseMasterPlaylist(master, { allowMissingVideo: true }).subtitleRenditions,
+  ).toHaveLength(1);
+  expect(() =>
+    buildMasterPlaylist({
+      ...input,
+      subtitleRenditions: [],
+      allowMissingVideo: true,
+    }),
+  ).toThrow(/at least one rendition/);
+});
+
 const MEDIA_PLAYLIST = [
   "#EXTM3U",
   "#EXT-X-VERSION:7",

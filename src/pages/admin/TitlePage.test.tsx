@@ -10,6 +10,8 @@ const api = vi.hoisted(() => ({
   requestTitleSubtitles: vi.fn(),
   removeLibraryTitle: vi.fn(),
   uploadTitleSubtitle: vi.fn(),
+  searchMissingEpisodes: vi.fn(),
+  getMissingSearch: vi.fn(),
 }));
 vi.mock("../../lib/libraryAdminApi", async (importActual) => ({
   ...(await importActual<typeof import("../../lib/libraryAdminApi")>()),
@@ -60,6 +62,7 @@ const detail = (
   pendingSubtitles: [],
   files: 1,
   trickplayFiles: 0,
+  pendingTrickplay: 0,
   artwork: { coverTag: null, logoTag: null, logoLayout: null, missing: true },
   mediaFileId: "f",
   fileName: "Dune.2021.mkv",
@@ -275,6 +278,7 @@ it("uploads to the episode a file belongs to, under the list's one policy", asyn
               pendingSubtitles: [],
               files: 1,
               trickplayFiles: 0,
+              pendingTrickplay: 0,
             },
           ],
         },
@@ -309,4 +313,115 @@ it("uploads to the episode a file belongs to, under the list's one policy", asyn
       { language: "eng", forced: false, replace: false },
     ),
   );
+});
+
+it("refreshes itself while open, so a change shows without a reload", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    renderAt();
+    await screen.findByText("Dune");
+    api.getLibraryTitle.mockResolvedValue(detail({ title: "Dune: Part Two" }));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(api.getLibraryTitle).toHaveBeenLastCalledWith(ID, {
+      background: true,
+    });
+    expect(await screen.findByText("Dune: Part Two")).toBeTruthy();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("searches for a season's missing episodes and says what it started", async () => {
+  const episode = (
+    number: number,
+    over: Partial<LibraryTitleDetail["seasons"][number]["episodes"][number]>,
+  ) => ({
+    id: null,
+    seasonNumber: 6,
+    episodeNumber: number,
+    title: null,
+    airDate: "2007-04-08",
+    mediaFileId: null,
+    fileName: null,
+    monitored: true,
+    hasThumb: false,
+    stillUrl: null,
+    status: "wanted",
+    hasMedia: false,
+    downloading: 0,
+    importing: 0,
+    processing: 0,
+    sizeBytes: 0,
+    resolution: null,
+    audioLanguages: [],
+    subtitleLanguages: [],
+    pendingSubtitles: [],
+    files: 0,
+    trickplayFiles: 0,
+    pendingTrickplay: 0,
+    ...over,
+  });
+  api.getLibraryTitle.mockResolvedValue(
+    detail({
+      kind: "series",
+      title: "The Sopranos",
+      seasons: [
+        {
+          id: null,
+          seasonNumber: 6,
+          episodes: [
+            episode(1, { hasMedia: true, status: "downloaded" }),
+            episode(2, {}),
+            episode(3, {}),
+            episode(4, { downloading: 1 }),
+          ],
+        },
+      ],
+    }),
+  );
+  api.searchMissingEpisodes.mockResolvedValue({ taskId: "t1", episodes: 2 });
+  api.getMissingSearch
+    .mockResolvedValueOnce({ status: "running", message: null, result: null })
+    .mockResolvedValue({
+      status: "succeeded",
+      message: null,
+      result: {
+        started: [{ season: 6, episode: 2, release: "Sopranos.S06E02" }],
+        nothing: [{ season: 6, episode: 3 }],
+        covered: [{ season: 6, episode: null }],
+      },
+    });
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    renderAt(`/admin/library/${ID}?tab=episodes`);
+    // Two are missing; the one downloading is not.
+    expect(await screen.findByText("library.searchMissing · 2")).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "library.searchMissingSeason · library.season 6",
+      }),
+    );
+    await waitFor(() =>
+      expect(api.searchMissingEpisodes).toHaveBeenCalledWith(ID, 6),
+    );
+    expect(await screen.findByText("library.missingSearching 2")).toBeTruthy();
+    // Every search button waits for this one.
+    expect(screen.getByText("library.searchingMissing")).toBeTruthy();
+
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(
+      await screen.findByText(
+        "library.missingStarted S06E02 · library.missingNothingFor S06E03 · library.missingAlreadyComing S06",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("library.searchMissing · 2")).toBeTruthy();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("does not offer a search when nothing is missing", async () => {
+  renderAt();
+  await screen.findByText("Dune");
+  expect(screen.queryByText(/library.searchMissing/)).toBeNull();
 });

@@ -95,6 +95,29 @@ describe("what can satisfy recovery for a quarantined drive", () => {
     expect(satisfiesRecovery(EXPANSION, movedPath)).toEqual({ ok: true });
   });
 
+  /** The Google Drive mount the library moved to: a share with no disk under it. */
+  const DRIVE_SHARE: VolumeIdentity = {
+    volumeUuid: null,
+    deviceNode: null,
+    medium: "network",
+    fsType: null,
+    mountPath: "\\\\seyirlik\\drive",
+  };
+
+  it("lets an operator recover a network share, which has no disk to match", () => {
+    expect(satisfiesRecovery(null, DRIVE_SHARE)).toEqual({ ok: true });
+    expect(satisfiesRecovery(DRIVE_SHARE, { ...DRIVE_SHARE })).toEqual({
+      ok: true,
+    });
+  });
+
+  it("still refuses a network share in place of a quarantined physical drive", () => {
+    expect(satisfiesRecovery(EXPANSION, DRIVE_SHARE).ok).toBe(false);
+    expect(
+      satisfiesRecovery({ ...EXPANSION, volumeUuid: null }, DRIVE_SHARE).ok,
+    ).toBe(false);
+  });
+
   it("refuses when nothing is mounted there at all", () => {
     expect(satisfiesRecovery(EXPANSION, null).ok).toBe(false);
   });

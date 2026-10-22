@@ -156,6 +156,16 @@ describe("audio retention policy", () => {
 });
 
 describe("subtitle retention policy", () => {
+  it("keeps other languages when all languages are requested", () => {
+    const result = decideSubtitleStreams(
+      [
+        subtitle({ streamIndex: 1, language: "fra" }),
+        subtitle({ streamIndex: 2, language: "fra", isHearingImpaired: true }),
+      ],
+      { keepAllLanguages: true },
+    );
+    expect(result.map((track) => track.keep)).toEqual([true, false]);
+  });
   it("keeps English, Turkish and their forced tracks", () => {
     const decisions = decideSubtitleStreams([
       subtitle({ streamIndex: 1, language: "eng" }),

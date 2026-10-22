@@ -18,6 +18,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
+import { processingDeviceLabel } from "./processingDevice";
 import { setPageTitle } from "../../lib/pageTitle";
 import { notify } from "../../lib/notifications/notificationStore";
 import {
@@ -48,6 +49,9 @@ import {
   type AssemblyPhaseProgress,
   type AudioPhaseProgress,
   type CompletedPhaseSummary,
+  type DriveUploadStatus,
+  type PlanningPhaseProgress,
+  type ProcessingBuildPhase,
   type ProcessingJob,
   type ProcessingJobEvent,
   type ProcessingLiveProgress,
@@ -57,6 +61,7 @@ import {
   type ProcessingSeason,
   type ProcessingSeries,
   type PublishPhaseProgress,
+  type SubtitlePhaseProgress,
   type VerificationPhaseProgress,
 } from "../../lib/processingApi";
 import {
@@ -780,6 +785,377 @@ function PublishPanel({
   );
 }
 
+/**
+ * Planning, by step.
+ *
+ * The rate probe's search runs as long as its answers require, so there is no
+ * honest fraction to draw: the panel counts the work finished instead.
+ */
+function PlanningPanel({
+  progress,
+  t,
+}: {
+  progress: PlanningPhaseProgress;
+  t: Translate;
+}) {
+  const rates = progress.rateProbe;
+  const steps: Array<{ key: string; state: "running" | "complete" }> = [
+    {
+      key: "timeline",
+      state: progress.step === "timeline" ? "running" : "complete",
+    },
+    ...(progress.step === "rates"
+      ? [{ key: "rates", state: "running" as const }]
+      : []),
+  ];
+  return (
+    <div className="flex flex-col gap-2 text-xs text-white/60">
+      {steps.map((step) => (
+        <div key={step.key} className="flex items-baseline gap-2">
+          <StepMark state={step.state} />
+          <span>
+            {step.key === "timeline"
+              ? formatTemplate(t("processing.planning.timeline"), {
+                  count: String(progress.boundaryCount),
+                })
+              : rates?.reused
+                ? t("processing.planning.ratesReused")
+                : t("processing.planning.rates")}
+          </span>
+        </div>
+      ))}
+      {progress.epochCount ? (
+        <span className="tabular-nums text-white/45">
+          {formatTemplate(t("processing.planning.epochs"), {
+            count: String(progress.epochCount),
+          })}
+        </span>
+      ) : null}
+      {rates && !rates.reused ? (
+        <span className="tabular-nums text-white/45">
+          {formatTemplate(t("processing.planning.rateWork"), {
+            encodes: String(rates.encodes),
+            measurements: String(rates.measurements),
+          })}
+          {rates.qualityHeight
+            ? ` · ${formatTemplate(t("processing.planning.rateRung"), {
+                rendition: `${rates.qualityHeight}p`,
+              })}`
+            : ""}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Subtitles, track by track.
+ *
+ * Each track is its own FFmpeg run and reports nothing until it finishes, so
+ * the list is the progress: done, running for how long, still to come.
+ */
+function SubtitlePanel({
+  progress,
+  nowMs,
+  t,
+}: {
+  progress: SubtitlePhaseProgress;
+  nowMs: number;
+  t: Translate;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <span className="text-2xl font-black tabular-nums">
+          {progress.completedTracks} / {progress.tracks.length}
+        </span>
+        <span className="text-xs tabular-nums text-white/45">
+          {t("processing.subtitles.tracks")}
+          {progress.writtenBytes > 0
+            ? ` · ${formatBytes(progress.writtenBytes)}`
+            : ""}
+        </span>
+      </div>
+      <PhaseBar fraction={progress.fraction} />
+      <div className="flex flex-col gap-1.5">
+        {progress.tracks.map((track) => (
+          <div
+            key={track.id}
+            className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs"
+          >
+            <StepMark
+              state={
+                track.state === "skipped"
+                  ? "skipped"
+                  : track.state === "complete"
+                    ? "complete"
+                    : track.state === "running"
+                      ? "running"
+                      : "waiting"
+              }
+            />
+            <span className="text-white/70">
+              {[
+                track.language
+                  ? t(`processing.language.${track.language}` as never)
+                  : track.title,
+                track.isForced ? t("processing.subtitles.forced") : null,
+              ]
+                .filter(Boolean)
+                .join(" · ") || track.id}
+            </span>
+            <span className="text-white/35">
+              {t(`processing.subtitles.${track.origin}` as never)}
+            </span>
+            <span className="ml-auto tabular-nums text-white/45">
+              {track.state === "running" &&
+              progress.currentStartedAtMs !== undefined
+                ? formatTemplate(t("processing.subtitles.running"), {
+                    elapsed: formatDuration(
+                      Math.max(
+                        0,
+                        Math.round(
+                          (nowMs - progress.currentStartedAtMs) / 1000,
+                        ),
+                      ),
+                    ),
+                  })
+                : track.state === "skipped"
+                  ? t("processing.subtitles.skipped")
+                  : track.bytes
+                    ? formatBytes(track.bytes)
+                    : ""}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A phase that has begun and not yet sent its first measurement.
+ *
+ * Showing the video panel here — the old fallback — is what made audio look
+ * like video. The phase is named and timed instead, and its own panel replaces
+ * this the moment it reports.
+ */
+function PhaseStartingPanel({
+  live,
+  nowMs,
+  t,
+}: {
+  live: ProcessingLiveProgress;
+  nowMs: number;
+  t: Translate;
+}) {
+  return (
+    <div className="flex items-center gap-2 text-xs text-white/55">
+      <Loader2
+        size={13}
+        className="animate-spin text-white/40 motion-reduce:animate-none"
+        aria-hidden="true"
+      />
+      <span>
+        {live.phaseStartedAtMs !== undefined
+          ? formatTemplate(t("processing.phase.startedAgo"), {
+              elapsed: formatDuration(
+                Math.max(0, Math.round((nowMs - live.phaseStartedAtMs) / 1000)),
+              ),
+            })
+          : t("processing.phase.starting")}
+      </span>
+    </div>
+  );
+}
+
+function StepMark({
+  state,
+}: {
+  state: "waiting" | "running" | "complete" | "skipped";
+}) {
+  return (
+    <span
+      className={
+        state === "complete"
+          ? "text-emerald-300"
+          : state === "running"
+            ? "text-amber-200"
+            : state === "skipped"
+              ? "text-rose-300/70"
+              : "text-white/25"
+      }
+      aria-hidden="true"
+    >
+      {state === "complete"
+        ? "✓"
+        : state === "running"
+          ? "•"
+          : state === "skipped"
+            ? "×"
+            : "○"}
+    </span>
+  );
+}
+
+/**
+ * How a finished build went, phase by phase.
+ *
+ * Read from the row, because the live sample that carried it is gone once the
+ * job ends. Each line says what the phase handled in its own unit — epochs,
+ * tracks, renditions, checks — rather than a bare number.
+ */
+function FinishedPhases({
+  phases,
+  t,
+}: {
+  phases: readonly CompletedPhaseSummary[];
+  t: Translate;
+}) {
+  const total = phases.reduce((sum, entry) => sum + entry.elapsedSeconds, 0);
+  return (
+    <div className="flex flex-col gap-1.5 rounded-xl border border-white/10 bg-white/[0.02] p-3">
+      <span className={LABEL}>{t("processing.phaseHistory")}</span>
+      {phases.map((entry) => (
+        <div
+          key={entry.phase}
+          className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs"
+        >
+          <StepMark state="complete" />
+          <span className="font-semibold text-white/70">
+            {t(completedPhaseLabelKey(entry.phase) as never)}
+          </span>
+          <span className="text-white/40">
+            {[
+              entry.count
+                ? formatTemplate(t(phaseCountKey(entry.phase) as never), {
+                    count: String(entry.count),
+                  })
+                : null,
+              entry.bytes ? formatFileSize(entry.bytes) : null,
+              entry.reused ? t("processing.audio.reused") : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </span>
+          <span className="ml-auto tabular-nums text-white/45">
+            {formatDuration(entry.elapsedSeconds)}
+          </span>
+        </div>
+      ))}
+      <div className="flex items-baseline justify-between border-t border-white/[0.06] pt-1.5 text-xs text-white/45">
+        <span>{t("processing.history.total")}</span>
+        <span className="tabular-nums">{formatDuration(total)}</span>
+      </div>
+    </div>
+  );
+}
+
+function phaseCountKey(phase: ProcessingBuildPhase): string {
+  return `processing.history.count.${phase}`;
+}
+
+/** A tracker reading older than this means nobody is watching the upload. */
+const DRIVE_UPLOAD_STALE_MS = 60_000;
+
+/**
+ * The package's way to Google Drive, after the job itself has finished.
+ *
+ * Publishing on the helper only reaches the Drive mount's cache; the title is
+ * on Drive — where the server plays it from — when this says so.
+ */
+function DriveUploadPanel({
+  upload,
+  nowMs,
+  t,
+}: {
+  upload: DriveUploadStatus;
+  nowMs: number;
+  t: Translate;
+}) {
+  const done = upload.state === "uploaded";
+  const stale = !done && nowMs - upload.updatedAtMs > DRIVE_UPLOAD_STALE_MS;
+  const fraction =
+    upload.totalBytes > 0 ? upload.uploadedBytes / upload.totalBytes : 0;
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-white/10 bg-white/[0.02] p-3">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <span className={LABEL}>{t("processing.upload.heading")}</span>
+        {done ? (
+          <span className="text-xs font-semibold text-emerald-200/90">
+            {formatTemplate(t("processing.upload.done"), {
+              duration: formatDuration(
+                Math.max(
+                  0,
+                  Math.round(
+                    ((upload.finishedAtMs ?? upload.updatedAtMs) -
+                      upload.startedAtMs) /
+                      1000,
+                  ),
+                ),
+              ),
+            })}
+          </span>
+        ) : (
+          <span className="text-2xl font-black tabular-nums">
+            {phasePercent(fraction)}
+          </span>
+        )}
+      </div>
+      {done ? (
+        <span className="text-xs text-white/45">
+          {formatFileSize(upload.totalBytes)} ·{" "}
+          {t("processing.upload.serverNote")}
+        </span>
+      ) : (
+        <>
+          <PhaseBar fraction={fraction} />
+          <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs tabular-nums text-white/45">
+            <span>
+              {formatFileSize(upload.uploadedBytes)} /{" "}
+              {formatFileSize(upload.totalBytes)}
+            </span>
+            <span>
+              {formatTemplate(t("processing.upload.files"), {
+                pending: String(upload.filesPending),
+                uploading: String(upload.filesUploading),
+              })}
+            </span>
+            {upload.bytesPerSecond && !stale ? (
+              <span>{formatByteRate(upload.bytesPerSecond)}</span>
+            ) : null}
+            {upload.etaSeconds !== undefined && !stale ? (
+              <span>
+                {t("processing.eta")}: {formatDuration(upload.etaSeconds)}
+              </span>
+            ) : null}
+            {upload.retries ? (
+              <span className="text-amber-100/70">
+                {formatTemplate(t("processing.upload.retries"), {
+                  count: String(upload.retries),
+                })}
+              </span>
+            ) : null}
+          </div>
+          {stale ? (
+            <span className="text-xs text-amber-100/70">
+              {formatTemplate(t("processing.upload.notWatched"), {
+                age: formatDuration(
+                  Math.round((nowMs - upload.updatedAtMs) / 1000),
+                ),
+              })}
+            </span>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Exported so the panels can be asserted without a live stream. */
+export const DriveUploadPanelForTest = DriveUploadPanel;
+export const FinishedPhasesForTest = FinishedPhases;
+
 /** The bar a phase panel draws for its own measured fraction. */
 function PhaseBar({ fraction }: { fraction: number }) {
   return (
@@ -1130,9 +1506,20 @@ function PhaseDetail({
 }) {
   const phase = buildPhaseFor(job, live);
   const stale = liveSampleIsStale(live, nowMs);
+  /*
+   * A finished build is described by its history, not by the video panel's
+   * last state, which said "video encoding complete" and nothing else.
+   */
+  if (job.state === "succeeded" && job.phaseHistory?.length) {
+    return <FinishedPhases phases={job.phaseHistory} t={t} />;
+  }
   const detail =
-    live && phase === "audio" && live.audio ? (
+    live && phase === "planning" && live.planning ? (
+      <PlanningPanel progress={live.planning} t={t} />
+    ) : live && phase === "audio" && live.audio ? (
       <AudioPanel progress={live.audio} stale={stale} t={t} />
+    ) : live && phase === "subtitles" && live.subtitles ? (
+      <SubtitlePanel progress={live.subtitles} nowMs={nowMs} t={t} />
     ) : live && phase === "assembling" && live.assembly ? (
       <AssemblyPanel progress={live.assembly} stale={stale} t={t} />
     ) : live && phase === "validating" && live.verification ? (
@@ -1147,6 +1534,16 @@ function PhaseDetail({
    * epoch panel is the right thing to show in all three: it is the only one
    * that can describe a build from the durable record alone.
    */
+  if (!detail && live && phase && phase !== "encoding") {
+    return (
+      <div className="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-3">
+        <span className={LABEL}>
+          {t(BUILD_PHASE_LABEL_KEYS[phase] as never)}
+        </span>
+        <PhaseStartingPanel live={live} nowMs={nowMs} t={t} />
+      </div>
+    );
+  }
   if (!detail) {
     return <EpochPanel job={job} live={live} nowMs={nowMs} t={t} />;
   }
@@ -3596,6 +3993,18 @@ export function MediaProcessingPage() {
                           <span className="text-xs text-white/40">
                             {t(`processing.stage.${job.stage}` as never)}
                           </span>
+                          {(() => {
+                            const device = processingDeviceLabel(job);
+                            return device ? (
+                              <span
+                                className="inline-flex items-center gap-1 text-xs text-white/50"
+                                title={t("processing.device")}
+                              >
+                                <Cpu size={11} aria-hidden="true" />
+                                {device}
+                              </span>
+                            ) : null;
+                          })()}
                           <div className="ml-auto flex items-center gap-2">
                             <button
                               type="button"
@@ -3848,9 +4257,21 @@ export function MediaProcessingPage() {
                           t={t}
                         />
 
-                        {jobLive?.completedPhases?.length ? (
+                        {!isFinished &&
+                        (jobLive?.completedPhases ?? job.phaseHistory)
+                          ?.length ? (
                           <PhaseHistory
-                            phases={jobLive.completedPhases}
+                            phases={
+                              jobLive?.completedPhases ?? job.phaseHistory ?? []
+                            }
+                            t={t}
+                          />
+                        ) : null}
+
+                        {job.driveUpload ? (
+                          <DriveUploadPanel
+                            upload={job.driveUpload}
+                            nowMs={nowMs}
                             t={t}
                           />
                         ) : null}
@@ -4021,9 +4442,30 @@ export function MediaProcessingPage() {
               t={t}
             />
 
-            {live?.jobId === detail.id &&
-            live.snapshot.completedPhases?.length ? (
-              <PhaseHistory phases={live.snapshot.completedPhases} t={t} />
+            {detail.state !== "succeeded" &&
+            (
+              (live?.jobId === detail.id
+                ? live.snapshot.completedPhases
+                : undefined) ?? detail.phaseHistory
+            )?.length ? (
+              <PhaseHistory
+                phases={
+                  (live?.jobId === detail.id
+                    ? live.snapshot.completedPhases
+                    : undefined) ??
+                  detail.phaseHistory ??
+                  []
+                }
+                t={t}
+              />
+            ) : null}
+
+            {detail.driveUpload ? (
+              <DriveUploadPanel
+                upload={detail.driveUpload}
+                nowMs={nowMs}
+                t={t}
+              />
             ) : null}
 
             <ol className="flex flex-col gap-1.5">
@@ -4072,6 +4514,10 @@ export function MediaProcessingPage() {
               <Stat
                 label={t("processing.hardware")}
                 value={detail.hardwareAdapter ?? "—"}
+              />
+              <Stat
+                label={t("processing.device")}
+                value={processingDeviceLabel(detail) ?? "—"}
               />
               <Stat
                 label={t("processing.inputSize")}

@@ -444,8 +444,11 @@ describe("generating a set into the title's own folder", () => {
     };
     const rendition = () =>
       path.join(movieTitleRoot(), "video", "2160p", "media.mp4");
+    const renditionPlaylist = () =>
+      path.join(movieTitleRoot(), ".seyirlik", "video", "2160p.m3u8");
     const packagedVideo = async () => ({
       path: rendition(),
+      playlistPath: renditionPlaylist(),
       width: 3840,
       height: 2160,
       durationSeconds: 3_600,
@@ -453,7 +456,7 @@ describe("generating a set into the title's own folder", () => {
       colorPrimaries: "bt2020",
     });
 
-    it("samples the package's best rendition, colour-corrected by its own transfer", async () => {
+    it("samples the package's best rendition through its playlist, colour-corrected by its own transfer", async () => {
       file = PACKAGED;
       streams = [];
       const set = await service({
@@ -462,7 +465,9 @@ describe("generating a set into the title's own folder", () => {
 
       expect(set?.spriteCount).toBe(LAYOUT.spriteCount);
       const args = calls[0] as string[];
-      expect(args[args.indexOf("-i") + 1]).toBe(rendition());
+      // The playlist, not the MP4: its byte ranges are the fragment index
+      // the MP4 demuxer would otherwise rebuild with a seek per fragment.
+      expect(args[args.indexOf("-i") + 1]).toBe(renditionPlaylist());
       expect(args[args.indexOf("-map") + 1]).toBe("0:v:0");
       expect(args[args.indexOf("-vf") + 1]).toContain("tonemap");
       expect(rows).toHaveLength(1);

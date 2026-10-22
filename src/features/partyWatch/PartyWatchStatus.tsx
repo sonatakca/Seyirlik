@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { move, REST, settle } from "../../lib/compositorMotion";
 import { AlertCircle, Loader2, Play } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
 import { describeWaiting } from "./partyNotices";
@@ -104,9 +105,9 @@ export function PartyWatchStatus({ party, playback }: PartyWatchStatusProps) {
         {line ? (
           <motion.div
             key={line.key}
-            initial={{ opacity: 0, y: -6, filter: "blur(6px)" }}
-            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-            exit={{ opacity: 0, y: -4, filter: "blur(4px)" }}
+            initial={{ opacity: 0, transform: move({ y: -6 }) }}
+            animate={{ opacity: 1, ...settle }}
+            exit={{ opacity: 0, transform: [REST, move({ y: -4 })] }}
             transition={transition}
             className="max-w-full"
           >

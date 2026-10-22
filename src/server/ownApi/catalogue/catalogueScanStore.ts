@@ -132,8 +132,10 @@ export function createCatalogueScanStore(
          )
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), NULL)
          ON CONFLICT (library_id, source_key) DO UPDATE SET
-           -- A locked field keeps the curated value; everything else follows disk.
-           title = CASE WHEN 'title' = ANY(items.locked_fields)
+           -- A locked field keeps the curated value; everything else follows
+           -- disk. A stand-in title ("Episode 4", from a name with no title in
+           -- it) only names a new item: it never replaces a real one.
+           title = CASE WHEN 'title' = ANY(items.locked_fields) OR $10::boolean
                         THEN items.title ELSE EXCLUDED.title END,
            sort_title = CASE WHEN 'title' = ANY(items.locked_fields)
                         THEN items.sort_title ELSE EXCLUDED.sort_title END,
@@ -156,6 +158,7 @@ export function createCatalogueScanStore(
           input.year ?? null,
           input.indexNumber ?? null,
           input.parentIndexNumber ?? null,
+          input.titleIsPlaceholder === true,
         ],
       );
       const row = result.rows[0];

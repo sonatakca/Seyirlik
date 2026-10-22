@@ -4,6 +4,7 @@ import { createPauseController } from "../../../renditions/processing/pauseContr
 import { planRetainedSidecarSubtitles } from "../../../renditions/adaptive/processor";
 import {
   hasVerifiedScratchPackage,
+  replaceableScratchPackageBytes,
   packageAdaptiveRendition,
 } from "../../../renditions/adaptive/packager";
 import { cleanupPublicationIncoming } from "../../../renditions/adaptive/publishTitle";
@@ -25,9 +26,14 @@ import { probeMediaFile } from "../../../renditions/probe";
 import { RenditionLockHeldError } from "../../../renditions/locks";
 import {
   loadRenditionRegistry,
+  RenditionRegistryUnreadableError,
   saveRenditionRegistry,
   upsertRegistrySource,
 } from "../../../renditions/registry";
+import {
+  checkpointBytes,
+  checkpointRoot,
+} from "../../../renditions/adaptive/epochs/checkpoints";
 import { ADAPTIVE_PROFILE_VERSION } from "../../../renditions/adaptive/profile";
 import {
   decideProcessing,
@@ -71,6 +77,7 @@ import {
   type StorageGuard,
 } from "./storageGuard";
 import { createDependencyGate } from "../../../renditions/processing/dependencyGate";
+import type { DriveUploadTracker } from "./driveUpload";
 import {
   clearLiveProgress,
   writeLiveProgress,
@@ -164,6 +171,13 @@ export const LIVE_PUBLISH_INTERVAL_MS = 250;
 export const LIVE_HEARTBEAT_INTERVAL_MS = 2_000;
 
 /**
+ * How long a job waits for a registry that reads back empty before giving the
+ * attempt back to the queue. Observed outages on MSI's mount lasted about a
+ * minute; the queue's own backoff covers anything longer.
+ */
+export const REGISTRY_UNREADABLE_WAIT_MS = 2 * 60_000;
+
+/**
  * Runs one processing job from analysis to publication.
  *
  * Every stage transition and every progress update goes through the store, so
@@ -174,6 +188,8 @@ export const LIVE_HEARTBEAT_INTERVAL_MS = 2_000;
 
 export interface ProcessingJobRunnerDeps {
   store: ProcessingJobStore;
+  /** What the processing page calls this machine; see `processedBy`. */
+  workerName?: string;
   paths: RenditionPaths;
   mediaRoot: string;
   ffmpegPath?: string;
@@ -185,8 +201,12 @@ export interface ProcessingJobRunnerDeps {
   probeFn?: typeof probeMediaFile;
   /** Free bytes on the output volume. Injected so tests can force a shortfall. */
   freeBytesFn?: typeof freeBytesOn;
+  /** Overrides `REGISTRY_UNREADABLE_WAIT_MS`; injected in tests. */
+  registryUnreadableWaitMs?: number;
   /** Whether a verified package is already on scratch. Injected in tests. */
   verifiedPackageFn?: typeof hasVerifiedScratchPackage;
+  /** Bytes of an unverified scratch package a rebuild removes. Injected in tests. */
+  replaceablePackageFn?: typeof replaceableScratchPackageBytes;
   /**
    * Whether the storage this work needs is currently available.
    *
@@ -214,11 +234,16 @@ export interface ProcessingJobRunnerDeps {
   /** Reads a path's volume identity. `diskutil` in production, injected in tests. */
   scratchIdentityProbe?: StorageIdentityProbe;
   /**
-   * Nominal epoch length. Five minutes in production; a deployment with very
+   * Nominal epoch length. Thirty minutes in production; a deployment with very
    * short titles or very slow storage can shorten it, at the cost of one FFmpeg
    * start and one validation pass more often.
    */
   epochTargetSeconds?: number;
+  /**
+   * Follows a published package up to Google Drive, where publication only
+   * reaches a mount's write-back cache. Absent where there is no such mount.
+   */
+  driveUploads?: DriveUploadTracker;
   /**
    * What to do when part of a source cannot be read at all.
    *
@@ -415,16 +440,20 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
     ffmpegPath = process.env.SEYIRLIK_FFMPEG_PATH ?? "ffmpeg",
     ffprobePath = process.env.SEYIRLIK_FFPROBE_PATH ?? "ffprobe",
     softwareThreads,
+    workerName,
     detectHardwareFn = detectHardware,
     packageFn = packageAdaptiveRendition,
     probeFn = probeMediaFile,
     freeBytesFn = freeBytesOn,
+    registryUnreadableWaitMs = REGISTRY_UNREADABLE_WAIT_MS,
     verifiedPackageFn = hasVerifiedScratchPackage,
+    replaceablePackageFn = replaceableScratchPackageBytes,
     storageAvailableFn,
     missingRootsFn,
     storageGuard = createPermissiveStorageGuard(),
     scratchIdentityProbe,
     epochTargetSeconds,
+    driveUploads,
     sourceDamagePolicy = sourceDamagePolicyFromEnvironment(),
     stalls = stallThresholds(),
   } = deps;
@@ -861,7 +890,35 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
     // The expensive writes land on scratch; media-root free space is checked
     // separately by the transactional publisher immediately before copying.
     const freeBytes = await freeBytesFn(workRoot);
+    // Credit disk occupancy, never the database's remembered checkpoint count.
+    // Unowned, missing, or unreadable scratch receives no credit. The packager
+    // validates and reuses epochs before encoding and applies the same budget.
+    const inheritedBytes = await verifyOwnedJobWorkspace(
+      workRoot,
+      path.join(workRoot, job.id),
+      job.id,
+    )
+      .then(async () => {
+        const checkpoints = await checkpointBytes(
+          checkpointRoot(
+            workRoot,
+            job.id,
+            ADAPTIVE_PROFILE_VERSION,
+            job.sourceFingerprint,
+          ),
+        );
+        // An assembled package awaiting validation is removed before the
+        // rebuild, so its bytes come back too.
+        const replaceable = await replaceablePackageFn({
+          workRoot,
+          workspaceId: job.id,
+          sourceFingerprint: job.sourceFingerprint,
+        }).catch(() => 0);
+        return checkpoints + replaceable;
+      })
+      .catch(() => 0);
     const decision = decideProcessing({
+      inheritedBytes,
       probe,
       container: path.extname(input.sourcePath).replace(".", ""),
       sizeBytes: input.sizeBytes,
@@ -916,6 +973,7 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
     await store.update(job.id, {
       hardwareAdapter: decision.hardwareAdapter,
       videoEncoder: decision.videoEncoder,
+      ...(workerName ? { processedBy: workerName } : {}),
       warnings: decision.warnings,
       sourceDurationSeconds: probe.durationSeconds,
       // Shown beside the protected bytes so an operator can see the headroom
@@ -1040,7 +1098,9 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
       writtenBytes?: number;
       globalProgress?: number;
       phaseFraction?: number;
+      planning?: LiveProgressSnapshot["planning"];
       audio?: LiveProgressSnapshot["audio"];
+      subtitles?: LiveProgressSnapshot["subtitles"];
       assembly?: LiveProgressSnapshot["assembly"];
       verification?: LiveProgressSnapshot["verification"];
       publish?: LiveProgressSnapshot["publish"];
@@ -1161,6 +1221,16 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
       );
       if (!completedPhases.some((entry) => entry.phase === phase)) {
         completedPhases.push({ phase, elapsedSeconds, ...summary });
+        /*
+         * Onto the row as well as into the sample. The sample is cleared when
+         * the job ends, and the history is the one thing a finished card has
+         * left to say how the build went.
+         */
+        void store
+          .update(job.id, {
+            phaseHistory: completedPhases.map((entry) => ({ ...entry })),
+          })
+          .catch(() => undefined);
       }
       phaseStartedMs = Date.now();
     };
@@ -1205,7 +1275,10 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
         ...(live.phaseFraction === undefined
           ? {}
           : { phaseFraction: live.phaseFraction }),
+        phaseStartedAtMs: phaseStartedMs,
+        ...(live.planning === undefined ? {} : { planning: live.planning }),
         ...(live.audio === undefined ? {} : { audio: live.audio }),
+        ...(live.subtitles === undefined ? {} : { subtitles: live.subtitles }),
         ...(live.assembly === undefined ? {} : { assembly: live.assembly }),
         ...(live.verification === undefined
           ? {}
@@ -1232,7 +1305,27 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
      * package in a directory nothing ever looks in.
      */
     const registryPath = path.join(paths.stateRoot, "registry.json");
-    const registry = await loadRenditionRegistry(registryPath);
+    /*
+     * MSI reads the registry through its own rclone mount, which has reported
+     * the file as empty for a minute or more after it changed. Failing on the
+     * first empty read emptied the whole queue into ENCODE_FAILED, one title
+     * every five seconds, so the read waits it out here and, past that, the
+     * failure is retryable.
+     */
+    const registry = await loadRenditionRegistry(registryPath, {
+      unreadableWaitMs: registryUnreadableWaitMs,
+      ...(input.signal ? { signal: input.signal } : {}),
+      onUnreadable: (error) => {
+        void store
+          .appendEvent({
+            processingJobId: job.id,
+            stage: "waiting",
+            level: "warning",
+            message: `${error.message} Waiting for it to read back before encoding.`,
+          })
+          .catch(() => undefined);
+      },
+    });
     const registryItem = upsertRegistrySource(registry, {
       relativePath: input.relativePath,
       size: input.sizeBytes,
@@ -1713,6 +1806,22 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
                    * the thousands of measurements that produced it.
                    */
                   switch (live.phase) {
+                    case "planning":
+                      closePhase("planning", {
+                        ...(live.planning?.epochCount === undefined
+                          ? {}
+                          : { count: live.planning.epochCount }),
+                        ...(live.planning?.rateProbe?.reused
+                          ? { reused: true }
+                          : {}),
+                      });
+                      break;
+                    case "subtitles":
+                      closePhase("subtitles", {
+                        count: live.subtitles?.completedTracks ?? 0,
+                        bytes: live.subtitles?.writtenBytes ?? 0,
+                      });
+                      break;
                     case "encoding":
                       closePhase("encoding", {
                         count: live.completedEpochs,
@@ -1745,7 +1854,9 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
                     default:
                       closePhase(live.phase, {});
                   }
+                  live.planning = undefined;
                   live.audio = undefined;
+                  live.subtitles = undefined;
                   live.assembly = undefined;
                   live.verification = undefined;
                   live.publish = undefined;
@@ -2262,6 +2373,40 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
                 return;
               }
 
+              case "planning-progress": {
+                /*
+                 * Planning has no measurable total — the rate probe's search
+                 * runs as long as its answers require — so the bar moves by
+                 * step and the panel reports the work done in each.
+                 */
+                const first = live.planning?.step !== event.progress.step;
+                live.planning = event.progress;
+                advance(
+                  "planning",
+                  event.progress.step === "timeline" ? 0 : 0.5,
+                );
+                publishLiveThrottled(first);
+                return;
+              }
+
+              case "subtitle-progress": {
+                live.subtitles = event.progress;
+                const global = advance("subtitles", event.progress.fraction);
+                // Each sample is a track starting or finishing: all of them
+                // are state changes, and there are only a handful.
+                publishLiveThrottled(true);
+                if (Date.now() - lastPersistMs >= PERSIST_INTERVAL_MS) {
+                  lastPersistMs = Date.now();
+                  void store
+                    .update(job.id, {
+                      stageProgress: event.progress.fraction,
+                      overallProgress: Math.max(lastOverall, global),
+                    })
+                    .catch(() => undefined);
+                }
+                return;
+              }
+
               case "assembly-progress": {
                 const first = live.assembly === undefined;
                 live.assembly = event.progress;
@@ -2540,6 +2685,18 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
       overallProgress: globalProgress(weights, "publishing", 1),
     });
 
+    /*
+     * The packager returned, so publication — the last phase it reports — is
+     * over. Closed here because no further stage event will close it.
+     */
+    if (live.phase === "publishing") {
+      closePhase("publishing", {
+        ...(live.publish?.completedBytes
+          ? { bytes: live.publish.completedBytes }
+          : {}),
+      });
+    }
+
     // -------------------------------------------------------- publishing
     await enterStage(job, "publishing", "Publishing the verified package.");
     await clearLiveProgress(job.id);
@@ -2595,6 +2752,23 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
     registryItem.adaptiveProfileVersion = ADAPTIVE_PROFILE_VERSION;
     delete registryItem.adaptiveLastError;
     await saveRenditionRegistry(registryPath, registry);
+
+    /*
+     * Published here means written into the mount's cache. The upload to
+     * Drive carries on in the background and is followed from there; the job
+     * does not wait for it, so the encoder is already free for the next title.
+     */
+    if (driveUploads && result.status !== "already-valid") {
+      void titleRootForInput(input)
+        .then((directory) =>
+          driveUploads.track({
+            processingJobId: job.id,
+            directory,
+            totalBytes: result.jobOutputBytes ?? result.storageBytes ?? 0,
+          }),
+        )
+        .catch(() => undefined);
+    }
 
     /*
      * Publication is now reflected in both durable records. Until this point
@@ -2666,8 +2840,9 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
         /*
          * Nothing here is allowed to become a queue-level retry on its own.
          *
-         * The one condition that genuinely deserves another pass is another
-         * attempt holding the rendition lock, and it says so by its type.
+         * The conditions that genuinely deserve another pass say so by their
+         * type: another attempt holding the rendition lock, and a registry
+         * that read back empty through the mount before any work began.
          * Everything else — a dropped database connection, a bug, an
          * unhandled rejection from a write — leaves a job row an operator can
          * see and retry deliberately. Requeuing automatically is what sent a
@@ -2678,7 +2853,9 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
           error instanceof Error
             ? error.message
             : "Processing stopped unexpectedly.";
-        const retryable = error instanceof RenditionLockHeldError;
+        const retryable =
+          error instanceof RenditionLockHeldError ||
+          error instanceof RenditionRegistryUnreadableError;
         await store
           .update(input.processingJobId, {
             state: "failed",

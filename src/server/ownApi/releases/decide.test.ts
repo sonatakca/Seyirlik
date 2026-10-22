@@ -562,4 +562,38 @@ describe("deciding whether a release names the thing that was asked for", () => 
     );
     expect(result.candidates[0]!.rejection).toBeUndefined();
   });
+
+  it.each([
+    ["Joker: Folie à Deux", "Joker.Folie.a.Deux.2024.1080p.HMAX.WEB-DL-FUZEER"],
+    ["Ocean's Eleven", "Oceans.Eleven.2001.1080p.BluRay.x264-Q"],
+    ["Amélie", "Amelie.2001.1080p.BluRay.x264-Q"],
+  ])("reads marks and apostrophes away: %s", (title, name) => {
+    const result = selectRelease(
+      { kind: "movie", title },
+      [release(name)],
+      open,
+    );
+    expect(result.candidates[0]!.rejection).toBeUndefined();
+  });
+
+  it("recognises a release by any name the title goes by", () => {
+    const target: MediaTarget = {
+      kind: "movie",
+      title: "Kara Şövalye",
+      aliases: ["The Dark Knight"],
+      year: 2008,
+    };
+    const result = selectRelease(
+      target,
+      [
+        release("The.Dark.Knight.2008.1080p.BluRay.x264-Q"),
+        release("The.Dark.Knight.Rises.2012.1080p.BluRay.x264-Q"),
+      ],
+      open,
+    );
+    expect(result.candidates.map((c) => c.rejection)).toEqual([
+      undefined,
+      "title-mismatch",
+    ]);
+  });
 });

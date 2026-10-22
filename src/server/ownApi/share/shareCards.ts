@@ -1,5 +1,12 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  rename,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import { isPathInsideRoot } from "../../pathSecurity";
@@ -123,8 +130,8 @@ export function createShareCards({
   ): Promise<ShareCardImage> {
     const target = imageStorage.resolve(storageKey(version));
     const card = await renderShareCard({
-      cover: await readFile(imageStorage.resolve(item.cover!.storageKey)),
-      logo: await readFile(imageStorage.resolve(item.logo!.storageKey)),
+      cover: await imageStorage.readSource(item.cover!),
+      logo: await imageStorage.readSource(item.logo!),
       layout: item.logoLayout,
     });
     await mkdir(path.dirname(target), { recursive: true });

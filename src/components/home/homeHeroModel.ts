@@ -5,7 +5,7 @@
  * The hero is a stage with its queue in view. Every featured title is drawn as
  * one composition — backdrop, scrim, logo — at the stage's full size. On stage
  * it sits at scale 1; waiting in the queue it is the same composition scaled
- * down into a slot whose aspect ratio is the stage's own. That is what lets a
+ * down into a slot, with a shorter crop on tablets. That is what lets a
  * title travel between the two as a single transform: the miniature is not a
  * thumbnail of the title, it is the title, smaller.
  */
@@ -29,7 +29,45 @@ export interface SlotRect {
 }
 
 /** How many upcoming titles wait in view. */
-export const QUEUE_LENGTH = 3;
+export const QUEUE_LENGTH = 2;
+
+/** Two desktop previews, one on a landscape tablet; tall frames keep their stack. */
+export function queueCount(stage: StageSize): number {
+  return heroForm(stage) === "tall" ? 3 : stage.width >= 1200 ? 2 : 1;
+}
+
+/** A wide stage's side margin: the copy's on the left, the queue's on the right. */
+function wideInset(stage: StageSize): number {
+  return stage.width < 1200 ? 40 : 56;
+}
+
+/**
+ * The dock and tablet preview share their vertical rhythm. With a queue the
+ * dock stands centred between the copy and the queue; a title's own page has
+ * no queue, so its dock takes the queue's place on the right.
+ */
+export function heroDock(
+  stage: StageSize,
+  { withQueue = true }: { withQueue?: boolean } = {},
+) {
+  const compact = heroForm(stage) === "tall" || stage.width < 1200;
+  const width = Math.min(compact ? 264 : 300, stage.width - 32);
+  const isAside = !withQueue && heroForm(stage) === "wide";
+  return {
+    width,
+    left: isAside
+      ? stage.width - wideInset(stage) - width
+      : (stage.width - width) / 2,
+    height: compact ? 102 : 113,
+    bottom:
+      heroForm(stage) === "tall"
+        ? Math.min(36, Math.max(18, stage.height * 0.026))
+        : compact
+          ? 16
+          : 26,
+    compact,
+  };
+}
 
 /**
  * Timing, in one place. Every trip of one kind takes the same time wherever it
@@ -42,6 +80,7 @@ export const HERO_MOTION = {
    * the longest trip the peak is what sets how short the trip can be.
    */
   travelS: 0.5,
+  overviewS: 0.24,
   travelEase: [0.37, 0, 0.63, 1] as [number, number, number, number],
   /**
    * The queue sliding along: every miniature in it, the ones closing up and
@@ -125,9 +164,8 @@ export type HeroForm = "wide" | "tall";
 export type HeroFit = "screen" | "mobile";
 
 export const HERO_HEIGHT_CLASS: Record<HeroFit, string> = {
-  screen: "h-[100svh] min-h-[38rem]",
-  mobile:
-    "h-[calc(100svh-5rem-env(safe-area-inset-bottom))] min-h-[32rem] landscape:h-[100svh] landscape:min-h-[20rem]",
+  screen: "h-[calc(100svh-1.5rem)] min-h-[36rem]",
+  mobile: "aspect-video min-h-[20rem]",
 };
 
 export function heroForm(stage: StageSize): HeroForm {
@@ -172,7 +210,10 @@ function tallFrame(stage: StageSize): TallFrame {
  * Where the queue's slots sit, left to right, in stage coordinates. Their
  * aspect ratio is the stage's, so a slot holds a whole composition.
  */
-export function queueSlots(stage: StageSize, count = QUEUE_LENGTH): SlotRect[] {
+export function queueSlots(
+  stage: StageSize,
+  count = queueCount(stage),
+): SlotRect[] {
   if (heroForm(stage) === "tall") {
     const frame = tallFrame(stage);
     const { slotWidth: width, slotGap: gap } = frame;
@@ -187,13 +228,15 @@ export function queueSlots(stage: StageSize, count = QUEUE_LENGTH): SlotRect[] {
       height: frame.slotHeight,
     }));
   }
-  // Below desktop widths (a phone or small tablet on its side) the slots
-  // may shrink further, or they would crowd the copy off the stage.
-  const width = clamp(stage.width * 0.115, stage.width < 1024 ? 96 : 148, 236);
-  const height = (width * stage.height) / stage.width;
-  const gap = clamp(stage.width * 0.009, 10, 18);
-  const right = clamp(stage.width * 0.035, 24, 72);
-  const bottom = clamp(stage.height * 0.075, 28, 76);
+  const compact = stage.width < 1200;
+  const dock = heroDock(stage);
+  const width = compact
+    ? Math.min(252, stage.width * 0.24)
+    : clamp(stage.width * (192 / 1408), 164, 256);
+  const height = compact ? dock.height : (width * 9) / 16;
+  const gap = 12;
+  const right = wideInset(stage);
+  const bottom = compact ? dock.bottom : 24;
   const y = stage.height - bottom - height;
   return Array.from({ length: count }, (_, index) => ({
     x:
@@ -373,9 +416,9 @@ export interface TitleScale {
  * under it, and steps further back while a trailer plays.
  */
 export const TITLE_SCALE = {
-  rest: 0.6,
-  open: 1,
-  trailer: 0.46,
+  rest: 1,
+  open: 1.2,
+  trailer: 0.77,
 } as const;
 
 /**
@@ -398,7 +441,7 @@ export const COPY_ROWS = {
   overviewLineHeight: 1.55,
   /** Above the actions, under whatever sits there. */
   actionsGapPx: 20,
-  actionsPx: 48,
+  actionsPx: 102,
 } as const;
 
 /**
@@ -411,7 +454,9 @@ export const COPY_ROWS = {
 function tallLayout(stage: StageSize, withQueue: boolean): HeroLayout {
   const frame = tallFrame(stage);
   const width = stage.width - frame.inset * 2;
-  const queueWidth = frame.slotWidth * QUEUE_LENGTH + frame.slotGap * 2;
+  const queueWidth =
+    frame.slotWidth * queueCount(stage) +
+    frame.slotGap * (queueCount(stage) - 1);
   const columnGap = clamp(stage.width * 0.03, 14, 28);
   const column = withQueue ? width - queueWidth - columnGap : width;
   const actionsGap = TALL_QUEUE_FOOT_PX;
@@ -448,31 +493,31 @@ export function heroLayout(
   { withQueue = true }: { withQueue?: boolean } = {},
 ): HeroLayout {
   if (heroForm(stage) === "tall") return tallLayout(stage, withQueue);
-  const slots = queueSlots(stage);
-  const bottom = stage.height - (slots[0]!.y + slots[0]!.height);
-  const left = clamp(stage.width * 0.045, 40, 88);
-  const overviewFontPx = stage.width >= 1280 ? 16 : 14;
+  const compact = stage.width < 1200;
+  const bottom = compact ? 20 : 30;
+  const left = wideInset(stage);
+  const overviewFontPx = compact ? 14 : 15.5;
   const overviewHeight = Math.ceil(
     overviewFontPx * COPY_ROWS.overviewLineHeight * COPY_ROWS.overviewLines,
   );
-  const height =
-    COPY_ROWS.factsPx + COPY_ROWS.actionsGapPx + COPY_ROWS.actionsPx;
-  const width = Math.min(stage.width * 0.4, 600, slots[0]!.x - left - 32);
-  const titleGap = clamp(stage.height * 0.028, 18, 32);
+  const dock = heroDock(stage, { withQueue });
+  const width = Math.max(
+    160,
+    Math.min(stage.width * 0.34, 600, dock.left - left - 20),
+  );
   return {
     form: "wide",
-    copy: { left, bottom, width, height },
+    copy: { left, bottom, width, height: COPY_ROWS.factsPx },
     title: {
       left,
-      bottom: bottom + height + titleGap,
-      width: Math.min(stage.width * 0.34, 620),
-      height: clamp(stage.height * 0.19, 110, 220),
+      bottom: bottom + COPY_ROWS.factsPx + 16,
+      width: Math.min(compact ? 260 : 300, stage.width * 0.3),
+      height: 150,
     },
     factsWidth: width,
     actionsGap: COPY_ROWS.actionsGapPx,
     actions: "full",
     titleScale: TITLE_SCALE,
-    // The phone's header is shorter than the desktop's.
     menuClearance: stage.width < 1024 ? 92 : LOGO_MENU_CLEARANCE_PX,
     overviewFontPx,
     overviewHeight,
@@ -529,6 +574,16 @@ export function stageness(scale: number, slotScale: number): number {
   return Math.min(1, Math.max(0, (scale - slotScale) / (end - slotScale)));
 }
 
+/** The frame's local radius; multiply by scale to get its visible corner. */
+export function heroFrameRadius(scale: number, slotScale: number): number {
+  const safeScale = Math.max(0.001, scale);
+  const onStage = Math.min(
+    1,
+    Math.max(0, (safeScale - slotScale) / (1 - slotScale)),
+  );
+  return (12 + 4 * onStage) / safeScale;
+}
+
 /** Quartic ease-in (alpha = t⁴) from clear to the page's background. */
 export const HANDOVER_GRADIENT =
   "linear-gradient(180deg, rgba(5,6,7,0) 0%, rgba(5,6,7,0.008) 30%, rgba(5,6,7,0.041) 45%, rgba(5,6,7,0.13) 60%, rgba(5,6,7,0.24) 70%, rgba(5,6,7,0.41) 80%, rgba(5,6,7,0.573) 87%, rgba(5,6,7,0.748) 93%, #050607 100%)";
@@ -573,3 +628,6 @@ export function tallFootGradient(
  * height and a margin under it.
  */
 export const LOGO_MENU_CLEARANCE_PX = 112;
+
+/** A title page's back button: under the menu, on the copy's left edge. */
+export const TITLE_BACK_TOP_PX = 88;

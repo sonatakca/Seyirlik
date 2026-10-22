@@ -44,6 +44,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Each phase reports its own time, so a slow deployment says where it was slow.
+$phaseClock = [Diagnostics.Stopwatch]::StartNew()
+function Write-Phase([string] $Name) {
+  Write-Output ("PHASE={0}:{1:0.0}s" -f $Name, $phaseClock.Elapsed.TotalSeconds)
+  $phaseClock.Restart()
+}
+
 $releases = Join-Path $AppRoot 'releases'
 $target = Join-Path $releases $Version
 $current = Join-Path $AppRoot 'current'
@@ -57,12 +64,37 @@ if (-not (Test-Path -LiteralPath (Join-Path $target 'RELEASE.json'))) {
 # session. Checked again here, before anything else: step 4 runs this release's
 # own migrator, and a damaged migration file must not get as far as the
 # database, let alone the junction.
-. (Join-Path $PSScriptRoot 'release-integrity.ps1')
-$integrity = Find-ZeroFilledFiles $target
-if ($integrity.Damaged.Count -gt 0) {
-  throw ("release $Version has $($integrity.Damaged.Count) zero-filled file(s); refusing to activate it, nothing has been switched:`n" + ($integrity.Damaged -join "`n"))
+<#
+Reading every file again is only needed if the release could have changed
+since staging checked it, and the only thing that zero-fills a file is a crash
+before the write reached the disk. Staging flushes first, checks second, and
+records the boot it did both in. While this is still that boot there has been
+no crash, so the record stands in for the read, which on this host is about
+seven minutes of first opens. Any doubt (no record, an unreadable one, a
+different boot) reads every file, exactly as before.
+#>
+$staged = $null
+$integrityRecord = Join-Path $target 'INTEGRITY.json'
+if (Test-Path -LiteralPath $integrityRecord) {
+  try {
+    $record = Get-Content -LiteralPath $integrityRecord -Raw | ConvertFrom-Json
+    $bootTicks = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().Ticks
+    if ([long]$record.bootTicks -eq $bootTicks -and [int]$record.checkedFiles -gt 0) { $staged = $record }
+  }
+  catch { $staged = $null }
 }
-Write-Output ("VERIFIED_FILES=" + $integrity.Checked)
+if ($staged) {
+  Write-Output ("VERIFIED_FILES={0} (checked at staging, {1}, in this boot)" -f $staged.checkedFiles, $staged.verifiedAt)
+}
+else {
+  . (Join-Path $PSScriptRoot 'release-integrity.ps1')
+  $integrity = Find-ZeroFilledFiles $target
+  if ($integrity.Damaged.Count -gt 0) {
+    throw ("release $Version has $($integrity.Damaged.Count) zero-filled file(s); refusing to activate it, nothing has been switched:`n" + ($integrity.Damaged -join "`n"))
+  }
+  Write-Output ("VERIFIED_FILES=" + $integrity.Checked)
+}
+Write-Phase 'verify'
 
 function Get-SvcState([string] $n) {
   $s = Get-CimInstance Win32_Service -Filter "Name='$n'" -ErrorAction SilentlyContinue
@@ -137,6 +169,7 @@ if ($LASTEXITCODE -ne 0) { throw 'pg_dump failed; refusing to continue without a
 Copy-Item (Join-Path $ConfigDir 'settings.env') $backup
 Copy-Item (Join-Path $SecretsDir 'secrets.env') $backup
 Write-Output ("BACKUP=" + $backup)
+Write-Phase 'backup'
 
 $settingsArg = '--env-file=' + (Join-Path $ConfigDir 'settings.env')
 $secretsArg = '--env-file=' + (Join-Path $SecretsDir 'secrets.env')
@@ -159,6 +192,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'schema did not verify as current; nothing has been switched' }
 }
 finally { Pop-Location }
+Write-Phase 'migrate'
 
 # --- 6. switch -------------------------------------------------------------
 # Services stop worker-first so nothing is mid-job while the server goes, and
@@ -223,6 +257,7 @@ if ($failure) {
   exit 1
 }
 
+Write-Phase 'switch+health'
 Write-Output "ACTIVE=$Version"
 Write-Output ("CURRENT=" + (Get-CurrentTarget))
 Write-Output 'ACTIVATED'
@@ -231,9 +266,24 @@ Write-Output 'ACTIVATED'
 # After the activation has succeeded, never before: until then the previous
 # release is the rollback. A failure here is reported and nothing more — the
 # new release is already serving, and leftover space is not an outage.
+#
+# In the background: it took 20 seconds of every deployment, and nothing waits
+# on it. A SYSTEM scheduled task rather than a child process, because a process
+# started from an SSH session dies when the session closes. The next deployment
+# waits for a prune still running (ship-release.ps1), so the two never overlap.
 try {
-  & (Join-Path $PSScriptRoot 'prune-releases.ps1') -AppRoot $AppRoot
+  $prune = Join-Path $PSScriptRoot 'prune-releases.ps1'
+  $log = Join-Path (Split-Path -Parent $AppRoot) 'logs\prune-releases.log'
+  $arguments = '/c powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -AppRoot "{1}" > "{2}" 2>&1' -f $prune, $AppRoot, $log
+  $task = 'SeyirlikPruneReleases'
+  Register-ScheduledTask -TaskName $task -Force `
+    -Action (New-ScheduledTaskAction -Execute 'cmd.exe' -Argument $arguments) `
+    -Principal (New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest) `
+    -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30)) | Out-Null
+  Start-ScheduledTask -TaskName $task
+  Write-Output "PRUNE=running in the background; see $log"
 }
 catch {
   Write-Output ("PRUNE_FAILED=" + $_.Exception.Message)
 }
+Write-Phase 'prune'

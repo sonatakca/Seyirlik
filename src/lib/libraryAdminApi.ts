@@ -3,7 +3,7 @@
  * nothing to play yet. Browse pages never see a title without a source; this
  * is where those are managed.
  */
-import { ownApiClient } from "../api/ownApi/client";
+import { OwnApiClientError, ownApiClient } from "../api/ownApi/client";
 
 export type LibraryTitleKind = "movie" | "series" | "book";
 
@@ -20,6 +20,8 @@ export interface HoldingFacts {
   pendingSubtitles: string[];
   files: number;
   trickplayFiles: number;
+  /** Playable titles whose trickplay is queued or being generated. */
+  pendingTrickplay: number;
 }
 
 export interface LibraryTitle extends HoldingFacts {
@@ -71,6 +73,12 @@ export interface TitleRemovalReport {
   itemId: string;
   title: string;
   folder: string | null;
+  /**
+   * `removing` until the catalogue lets go, `deleting` while the files go,
+   * `done`; `failed` stopped before anything was deleted.
+   */
+  state: "removing" | "deleting" | "done" | "failed";
+  failure?: "not-found" | "confirmation" | "busy" | "unsafe" | "error";
   filesRemoved: number;
   downloadsCancelled: number;
   leftovers: string[];
@@ -87,9 +95,13 @@ export async function listLibraryTitles(
   return items;
 }
 
-export function getLibraryTitle(itemId: string): Promise<LibraryTitleDetail> {
+export function getLibraryTitle(
+  itemId: string,
+  { background = false } = {},
+): Promise<LibraryTitleDetail> {
   return ownApiClient.request<LibraryTitleDetail>(
     `/library/titles/${encodeURIComponent(itemId)}`,
+    background ? { background } : undefined,
   );
 }
 
@@ -102,6 +114,21 @@ export function removeLibraryTitle(
     `/library/titles/${encodeURIComponent(itemId)}/remove`,
     { method: "POST", body: { confirmTitle } },
   );
+}
+
+/** A removal's file deletion; null once the server no longer knows of it. */
+export async function getTitleRemoval(
+  itemId: string,
+): Promise<TitleRemovalReport | null> {
+  try {
+    return await ownApiClient.request<TitleRemovalReport>(
+      `/library/removals/${encodeURIComponent(itemId)}`,
+      { background: true },
+    );
+  } catch (error) {
+    if (error instanceof OwnApiClientError && error.status === 404) return null;
+    throw error;
+  }
 }
 
 /** Looks for subtitles for a film, or for every episode file of a show or season. */
@@ -333,6 +360,75 @@ export function toneOf(
   return wanted ? "wanted" : "absent";
 }
 
+/**
+ * How far an episode has come, for the season strip.
+ *
+ * The file walks one way: absent, downloading, held, processed. Turkish
+ * subtitles and trickplay only exist once there is a file, and arrive in
+ * either order, so they are reported apart rather than as further steps.
+ */
+export interface EpisodeStage {
+  /** The file's own step; `tone` while there is no file to speak of. */
+  file:
+    | { tone: HoldingTone }
+    | { held: "unprocessed" | "processing" | "processed" };
+  turkish: "found" | "searching" | "none";
+  trickplay: "found" | "queued" | "none";
+  /** Processed, with Turkish subtitles and trickplay: nothing left to do. */
+  complete: boolean;
+}
+
+export function episodeStage(
+  episode: Pick<
+    HoldingFacts,
+    | "hasMedia"
+    | "downloading"
+    | "importing"
+    | "processing"
+    | "status"
+    | "subtitleLanguages"
+    | "pendingSubtitles"
+    | "trickplayFiles"
+    | "pendingTrickplay"
+  >,
+  wanted: boolean,
+): EpisodeStage {
+  if (!episode.hasMedia) {
+    return {
+      file: { tone: toneOf(episode, wanted) },
+      turkish: "none",
+      trickplay: "none",
+      complete: false,
+    };
+  }
+  const held =
+    episode.status === "ready"
+      ? "processed"
+      : episode.processing > 0 ||
+          episode.status === "processing" ||
+          episode.status === "paused"
+        ? "processing"
+        : "unprocessed";
+  const turkish = episode.subtitleLanguages.includes("tur")
+    ? "found"
+    : episode.pendingSubtitles.includes("tur")
+      ? "searching"
+      : "none";
+  const trickplay =
+    episode.trickplayFiles > 0
+      ? "found"
+      : episode.pendingTrickplay > 0
+        ? "queued"
+        : "none";
+  return {
+    file: { held },
+    turkish,
+    trickplay,
+    complete:
+      held === "processed" && turkish === "found" && trickplay === "found",
+  };
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes <= 0) return "—";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -342,4 +438,62 @@ export function formatBytes(bytes: number): string {
   );
   const value = bytes / 1024 ** power;
   return `${value >= 100 || power === 0 ? Math.round(value) : value.toFixed(1)} ${units[power]}`;
+}
+
+/**
+ * An episode the season strip draws red: aired, not held, and neither
+ * downloading nor importing. The server plans its search by the same rule.
+ */
+export function isMissingEpisode(
+  episode: Pick<
+    LibraryEpisode,
+    | "seasonNumber"
+    | "episodeNumber"
+    | "hasMedia"
+    | "downloading"
+    | "importing"
+    | "status"
+  >,
+): boolean {
+  return (
+    episode.seasonNumber > 0 &&
+    episode.episodeNumber > 0 &&
+    !episode.hasMedia &&
+    episode.downloading === 0 &&
+    episode.importing === 0 &&
+    episode.status !== "unaired"
+  );
+}
+
+export interface MissingSearch {
+  /** Null when nothing was missing, so nothing was queued. */
+  taskId: string | null;
+  episodes: number;
+}
+
+export interface MissingSearchState {
+  status: string;
+  message: string | null;
+  result: {
+    /** A null episode is a season pack. */
+    started: Array<{ season: number; episode: number | null; release: string }>;
+    nothing: Array<{ season: number; episode: number }>;
+    /** Not searched: already downloading or importing. A null episode is a season. */
+    covered?: Array<{ season: number; episode: number | null }>;
+  } | null;
+}
+
+/** Searches for a series' missing episodes, or one season's, and starts the best of each. */
+export function searchMissingEpisodes(itemId: string, season?: number) {
+  return ownApiClient.request<MissingSearch>("/acquisitions/missing", {
+    method: "POST",
+    body: { itemId, ...(season === undefined ? {} : { season }) },
+  });
+}
+
+export function getMissingSearch(taskId: string) {
+  return ownApiClient.request<MissingSearchState>(
+    `/acquisitions/missing/${encodeURIComponent(taskId)}`,
+    { background: true },
+  );
 }

@@ -9,6 +9,34 @@ a runtime dependency and must not become one.** Nothing here calls it, reads its
 database, or requires it to be running. It is a thing that can be switched off
 once this subsystem has been exercised against real media.
 
+## Source sidecars and packaged subtitles
+
+An installed or hand-added SRT stays beside the source video. Adaptive processing
+converts retained subtitles to `subtitle/turkish.vtt` (with numbered names for
+additional tracks), writes the playlists under `.seyirlik/subtitle/`, and adds
+them to the master playlist. The source SRT is preserved.
+These paths are relative to the active package root. Incremental repairs can
+publish under `.seyirlik-generations/`; `.seyirlik/current.json` selects the
+active generation, so its subtitles need not appear in the original root folder.
+
+Discovery accepts language tags separated by dots, hyphens, underscores or
+spaces, including `LAMA-tr-synced.srt` and `.tur.srt`. Release words such as
+`HDR` or `The` are not languages. English and Turkish are retained by default.
+
+Adding a subtitle after a package was published does not itself run adaptive
+processing. Process the title again from the admin page, or run the following
+from the server checkout with its configured media root:
+
+```powershell
+npm run media:renditions:process -- --profile adaptive --source "Movies/The Wolf of Wall Street (2013)/The.Wolf.of.Wall.Street.2013.2160p.UHD.BluRay.x265.10bit.HDR.DDP5.1-LAMA.mkv"
+```
+
+Analysis detects new or changed sidecars even when the video ladder is complete.
+Processing refreshes subtitles while reusing intact video and audio. Sidecar
+reuse checks a fingerprint of both filename and bytes, so inserting an earlier
+filename cannot reuse another subtitle's synthetic stream index. Packages made
+before these fingerprints were recorded refresh their retained sidecars once.
+
 ## Switched off unless configured
 
 There is one environment variable, `SEYIRLIK_SUBTITLES`, holding JSON:
@@ -74,10 +102,82 @@ The short version:
 - Byte-identical content is a `duplicate`: it satisfies the want, it is not a
   write, and it does not confer ownership.
 
+### A title whose source has been removed
+
+A processed title can lose its source ("Remove source", or the Drive
+auto-delete once its package is verified) and keep playing from its package.
+Its catalogue row stays active on purpose, and a sidecar beside where the source
+was is served on its own. So search, install, upload and retiming all work for
+it. The writer needs the **folder** the source lived in, not the source file:
+
+- Every folder on the way must exist, and none may be a link. At the source's
+  own name there may be nothing, or a regular file. Anything else is refused.
+  Containment and the same-directory rule for sidecars are unchanged.
+- The sidecar is named after the catalogue path, so it lands exactly where it
+  would have with the source present.
+- Sidecars beside an absent source are matched **by name**. Once a season's
+  sources are gone its `src/` folder holds sidecars and no video. Counting
+  videos would treat that as one film's folder and give each episode every
+  episode's translation, and would call the want already satisfied. The cost:
+  a hand-added movie subtitle named after a different release is not counted
+  for a removed source, so a search can add a second Turkish track beside it.
+- The install records the sidecar in `media_streams` at once, through the same
+  `attachExternalSubtitle` the upload uses (event `catalogue-attached`). This is
+  required, not a convenience. The scan reads a rendition-backed title from its
+  package and never rewrites its sidecar rows, so without this the subtitle is
+  never listed.
+- Retiming works against every kind of reference. An audio track is read from
+  the package's rendition of that track, and a subtitle that was inside the
+  video from the package's WebVTT copy (`TitleReferences`). Only a track the
+  package never kept, such as an image subtitle, is refused as
+  `source-removed`. The package is preferred even while the source exists:
+  it is the same print, and much less to read over the Drive mount.
+
+Remove Source therefore does not wait for open subtitle wants: removing the
+source does not stop them being answered.
+
 A known consequence: **a subtitle that arrived with a download cannot currently
 be upgraded by this subsystem**, because the importer records no digest for it.
 Closing that is a change to the import pipeline, and is recorded there rather
 than worked around here.
+
+### Choosing the candidate that fits
+
+The scorer ranks candidates by what providers say: identity, frame rate,
+release group. That metadata often cannot decide. TürkçeAltyazı carries The
+Sopranos S01 as one translation timed four ways, and nothing on the site tells
+which timing matches this file. So a search downloads up to five valid
+candidates (`fitCandidates`). It measures each against the title's own audio
+with the same `alignSpeech` that retiming uses, and installs the best fit:
+
+- The references are the package's: its default audio rendition, read through
+  its playlist (about twenty seconds over the Drive mount), and its WebVTT
+  copies of any text subtitles that were inside the video. A packaged sidecar
+  is not a reference, because nothing says it was timed for this video. A
+  title not packaged yet uses the source's default audio track instead.
+  `confidence` compares across audio and subtitle references, so the best of
+  them decides. They are read once per search; each further candidate is
+  arithmetic.
+- A fit at or above `MINIMUM_SYNC_CONFIDENCE` that is measurably off (offset
+  over 0.15 s, or any rate change) is moved onto the audio before it is written.
+  The installation is then recorded `assumed-in-sync`.
+- Fits within 0.01 confidence of each other are a tie. The same translation
+  timed for several releases scores the same; the one needing the smallest
+  correction wins, so a file already on time is not rewritten.
+- Byte-identical downloads are measured once. The checkpoint names the
+  candidate that was installed, so a resumed attempt downloads that one.
+- With no audio to read, or once reading it fails, the first valid download
+  wins, ranked by metadata alone. The audio never becomes the reason a search
+  fails.
+- The `installed` event carries `fitMeasured`, `fitConfidence`, `fitRate`,
+  `fitOffsetSeconds` and `fitRetimed`.
+
+On S01 measured by hand, the pick this makes is pack 375975 for E01–E04, and
+pack 320688 for E06. UNIT3D's E06 drifts to a second late by the end.
+
+A short HTML answer to a download (TürkçeAltyazı's `İlginç hatalar oluştu!`)
+is that one file failing, not the session expiring. It no longer parks the
+attempt in `needs-authentication` while other candidates could answer it.
 
 ## The states an attempt can be in
 

@@ -17,7 +17,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 const SITE_ORIGIN = "https://www.seyirlik.org";
 const DEFAULT_API_ORIGIN = "https://playback.seyirlik.org";
-const SITE_TITLE = "Seyirlik | Kişisel Film ve Dizi İzleme Deneyimi";
+const SITE_TITLE = "Seyirlik";
 const SITE_DESCRIPTION =
   "Seyirlik, film ve dizileri modern, sinematik ve kişisel bir arayüzle keşfetmek ve izlemek için geliştirilen bir medya deneyimi uygulamasıdır.";
 const SITE_IMAGE = {

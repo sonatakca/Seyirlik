@@ -259,6 +259,70 @@ export interface VerificationPhaseProgress {
   ok?: boolean;
 }
 
+/**
+ * The planning stage, step by step.
+ *
+ * Usually seconds, but not always: the rate probe encodes sample windows of
+ * the title at several rates and scores each rung against the source with
+ * VMAF, which is minutes of real work that used to show as nothing at all.
+ * Its search length depends on what it finds, so it is reported as work done
+ * (encodes, measurements) rather than as a fraction of an unknown total.
+ */
+export interface PlanningPhaseProgress {
+  step: "timeline" | "rates";
+  /** Epoch boundaries whose frame times are being read. */
+  boundaryCount: number;
+  /** Epochs in the plan, once it is made. */
+  epochCount?: number;
+  rateProbe?: {
+    /** Sample encodes finished, each one a pass over every window. */
+    encodes: number;
+    /** VMAF measurements finished, one per rung, rate and window. */
+    measurements: number;
+    /** The rung being scored, when one is. */
+    qualityHeight?: number;
+    /** True when a decision from an earlier attempt was reused. */
+    reused?: boolean;
+  };
+}
+
+/** One subtitle track, as the page names it. */
+export interface SubtitleTrackProgress {
+  /** Rendition id, e.g. `subtitle-3`. Never a path. */
+  id: string;
+  /** Inside the source, or a file beside it. */
+  origin: "embedded" | "sidecar";
+  language?: string;
+  title?: string;
+  isForced?: boolean;
+  /**
+   * `skipped` is a sidecar that could not be converted: the title is published
+   * without it, and the page says so rather than the track quietly vanishing.
+   */
+  state: "waiting" | "running" | "complete" | "skipped";
+  /** Size of the WebVTT written, once it is. */
+  bytes?: number;
+}
+
+/**
+ * The subtitle stage.
+ *
+ * One FFmpeg run per track, one after another, and an embedded track has to
+ * read the whole source to find its cues, so a title with eight embedded
+ * subtitle tracks reads its source eight times. Counted in tracks because that
+ * is the unit of work: each run reports nothing until it has finished.
+ */
+export interface SubtitlePhaseProgress {
+  tracks: SubtitleTrackProgress[];
+  completedTracks: number;
+  /** Finished (complete or skipped) over all tracks. */
+  fraction: number;
+  currentId?: string;
+  /** When the running track started, so the page can say how long it has run. */
+  currentStartedAtMs?: number;
+  writtenBytes: number;
+}
+
 export type PublishStepId =
   | "video"
   | "audio"

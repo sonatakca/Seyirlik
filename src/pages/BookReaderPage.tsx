@@ -79,6 +79,7 @@ import {
   guardCfiLocation,
   settleFailedDisplays,
 } from "./reader/epubDisplayGuard";
+import { WindowedViewManager } from "./reader/epubWindow";
 import {
   formatDuration,
   formatPercent,
@@ -100,12 +101,10 @@ import {
   highlightName,
   isHighlight,
   minutesForLocations,
-  readBookmarks,
   isReaderPlace,
   readReaderProgress,
   readStoredReaderSettings,
   themePalettes,
-  writeBookmarks,
   writeJsonStorage,
   writeReaderProgress,
   type EpubContentView,
@@ -115,13 +114,19 @@ import {
   type ReaderPlace,
   type ReaderSettings,
 } from "./reader/readerModel";
+import { READER_SYNC_MS, useReaderMarks } from "./reader/readerMarks";
+import { randomUuid } from "../lib/randomId";
 import {
+  claimBookSession,
   getBookPosition,
+  readerDevice,
   saveBookPosition,
+  type ReadingSession,
   type BookPosition,
 } from "../lib/bookPositionApi";
-import type { BookSearchHit } from "../lib/bookSearchApi";
+import type { BookSearchFound, BookSearchHit } from "../lib/bookSearchApi";
 import { epubBlockText } from "../lib/epubBlocks";
+import { findOnPage, markFoundWords } from "./reader/searchMarks";
 import { shimmerPassage } from "./reader/searchShimmer";
 import {
   ReadingLight,
@@ -357,10 +362,28 @@ interface Target {
   readAt: number;
 }
 
+/** Device names are the makers' own, in every language. */
+const READER_DEVICE_NAMES: Record<
+  NonNullable<ReadingSession["device"]>,
+  string
+> = {
+  iphone: "iPhone",
+  ipad: "iPad",
+  android: "Android",
+  mac: "Mac",
+  windows: "Windows",
+  linux: "Linux",
+};
+
 /** A place saved this many ms after the reader stops moving goes to the server. */
 const POSITION_SEND_DELAY_MS = 1500;
 /** How long opening a book waits for the place saved on other devices. */
 const POSITION_FETCH_LIMIT_MS = 2000;
+/**
+ * Another device's place is taken only once the reader has left the page
+ * alone this long: a book never moves under someone who is scrolling.
+ */
+const CATCH_UP_IDLE_MS = 5000;
 
 /** Two saves of the same place have the same key, so a re-save is not a move. */
 function positionKey({
@@ -556,14 +579,26 @@ export function BookReaderPage() {
   const [bookMeta, setBookMeta] = useState({ author: "", language: "" });
   const [reading, setReading] = useState<ReadingState | null>(null);
   const [columnBox, setColumnBox] = useState<ColumnBox | null>(null);
-  const [bookmarks, setBookmarks] = useState<ReaderBookmark[]>([]);
+  // The account's, on every device it reads on.
+  const { marks: bookmarks, commit: commitBookmarks } = useReaderMarks(
+    item?.Id,
+  );
   const [highlightTarget, setHighlightTarget] =
     useState<HighlightTarget | null>(null);
   const [currentCfi, setCurrentCfi] = useState<string | null>(null);
   const [currentHref, setCurrentHref] = useState<string | null>(null);
   const [epubReady, setEpubReady] = useState(false);
+  // The book faded out while a chapter not yet on the page loads for a jump.
+  const [jumping, setJumping] = useState(false);
   const [epubProgress, setEpubProgress] = useState(0);
   const [readerError, setReaderError] = useState<string | null>(null);
+  /** The copy of the book, opened later on some device, that now keeps the place. */
+  const [takenBy, setTakenBy] = useState<ReadingSession | null>(null);
+  const [takingBack, setTakingBack] = useState<"idle" | "busy" | "failed">(
+    "idle",
+  );
+  /** Makes this copy keep the place again, at the latest place; true if it does. */
+  const continueHereRef = useRef<() => Promise<boolean>>(async () => false);
   const [textContent, setTextContent] = useState<string | null>(null);
   const [scrollProgress, setScrollProgress] = useState(0);
   // The book on the opening screen: about a quarter of the screen's height,
@@ -579,9 +614,9 @@ export function BookReaderPage() {
   const lightRef = useRef<ReadingLight | null>(null);
   const scheduleFrameRef = useRef<() => void>(() => undefined);
   /** Opens the book at a search hit; set while a book is open. */
-  const showPassageRef = useRef<(hit: BookSearchHit) => Promise<void>>(
-    async () => undefined,
-  );
+  const showPassageRef = useRef<
+    (hit: BookSearchHit, found: BookSearchFound) => Promise<void>
+  >(async () => undefined);
   const measureColumnRef = useRef<() => void>(() => undefined);
   const markerRef = useRef<HTMLDivElement | null>(null);
   // The margin mounts after the frame that charted the chapter, so a new
@@ -807,7 +842,6 @@ export function BookReaderPage() {
     setTextContent(null);
     setScrollProgress(0);
     setHighlightTarget(null);
-    setBookmarks(activeItemId ? readBookmarks(activeItemId) : []);
   }, [activeItemId]);
 
   /* ---------------- EPUB ---------------- */
@@ -848,7 +882,9 @@ export function BookReaderPage() {
     });
     guardCfiLocation();
     const rendition = book.renderTo(host, {
-      manager: "continuous",
+      // A window of sections around the reader, not the whole book in the
+      // page, that holds the reader's place as sections come and go.
+      manager: WindowedViewManager,
       width: "100%",
       height: "100%",
       flow: "scrolled-continuous",
@@ -889,6 +925,17 @@ export function BookReaderPage() {
     let known = { key: "", readAt: 0 };
     /** A place not yet on the server, sent a moment after the reader stops. */
     let unsent: BookPosition | null = null;
+    /**
+     * This opening of the book. The copy opened last, on any device, keeps
+     * the place; once another has, this one saves nothing until the reader
+     * takes the book back here.
+     */
+    let session: ReadingSession = {
+      id: randomUuid(),
+      openedAt: Date.now(),
+      device: readerDevice(),
+    };
+    let superseded = false;
     let sendTimer = 0;
     let scrollElement: HTMLElement | null = null;
     let lastScrollTop = 0;
@@ -1357,7 +1404,7 @@ export function BookReaderPage() {
       // Nobody reads a hidden page: whatever moves it then (a font landing, the
       // book being measured) is not the reader, and must not outrank a place
       // they have since reached on another device.
-      if (restoring || document.visibilityState === "hidden") {
+      if (restoring || superseded || document.visibilityState === "hidden") {
         return;
       }
 
@@ -1387,20 +1434,64 @@ export function BookReaderPage() {
       }
     };
 
+    /**
+     * Another copy of the book, opened later, keeps the place now: this one
+     * stops saving and says so, and the reader decides where to go on.
+     */
+    const supersede = (by: ReadingSession | null) => {
+      if (!isMounted || superseded) {
+        return;
+      }
+      superseded = true;
+      unsent = null;
+      window.clearTimeout(sendTimer);
+      setTakingBack("idle");
+      setTakenBy(by ?? { id: "", openedAt: Date.now(), device: null });
+    };
+
+    /** Says this copy is open: true if it keeps the place, null if unknown. */
+    const claim = async (): Promise<boolean | null> => {
+      const asked = session;
+      try {
+        const result = await claimBookSession(activeItemId, asked);
+        // An answer for a copy this page has since replaced says nothing.
+        if (asked !== session) {
+          return null;
+        }
+        if (!result.owner) {
+          supersede(result.session);
+        }
+        return result.owner;
+      } catch {
+        return null;
+      }
+    };
+
     const sendPosition = (options: { keepalive?: boolean } = {}) => {
       window.clearTimeout(sendTimer);
       const position = unsent;
 
-      if (!position) {
+      if (!position || superseded) {
         return;
       }
 
       unsent = null;
-      void saveBookPosition(activeItemId, position, options).catch(() => {
-        // Offline or refused: keep it for the next send, unless the reader has
-        // moved on since, which is newer anyway.
-        unsent ??= position;
-      });
+      const sentAs = session;
+      void saveBookPosition(activeItemId, position, {
+        ...options,
+        session: sentAs,
+      }).then(
+        (result) => {
+          if (result.superseded && sentAs === session) {
+            supersede(result.superseded);
+          }
+        },
+        () => {
+          // Offline or refused: keep it for the next send, unless the reader
+          // has moved on since, which is newer anyway.
+          unsent ??= position;
+        },
+      );
     };
 
     const handleScroll = () => {
@@ -1629,6 +1720,7 @@ export function BookReaderPage() {
       };
     };
 
+    /** Takes away what showing a search hit put on the page. */
     let putOutShimmer = () => undefined as void;
 
     /** The book fading out and back, so a jump never shows where it passed. */
@@ -1648,16 +1740,17 @@ export function BookReaderPage() {
     };
 
     /**
-     * Opens the book at a search hit: its section, then the block it starts
-     * in, its first line on the reading line, where the light falls, and the
-     * reader's colour runs through the passage once so the eye
-     * finds it (searchShimmer.ts).
+     * Opens the book at a search hit: its section, then the words it was
+     * found by, their line on the reading line, where the light falls (a hit
+     * found by meaning alone, its first line). The found words stay marked,
+     * and the reader's colour runs through the passage from their block once
+     * so the eye finds it (searchMarks.ts, searchShimmer.ts).
      *
      * The server counted the blocks the way this page does, but the page is
      * the one that knows, so the block must hold the passage's opening words;
      * if it does not, the section's first block that does is used instead.
      */
-    showPassageRef.current = async (hit) => {
+    showPassageRef.current = async (hit, found) => {
       await book.opened;
       const href = (book.spine.get(hit.section) as Section | null)?.href;
       if (!href || !isMounted) {
@@ -1672,11 +1765,13 @@ export function BookReaderPage() {
           blocksOf.has(content.document),
       );
       if (!rendered) {
+        setJumping(true);
         await veilTo(0, 140);
         if (!isMounted) {
           return;
         }
         if (!(await displayWithin(href))) {
+          setJumping(false);
           await veilTo(1, 220);
           veil?.cancel();
           return;
@@ -1689,40 +1784,22 @@ export function BookReaderPage() {
         .map((content) => blocksOf.get(content.document))[0];
       const scroller = host.querySelector<HTMLElement>(".epub-container");
       if (!blocks || !scroller || !isMounted) {
+        setJumping(false);
         await veilTo(1, 220);
         veil?.cancel();
         return;
       }
       const holds = (index: number) =>
         epubBlockText(blocks[index]?.textContent ?? "").includes(hit.anchor);
-      const found = holds(hit.block)
+      const start = holds(hit.block)
         ? hit.block
         : blocks.findIndex((_, index) => holds(index));
-      const block = found >= 0 ? found : Math.min(hit.block, blocks.length - 1);
-      // The passage's first line centred on the reading line, so the light
-      // falls on the passage itself.
-      const lineHeight = blocks[block]
-        ? Number.parseFloat(getComputedStyle(blocks[block]).lineHeight)
-        : Number.NaN;
-      const place = {
-        section: hit.section,
-        block,
-        offset: -Math.round(
-          scroller.clientHeight * READING_LINE -
-            (Number.isFinite(lineHeight) ? lineHeight / 2 : 0),
-        ),
-      };
-
-      backToPlace(place);
-      await waitForLayoutToSettle(host);
-      backToPlace(place);
-      scheduleFrame();
-      if (!rendered) {
-        await veilTo(1, 240);
+      const block = start >= 0 ? start : Math.min(hit.block, blocks.length - 1);
+      if (!blocks[block]) {
+        setJumping(false);
+        await veilTo(1, 220);
         veil?.cancel();
-        if (!isMounted) {
-          return;
-        }
+        return;
       }
 
       // The passage's blocks: its text is theirs, one per line, in order.
@@ -1736,19 +1813,64 @@ export function BookReaderPage() {
           break;
         passage.push(next);
       }
+      const onPage = findOnPage(passage, hit.text, found);
+      const focusBlock = onPage.focus?.block ?? 0;
+
+      // The found words' line (or the passage's first) centred on the
+      // reading line, so the light falls on them. Measured each time it is
+      // set: sections loading around it can still move it.
+      const placeNow = () => {
+        const target = passage[focusBlock]!;
+        const top = target.getBoundingClientRect().top;
+        let middle: number;
+        const words = onPage.focus?.range.getClientRects()[0];
+        if (words) {
+          middle = words.top + words.height / 2 - top;
+        } else {
+          const lineHeight = Number.parseFloat(
+            getComputedStyle(target).lineHeight,
+          );
+          middle = Number.isFinite(lineHeight) ? lineHeight / 2 : 0;
+        }
+        return {
+          section: hit.section,
+          block: block + focusBlock,
+          offset: Math.round(middle - scroller.clientHeight * READING_LINE),
+        };
+      };
+
+      backToPlace(placeNow());
+      await waitForLayoutToSettle(host);
+      backToPlace(placeNow());
+      scheduleFrame();
+      if (!rendered) {
+        setJumping(false);
+        await veilTo(1, 240);
+        veil?.cancel();
+        if (!isMounted) {
+          return;
+        }
+      }
+
       const frame = passage[0]!.ownerDocument.defaultView?.frameElement;
       if (!frame || !isMounted) {
         return;
       }
       const frameTop = frame.getBoundingClientRect().top;
       const view = scroller.getBoundingClientRect();
+      const palette = themePalettes[settingsRef.current.theme];
       putOutShimmer();
-      putOutShimmer = shimmerPassage(passage, {
-        mark: themePalettes[settingsRef.current.theme].mark,
-        ink: themePalettes[settingsRef.current.theme].ink,
-        scheme: themePalettes[settingsRef.current.theme].scheme,
+      const putOutWords = markFoundWords(onPage.ranges, palette);
+      const putOutColour = shimmerPassage(passage.slice(focusBlock), {
+        mark: palette.mark,
+        ink: palette.ink,
+        scheme: palette.scheme,
         visible: { top: view.top - frameTop, bottom: view.bottom - frameTop },
       });
+      putOutShimmer = () => {
+        putOutWords();
+        putOutColour();
+      };
     };
 
     /**
@@ -1862,7 +1984,7 @@ export function BookReaderPage() {
      * saved a later place, the book moves there before anything here is saved.
      */
     let catchingUp = false;
-    const catchUp = async () => {
+    const catchUp = async ({ force = false } = {}) => {
       if (restoring || catchingUp || !isMounted) {
         return;
       }
@@ -1873,10 +1995,12 @@ export function BookReaderPage() {
       try {
         const remote = await getBookPosition(activeItemId).catch(() => null);
 
+        // Forced when this copy takes the book back: the place the other
+        // copy reached is the latest whatever its device's clock said.
         if (
           remote &&
           isMounted &&
-          remote.readAt > known.readAt &&
+          (force || remote.readAt > known.readAt) &&
           positionKey(remote) !== known.key
         ) {
           unsent = null;
@@ -1899,13 +2023,81 @@ export function BookReaderPage() {
     const handleVisibility = () => {
       if (document.visibilityState === "hidden") {
         sendPosition({ keepalive: true });
-      } else {
-        void catchUp();
+      } else if (!superseded) {
+        // Opened elsewhere meanwhile: say so here rather than move on.
+        void claim().then((owner) => {
+          if (owner !== false) {
+            void catchUp();
+          }
+        });
       }
     };
     const handlePageHide = () => sendPosition({ keepalive: true });
     document.addEventListener("visibilitychange", handleVisibility);
     window.addEventListener("pagehide", handlePageHide);
+
+    /**
+     * The place keeps in step with the account while the book is open, not
+     * only when the page is left: a send that failed is sent again, a place
+     * reached during a long read goes out without waiting for the reader to
+     * stop, and a place read since on another device is taken, so a window
+     * left open never saves its old place over a newer one. A page that is
+     * never hidden (a desktop window behind another) would otherwise not
+     * hear of it until the reader scrolled it, too late.
+     */
+    const syncPosition = () => {
+      if (
+        document.visibilityState === "hidden" ||
+        !isMounted ||
+        restoring ||
+        superseded
+      ) {
+        return;
+      }
+      void claim().then((owner) => {
+        if (owner === false || !isMounted) {
+          return;
+        }
+        sendPosition();
+        const selecting = getRenditionContents(rendition).some(
+          (content) => !(content.document.getSelection()?.isCollapsed ?? true),
+        );
+        if (
+          !selecting &&
+          rulerDragRef.current < 0 &&
+          performance.now() - lastScrollAt >= CATCH_UP_IDLE_MS
+        ) {
+          void catchUp();
+        }
+      });
+    };
+
+    continueHereRef.current = async () => {
+      const next: ReadingSession = {
+        id: randomUuid(),
+        openedAt: Date.now(),
+        device: readerDevice(),
+      };
+      const result = await claimBookSession(activeItemId, next);
+      if (!isMounted) {
+        return false;
+      }
+      if (!result.owner) {
+        // Opened somewhere else again in the meantime.
+        setTakenBy(result.session);
+        return false;
+      }
+      session = next;
+      await catchUp({ force: true });
+      superseded = false;
+      setTakenBy(null);
+      return true;
+    };
+    const syncTimer = window.setInterval(syncPosition, READER_SYNC_MS);
+    // Back to this window, back from the browser's page cache, or back online.
+    window.addEventListener("focus", syncPosition);
+    window.addEventListener("pageshow", syncPosition);
+    window.addEventListener("online", syncPosition);
 
     void (async () => {
       try {
@@ -1922,6 +2114,8 @@ export function BookReaderPage() {
         await goTo(target, true);
 
         restoring = false;
+        // Opening the book here makes this the copy that keeps the place.
+        void claim();
         window.clearTimeout(preparationTimeoutId);
 
         if (isMounted) {
@@ -1959,8 +2153,12 @@ export function BookReaderPage() {
       window.cancelAnimationFrame(frameId);
       // Leaving the book inside the app is leaving it too.
       sendPosition({ keepalive: true });
+      window.clearInterval(syncTimer);
       document.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("pagehide", handlePageHide);
+      window.removeEventListener("focus", syncPosition);
+      window.removeEventListener("pageshow", syncPosition);
+      window.removeEventListener("online", syncPosition);
       resizeObserver.disconnect();
       scrollElement?.removeEventListener("scroll", handleScroll);
       rendition.off("relocated", handleRelocated);
@@ -2240,10 +2438,13 @@ export function BookReaderPage() {
       .catch(() => undefined);
   }, []);
 
-  const showPassage = useCallback((hit: BookSearchHit) => {
-    setPanel(null);
-    void showPassageRef.current(hit).catch(() => undefined);
-  }, []);
+  const showPassage = useCallback(
+    (hit: BookSearchHit, found: BookSearchFound) => {
+      setPanel(null);
+      void showPassageRef.current(hit, found).catch(() => undefined);
+    },
+    [],
+  );
 
   const spineIndexOf = useCallback((href: string) => {
     const section = bookRef.current?.spine.get(
@@ -2296,17 +2497,17 @@ export function BookReaderPage() {
     }
 
     if (isBookmarked) {
-      const next = bookmarks.filter(
-        (bookmark) =>
-          isHighlight(bookmark) ||
-          (bookmark.cfi !== currentCfi &&
-            !(
-              bookmark.progress !== null &&
-              Math.abs(bookmark.progress - bookFraction) < 0.0025
-            )),
+      commitBookmarks((current) =>
+        current.filter(
+          (bookmark) =>
+            isHighlight(bookmark) ||
+            (bookmark.cfi !== currentCfi &&
+              !(
+                bookmark.progress !== null &&
+                Math.abs(bookmark.progress - bookFraction) < 0.0025
+              )),
+        ),
       );
-      setBookmarks(next);
-      writeBookmarks(activeItemId, next);
       return;
     }
 
@@ -2335,16 +2536,12 @@ export function BookReaderPage() {
       progress: bookFraction,
       createdAt: Date.now(),
     };
-    const next = [...bookmarks, bookmark].sort(
-      (a, b) => (a.progress ?? 0) - (b.progress ?? 0),
-    );
-    setBookmarks(next);
-    writeBookmarks(activeItemId, next);
+    commitBookmarks((current) => [...current, bookmark]);
   }, [
     activeItemId,
     bookFraction,
-    bookmarks,
     chapterLabel,
+    commitBookmarks,
     currentCfi,
     isBookmarked,
     title,
@@ -2355,11 +2552,11 @@ export function BookReaderPage() {
       if (!activeItemId) {
         return;
       }
-      const next = bookmarks.filter((bookmark) => bookmark.id !== id);
-      setBookmarks(next);
-      writeBookmarks(activeItemId, next);
+      commitBookmarks((current) =>
+        current.filter((bookmark) => bookmark.id !== id),
+      );
     },
-    [activeItemId, bookmarks],
+    [activeItemId, commitBookmarks],
   );
 
   const highlightColor =
@@ -2380,16 +2577,16 @@ export function BookReaderPage() {
         return;
       }
 
-      const existing = bookmarks.find((bookmark) =>
+      const isTarget = (bookmark: ReaderBookmark) =>
         target.kind === "highlight"
           ? bookmark.id === target.id
-          : isHighlight(bookmark) && bookmark.cfi === target.cfi,
-      );
-      let next: ReaderBookmark[];
+          : isHighlight(bookmark) && bookmark.cfi === target.cfi;
 
-      if (existing) {
-        next = bookmarks.map((bookmark) =>
-          bookmark === existing ? { ...bookmark, color } : bookmark,
+      if (bookmarks.some(isTarget)) {
+        commitBookmarks((current) =>
+          current.map((bookmark) =>
+            isTarget(bookmark) ? { ...bookmark, color } : bookmark,
+          ),
         );
       } else if (target.kind === "selection") {
         const chapterIndex =
@@ -2405,9 +2602,7 @@ export function BookReaderPage() {
           createdAt: Date.now(),
           color,
         };
-        next = [...bookmarks, highlight].sort(
-          (a, b) => (a.progress ?? 0) - (b.progress ?? 0),
-        );
+        commitBookmarks((current) => [...current, highlight]);
       } else {
         return;
       }
@@ -2416,8 +2611,6 @@ export function BookReaderPage() {
         rangeDocument(target.range)?.getSelection()?.removeAllRanges();
       }
 
-      setBookmarks(next);
-      writeBookmarks(activeItemId, next);
       setHighlightTarget(null);
     },
     [
@@ -2426,6 +2619,7 @@ export function BookReaderPage() {
       bookMap,
       bookmarks,
       chapterLabel,
+      commitBookmarks,
       hasChapters,
       highlightTarget,
       title,
@@ -2539,6 +2733,32 @@ export function BookReaderPage() {
     }
     seekChapterRef.current(rulerDragRef.current, fraction);
   };
+  const continueHere = async () => {
+    setTakingBack("busy");
+    try {
+      await continueHereRef.current();
+      setTakingBack("idle");
+    } catch {
+      // Not reachable: the notice stays, and asking again may work.
+      setTakingBack("failed");
+    }
+  };
+  const takenAtText = takenBy
+    ? new Intl.DateTimeFormat(
+        language,
+        new Date(takenBy.openedAt).toDateString() === new Date().toDateString()
+          ? { hour: "2-digit", minute: "2-digit" }
+          : {
+              day: "numeric",
+              month: "short",
+              hour: "2-digit",
+              minute: "2-digit",
+            },
+      ).format(takenBy.openedAt)
+    : "";
+  const takenDevice = takenBy?.device
+    ? READER_DEVICE_NAMES[takenBy.device]
+    : t("reader.taken.anotherDevice");
   const timeLeftText = reading
     ? formatDuration(reading.minutesLeftInChapter, t)
     : "";
@@ -2655,6 +2875,9 @@ export function BookReaderPage() {
             ref={epubHostRef}
             className={`h-full w-full ${epubReady ? "seyirlik-reader-fade-in" : "opacity-0"}`}
           />
+          <div className="rd-jumping" data-on={jumping || undefined}>
+            <span className="rd-jumping-ring" />
+          </div>
         </div>
       );
     }
@@ -2963,6 +3186,41 @@ export function BookReaderPage() {
           onRemoveBookmark={removeBookmark}
           onClose={closePanel}
         />
+      ) : null}
+
+      {takenBy ? (
+        <div
+          className="rd-taken"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="rd-taken-title"
+          aria-describedby="rd-taken-text"
+        >
+          <div className="rd-taken-card">
+            <h2 id="rd-taken-title">{t("reader.taken.title")}</h2>
+            <p className="rd-taken-where">
+              {takenDevice} · {takenAtText}
+            </p>
+            <p id="rd-taken-text">{t("reader.taken.text")}</p>
+            <div className="rd-taken-actions">
+              <button
+                type="button"
+                className="rd-taken-continue"
+                autoFocus
+                disabled={takingBack === "busy"}
+                onClick={() => void continueHere()}
+              >
+                {t("reader.taken.continue")}
+              </button>
+              <BackButton fallbackTo={ownerRoute} noYShift />
+            </div>
+            {takingBack === "failed" ? (
+              <p className="rd-taken-failed" role="status">
+                {t("reader.taken.failed")}
+              </p>
+            ) : null}
+          </div>
+        </div>
       ) : null}
 
       {zoomedImage ? (

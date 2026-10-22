@@ -247,7 +247,7 @@ export function DesktopHomePage() {
         <ConfettiAnimation startDelay={0} pieceCount={200} />
       ) : null}
 
-      <div className="min-h-[100svh] full-bleed ">
+      <div className="full-bleed flow-root">
         <HomeHero items={featuredPool} onReady={() => setIsHeroReady(true)} />
       </div>
 

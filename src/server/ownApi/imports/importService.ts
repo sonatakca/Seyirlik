@@ -30,6 +30,7 @@
  * half-written is as short as the renames, not as long as the copies.
  */
 import {
+  fileTargetsFor,
   isRefusal,
   planMediaDestination,
   planSubtitleDestination,
@@ -385,15 +386,31 @@ export function createImportService({
         await operations.probeRename(),
       );
 
+      // Which file is filed as what. For a season pack this is where the
+      // pack is explored, and anything not the season's is left in place.
+      const targets = fileTargetsFor(
+        target,
+        inspection.media.filter((file) => isImported(file.role)),
+        inspection.subtitles.filter((file) => isImported(file.role)),
+      );
+      if (isRefusal(targets)) {
+        return settle(
+          record.id,
+          "validating",
+          "needs_attention",
+          targets.problem,
+          targets.detail,
+        );
+      }
+
       const planned = [];
-      for (const file of [...inspection.media, ...inspection.subtitles]) {
-        if (!isImported(file.role)) continue;
+      for (const { file, target: fileTarget } of targets.files) {
         const name = file.relative.split("/").at(-1) ?? file.relative;
         const outcome = withKey(
           record.libraryRoot,
           file.role === "media"
-            ? planMediaDestination(target, name)
-            : planSubtitleDestination(target, name),
+            ? planMediaDestination(fileTarget, name)
+            : planSubtitleDestination(fileTarget, name),
         );
         if (isRefusal(outcome)) {
           return settle(
@@ -457,11 +474,16 @@ export function createImportService({
           );
         }
       }
+      const leftBehind = targets.leftBehind
+        .map((file) => `${file.relative} ${file.reason}`)
+        .join("; ");
       await repository.update(
         record.id,
         "validating",
         { state: "staging", strategy: choice.strategy },
-        choice.reason,
+        leftBehind
+          ? `${choice.reason} Left in the download: ${leftBehind}.`
+          : choice.reason,
       );
       return {
         state: "staging",

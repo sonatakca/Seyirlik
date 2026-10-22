@@ -519,3 +519,71 @@ describe("what it refuses to start", () => {
     expect(await libraryFiles()).toEqual([]);
   });
 });
+
+describe("a season pack", () => {
+  const PACK = "Lilyhammer.S01.WEBRip.EAC3.5.1.1080p.x265-iVy";
+
+  it("files every episode of the pack under its own name", async () => {
+    await mkdir(
+      path.join(sourceRoot, PACK, "Subs", "Lilyhammer.S01E02.WEBRip"),
+      {
+        recursive: true,
+      },
+    );
+    for (const episode of ["01", "02"]) {
+      await writeFile(
+        path.join(
+          sourceRoot,
+          PACK,
+          `Lilyhammer.S01E${episode}.WEBRip.x265-iVy.mkv`,
+        ),
+        `episode ${episode}`,
+      );
+    }
+    await writeFile(
+      path.join(sourceRoot, PACK, "Lilyhammer.Behind.The.Scenes.mkv"),
+      "an extra",
+    );
+    await writeFile(
+      path.join(
+        sourceRoot,
+        PACK,
+        "Subs",
+        "Lilyhammer.S01E02.WEBRip",
+        "2_English.srt",
+      ),
+      "1\n00:00:01,000 --> 00:00:02,000\nHi\n",
+    );
+    const created = await repository.create({
+      target: { kind: "season", title: "Lilyhammer", year: 2012, season: 1 },
+      sourceRoot,
+      libraryRoot,
+      sourceRelative: PACK,
+    });
+    const svc = createImportService({
+      repository,
+      operationsFor: (source, library) =>
+        createImportOperations(source, library),
+      sourceFileSystemFor: (root) => createNodeReadFileSystem(root),
+      targetFor: async () => ({
+        kind: "season",
+        title: "Lilyhammer",
+        year: 2012,
+        season: 1,
+      }),
+    });
+
+    expect((await svc.plan(created.id)).state).toBe("staging");
+    expect((await svc.execute(created.id)).state).toBe("committed");
+    expect(await libraryFiles()).toEqual([
+      "Lilyhammer/Season 1/src/Lilyhammer - S01E01.mkv",
+      "Lilyhammer/Season 1/src/Lilyhammer - S01E02.english.srt",
+      "Lilyhammer/Season 1/src/Lilyhammer - S01E02.mkv",
+    ]);
+    // The extra is not the season's, and stays where it was downloaded.
+    await svc.cleanup(created.id);
+    expect(await readdir(path.join(sourceRoot, PACK))).toContain(
+      "Lilyhammer.Behind.The.Scenes.mkv",
+    );
+  });
+});

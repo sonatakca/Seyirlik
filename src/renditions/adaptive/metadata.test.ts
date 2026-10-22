@@ -90,6 +90,56 @@ function withMetadata(
 }
 
 describe("parseAdaptiveMetadata", () => {
+  it("allows subtitle-only incremental scratch while keeping published packages strict", () => {
+    const metadata = {
+      ...validMetadata(),
+      videoRenditions: [],
+      audioRenditions: [],
+      subtitleRenditions: [
+        {
+          id: "subtitle-1000",
+          sourceStreamIndex: 1000,
+          sidecarFingerprint: "b".repeat(64),
+          language: "tur",
+          isDefault: false,
+          isForced: false,
+          isHearingImpaired: false,
+          codec: "webvtt",
+          durationSeconds: 5400,
+          playlistPath: "subtitles/subtitle-1000/playlist.m3u8",
+          subtitlePath: "subtitles/subtitle-1000/subtitles.vtt",
+          fileSizeBytes: 100,
+        },
+      ],
+      storage: {
+        videoBytes: 0,
+        audioBytes: 0,
+        subtitleBytes: 100,
+        totalBytes: 100,
+      },
+    };
+    expect(() => parseAdaptiveMetadata(metadata)).toThrow(/videoRenditions/);
+    const options = { allowMissingVideo: true, allowMissingAudio: true };
+    expect(
+      parseAdaptiveMetadata(metadata, options).subtitleRenditions?.[0]
+        ?.sidecarFingerprint,
+    ).toBe("b".repeat(64));
+    expect(() =>
+      parseAdaptiveMetadata({ ...metadata, subtitleRenditions: [] }, options),
+    ).toThrow(/at least one rendition/);
+    expect(() =>
+      parseAdaptiveMetadata(
+        {
+          ...metadata,
+          subtitleRenditions: [
+            { ...metadata.subtitleRenditions[0], sidecarFingerprint: "broken" },
+          ],
+        },
+        options,
+      ),
+    ).toThrow(/fingerprint/);
+  });
+
   it("accepts a well-formed manifest", () => {
     const metadata = parseAdaptiveMetadata(validMetadata());
     expect(metadata.videoRenditions[0].id).toBe("720p");

@@ -1,5 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import sharp from "sharp";
@@ -26,8 +33,16 @@ function item(overrides: Partial<ShareItemRow> = {}): ShareItemRow {
     seriesOverview: null,
     seriesYear: null,
     cardItemId: ITEM_ID,
-    cover: { contentHash: "cover-1", contentType: "image/jpeg", storageKey: "cover.jpg" },
-    logo: { contentHash: "logo-1", contentType: "image/png", storageKey: "logo.png" },
+    cover: {
+      contentHash: "cover-1",
+      contentType: "image/jpeg",
+      storageKey: "cover.jpg",
+    },
+    logo: {
+      contentHash: "logo-1",
+      contentType: "image/png",
+      storageKey: "logo.png",
+    },
     logoLayout: null,
     ...overrides,
   };
@@ -63,6 +78,8 @@ describe("share cards", () => {
       repository,
       imageStorage: {
         resolve: (key: string) => path.join(root, key),
+        readSource: (image: { storageKey: string }) =>
+          readFile(path.join(root, image.storageKey)),
       } as unknown as ImageStorage,
       catalogue: { getPrimaryFile: async () => null },
       mediaRoot: root,
@@ -74,7 +91,9 @@ describe("share cards", () => {
   async function storedCards(): Promise<string[]> {
     const found: string[] = [];
     async function walk(dir: string) {
-      for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+      for (const entry of await readdir(dir, { withFileTypes: true }).catch(
+        () => [],
+      )) {
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) await walk(full);
         else found.push(full);
@@ -121,7 +140,11 @@ describe("share cards", () => {
 });
 
 describe("share routes", () => {
-  function context(pathname: string, params: Record<string, string>, headers = {}) {
+  function context(
+    pathname: string,
+    params: Record<string, string>,
+    headers = {},
+  ) {
     const headersOut: Record<string, string> = {};
     const response = {
       statusCode: 200,
@@ -147,7 +170,9 @@ describe("share routes", () => {
 
   it("are open to a crawler with no session, and nothing else", () => {
     const routes = createShareRoutes({} as ShareCards);
-    expect(routes.map((route) => [route.method, route.path, route.access])).toEqual([
+    expect(
+      routes.map((route) => [route.method, route.path, route.access]),
+    ).toEqual([
       ["GET", "/share/items/:itemId", "public"],
       ["GET", "/share/items/:itemId/image", "public"],
     ]);
@@ -165,7 +190,9 @@ describe("share routes", () => {
     const [, image] = createShareRoutes({
       image: async () => null,
     } as unknown as ShareCards);
-    const { context: ctx } = context(`/share/items/${ITEM_ID}/image`, { itemId: ITEM_ID });
+    const { context: ctx } = context(`/share/items/${ITEM_ID}/image`, {
+      itemId: ITEM_ID,
+    });
     await expect(image.handle(ctx)).rejects.toMatchObject({ statusCode: 404 });
   });
 
@@ -178,14 +205,20 @@ describe("share routes", () => {
         image: async () => ({ path: file, version: "v2" }),
       } as unknown as ShareCards);
 
-      const stale = context(`/share/items/${ITEM_ID}/image?v=v1`, { itemId: ITEM_ID }, {
-        "if-none-match": '"v2"',
-      });
+      const stale = context(
+        `/share/items/${ITEM_ID}/image?v=v1`,
+        { itemId: ITEM_ID },
+        {
+          "if-none-match": '"v2"',
+        },
+      );
       await image.handle(stale.context);
       expect(stale.response.statusCode).toBe(304);
       expect(stale.headersOut["cache-control"]).toBe("public, max-age=300");
 
-      const current = context(`/share/items/${ITEM_ID}/image?v=v2`, { itemId: ITEM_ID });
+      const current = context(`/share/items/${ITEM_ID}/image?v=v2`, {
+        itemId: ITEM_ID,
+      });
       await image.handle(current.context).catch(() => undefined);
       expect(current.headersOut["cache-control"]).toContain("immutable");
       expect(current.headersOut["content-type"]).toBe("image/jpeg");
@@ -217,11 +250,22 @@ describe("share text", () => {
 
   it("introduces a book by its author and blurb", () => {
     expect(
-      shareText(item({ kind: "book", title: "1984", overview: null, productionYear: 1949 }), {
-        author: "George Orwell",
-        description: "Big Brother is watching.",
-      }),
-    ).toEqual({ title: "1984 · George Orwell", description: "Big Brother is watching." });
+      shareText(
+        item({
+          kind: "book",
+          title: "1984",
+          overview: null,
+          productionYear: 1949,
+        }),
+        {
+          author: "George Orwell",
+          description: "Big Brother is watching.",
+        },
+      ),
+    ).toEqual({
+      title: "1984 · George Orwell",
+      description: "Big Brother is watching.",
+    });
   });
 
   it("cuts a long description at a word", () => {

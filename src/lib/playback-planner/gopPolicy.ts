@@ -28,6 +28,7 @@ export type GopEncoderFamily =
   | "h264_qsv"
   | "hevc_qsv"
   | "h264_nvenc"
+  | "hevc_nvenc"
   | "h264_amf"
   | "h264_videotoolbox"
   | "hevc_videotoolbox";
@@ -152,6 +153,7 @@ export function buildGopArgs({
       ];
 
     case "h264_nvenc":
+    case "hevc_nvenc":
       return [...shared, "-no-scenecut", "1", "-forced-idr", "1"];
 
     case "h264_videotoolbox":

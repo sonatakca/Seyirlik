@@ -24,6 +24,7 @@ import type {
   TaskDto,
 } from "../api/ownApi/dto";
 import { buildClientCapabilities } from "./playback-planner/clientCapabilities";
+import { CARD_LOGO_OVERLAY_VARIANT, type LogoLayout } from "./logoLayout";
 import type {
   MediaItem,
   MediaLibrary,
@@ -142,6 +143,41 @@ export function getLogoImageUrl(
   maxWidth = 900,
 ): string {
   return imageUrl(itemId, "logo", tag, maxWidth);
+}
+
+/**
+ * Turns an own-API logo URL into a transparent, full-poster layer containing
+ * the placed logo and its already-rasterized shadow. Other image providers do
+ * not understand this variant, so callers retain their CSS fallback for them.
+ */
+export function getCardLogoOverlayImageUrl(
+  logoUrl: string,
+  layoutItemId: string,
+  layout: LogoLayout,
+  maxWidth: number,
+): string | null {
+  try {
+    const parsed = new URL(logoUrl, window.location.href);
+    if (!/\/ownAPI\/v1\/items\/[^/]+\/images\/logo$/.test(parsed.pathname)) {
+      return null;
+    }
+
+    parsed.searchParams.set("maxWidth", String(maxWidth));
+    parsed.searchParams.set("variant", CARD_LOGO_OVERLAY_VARIANT);
+    parsed.searchParams.set("layoutItemId", layoutItemId);
+    // The server reads the authoritative layout from the catalogue. This value
+    // only changes the browser URL when the operator moves or reshades a logo,
+    // so a week-long private image cache cannot retain the previous drawing.
+    parsed.searchParams.set(
+      "layout",
+      [layout.x, layout.y, layout.width, layout.shadow]
+        .map((value) => value.toFixed(6))
+        .join(","),
+    );
+    return parsed.toString();
+  } catch {
+    return null;
+  }
 }
 
 export function getThumbImageUrl(
@@ -437,12 +473,14 @@ export async function setItemFavourite(
 async function writeProgress(
   itemId: string,
   positionTicks: number,
+  options: { keepalive?: boolean } = {},
 ): Promise<void> {
   try {
     await ownApiClient.request<unknown>(
       `/progress/${encodeURIComponent(itemId)}`,
       {
         method: "PUT",
+        keepalive: options.keepalive,
         body: {
           positionMs: ticksToMs(positionTicks),
           sequence: nextProgressSequence(),
@@ -504,22 +542,17 @@ export async function reportPlaybackStopped(
 
 /**
  * Fired from `pagehide`/`beforeunload`, where a normal request is cancelled.
- * `sendBeacon` is the only transport the browser guarantees to flush.
+ * A `keepalive` request outlives the page like `sendBeacon` does, but unlike a
+ * beacon it can be a PUT and carry the CSRF header, which the progress route
+ * requires — the beacon this replaced was refused with 405 on every exit.
  */
 export function reportPlaybackStoppedBeforeUnload(
   source: PlaybackSourceCandidate,
   positionTicks: number,
 ): void {
-  if (typeof navigator === "undefined" || !navigator.sendBeacon) return;
-
-  const payload = JSON.stringify({
-    positionMs: ticksToMs(positionTicks),
-    sequence: nextProgressSequence(),
+  writeProgress(source.itemId, positionTicks, { keepalive: true }).catch(() => {
+    // The page is going away; there is no one left to tell.
   });
-  navigator.sendBeacon(
-    ownApiUrl(`/ownAPI/v1/progress/${encodeURIComponent(source.itemId)}`),
-    new Blob([payload], { type: "application/json" }),
-  );
 }
 
 // Audit reporting used to be a separate session channel on the old backend. Native

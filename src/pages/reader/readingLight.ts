@@ -31,7 +31,13 @@ interface LitBlock {
    * line's first letter, so it never splits into the bands of the lines it
    * stands beside. `firstLine` is the middle of that line, in px from the top.
    */
-  dropCap: { left: number; top: number; width: number; height: number; firstLine: number } | null;
+  dropCap: {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    firstLine: number;
+  } | null;
   /** The opacity and mask last written, so unchanged ink is not written again. */
   written: string;
   /** Its geometry changed, so its mask is rewritten even if no ink moved. */
@@ -268,7 +274,12 @@ interface BlockMask {
   repeat: string;
 }
 
-const flat = (image: string): BlockMask => ({ image, position: "", size: "", repeat: "" });
+const flat = (image: string): BlockMask => ({
+  image,
+  position: "",
+  size: "",
+  repeat: "",
+});
 
 /**
  * The light on a block as a mask: a hard step at each line's slot edge, which
@@ -284,7 +295,9 @@ function blockMask(block: LitBlock): BlockMask {
   const { slots } = block;
 
   if (slots.length === 1) {
-    return flat(`linear-gradient(${ink(slots[0].value)}, ${ink(slots[0].value)})`);
+    return flat(
+      `linear-gradient(${ink(slots[0].value)}, ${ink(slots[0].value)})`,
+    );
   }
 
   /** The lines as one vertical gradient, for a layer that starts `offset` px down. */
@@ -307,8 +320,9 @@ function blockMask(block: LitBlock): BlockMask {
    */
   const cap = block.dropCap;
   const value = (
-    slots.find((line) => cap.firstLine >= line.top && cap.firstLine < line.bottom) ??
-    slots[0]
+    slots.find(
+      (line) => cap.firstLine >= line.top && cap.firstLine < line.bottom,
+    ) ?? slots[0]
   ).value;
   const w = cap.width.toFixed(1);
   const h = cap.height.toFixed(1);
@@ -353,7 +367,7 @@ export class ReadingLight {
   private readonly documents = new Map<Document, LitDocument>();
   private floor = 1;
   private shape: ReaderLightShape = DEFAULT_READER_SETTINGS.lightShape;
-  private reach = DEFAULT_READER_SETTINGS.paragraphReach;
+  private reach = DEFAULT_READER_SETTINGS.lineReach;
   private fading = false;
   /** The blocks given a layer of their own last frame (see `frame`). */
   private layered = new Set<HTMLElement>();

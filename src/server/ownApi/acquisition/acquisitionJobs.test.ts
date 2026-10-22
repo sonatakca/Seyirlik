@@ -56,6 +56,8 @@ function fakes(
     reconcile: vi.fn(async () => ({ examined: records.length, changed: 0 })),
     cancel: vi.fn(async () => undefined),
     blocklist: vi.fn(async () => true),
+    setPaused: vi.fn(async () => undefined),
+    move: vi.fn(async () => 0),
     ...over,
   };
   const repository = {

@@ -1,8 +1,12 @@
-import { Captions, Images } from "lucide-react";
+import { Captions, Images, Search } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
 import type { TranslationKey } from "../../i18n/translations";
 import {
+  episodeStage,
+  isMissingEpisode,
   toneOf,
+  type EpisodeStage,
+  type HoldingTone,
   type LibraryEpisode,
   type LibraryTitleDetail,
 } from "../../lib/libraryAdminApi";
@@ -47,6 +51,10 @@ export interface SeasonActions {
    * offers no upload rather than guessing a language.
    */
   onUploadSubtitle?: (itemId: string, file: File) => void;
+  /** Searches for a season's missing episodes; absent where it is not offered. */
+  onSearchMissing?: (season: number) => void;
+  /** A search for this title's missing episodes is still running. */
+  searchingMissing?: boolean;
 }
 
 function EpisodeRow({
@@ -133,6 +141,187 @@ function EpisodeRow({
   );
 }
 
+const PROCESS_STYLE = {
+  unprocessed: "bg-orange-400",
+  processing: "bg-orange-400",
+  processed: "bg-white/60",
+} as const;
+
+const TURKISH_STYLE = {
+  found: "bg-blue-400",
+  searching: "bg-blue-400/35",
+  none: "bg-white/10",
+} as const;
+
+const TRICKPLAY_STYLE = {
+  found: "bg-pink-400",
+  queued: "bg-pink-400/35",
+  none: "bg-white/10",
+} as const;
+
+/**
+ * An episode's pill in the season strip.
+ *
+ * Without a file the pill is one colour, since nothing after the download can
+ * exist yet. Once there is a file it splits into the file's step, Turkish
+ * subtitles and trickplay, the last two filling in whichever order they come.
+ * A finished episode is one green pill again.
+ */
+function StripBar({ stage }: { stage: EpisodeStage }) {
+  if ("tone" in stage.file) {
+    return (
+      <span
+        className={`h-1.5 rounded-full ${TONE_STYLE[stage.file.tone].dot}`}
+      />
+    );
+  }
+  if (stage.complete) {
+    return <span className="h-1.5 rounded-full bg-emerald-400" />;
+  }
+  return (
+    <span className="flex h-1.5 gap-px overflow-hidden rounded-full">
+      <span className={`flex-[2] ${PROCESS_STYLE[stage.file.held]}`} />
+      <span className={`flex-1 ${TURKISH_STYLE[stage.turkish]}`} />
+      <span className={`flex-1 ${TRICKPLAY_STYLE[stage.trickplay]}`} />
+    </span>
+  );
+}
+
+function toneLabel(tone: HoldingTone, t: (key: TranslationKey) => string) {
+  return tone === "wanted"
+    ? t("library.missingEpisode")
+    : t(`library.tone.${tone}` as TranslationKey);
+}
+
+/** One episode in the season strip: its number over its pill. */
+function StripPill({ episode }: { episode: LibraryEpisode }) {
+  const { t } = useLanguage();
+  const stage = episodeStage(episode, true);
+  const code = `E${String(episode.episodeNumber).padStart(2, "0")}`;
+  const facts =
+    "tone" in stage.file
+      ? [toneLabel(stage.file.tone, t)]
+      : stage.complete
+        ? [t("library.stage.complete")]
+        : [
+            t(`library.stage.${stage.file.held}`),
+            t(`library.stage.turkish.${stage.turkish}`),
+            t(`library.stage.trickplay.${stage.trickplay}`),
+          ];
+  return (
+    <Tooltip content={[code, ...facts].join(" · ")}>
+      <span className="flex min-w-0 max-w-7 flex-1 flex-col gap-1">
+        <span className="text-center text-[9px] font-bold leading-none tabular-nums text-white/40">
+          {episode.episodeNumber}
+        </span>
+        <StripBar stage={stage} />
+      </span>
+    </Tooltip>
+  );
+}
+
+const held = (
+  file: "unprocessed" | "processed",
+  turkish: EpisodeStage["turkish"] = "none",
+  trickplay: EpisodeStage["trickplay"] = "none",
+): EpisodeStage => ({
+  file: { held: file },
+  turkish,
+  trickplay,
+  complete: false,
+});
+
+/**
+ * What each pill means, drawn with the pills themselves, so where a colour
+ * sits in a split pill is part of what it says.
+ */
+const LEGEND: Array<{
+  stage: EpisodeStage;
+  label: TranslationKey | HoldingTone;
+}> = [
+  {
+    stage: {
+      file: { tone: "wanted" },
+      turkish: "none",
+      trickplay: "none",
+      complete: false,
+    },
+    label: "wanted",
+  },
+  {
+    stage: {
+      file: { tone: "downloading" },
+      turkish: "none",
+      trickplay: "none",
+      complete: false,
+    },
+    label: "downloading",
+  },
+  { stage: held("unprocessed"), label: "library.stage.unprocessed" },
+  { stage: held("processed"), label: "library.stage.processed" },
+  { stage: held("processed", "found"), label: "library.stage.turkish.found" },
+  {
+    stage: held("processed", "searching"),
+    label: "library.stage.turkish.searching",
+  },
+  {
+    stage: held("processed", "none", "found"),
+    label: "library.stage.trickplay.found",
+  },
+  {
+    stage: held("processed", "none", "queued"),
+    label: "library.stage.trickplay.queued",
+  },
+  {
+    stage: {
+      file: { held: "processed" },
+      turkish: "found",
+      trickplay: "found",
+      complete: true,
+    },
+    label: "library.stage.complete",
+  },
+];
+
+function StripLegend({ seasons }: { seasons: LibraryTitleDetail["seasons"] }) {
+  const { t } = useLanguage();
+  // Grey and outlined pills are rare; they are explained only where they show.
+  const rare = (["absent", "unaired"] as const).filter((tone) =>
+    seasons.some((season) =>
+      season.episodes.some((episode) => {
+        const { file } = episodeStage(episode, true);
+        return "tone" in file && file.tone === tone;
+      }),
+    ),
+  );
+  const entries = [
+    ...LEGEND,
+    ...rare.map((tone) => ({
+      stage: {
+        file: { tone },
+        turkish: "none",
+        trickplay: "none",
+        complete: false,
+      } satisfies EpisodeStage,
+      label: tone,
+    })),
+  ];
+  return (
+    <ul className="flex flex-wrap gap-x-4 gap-y-1.5 px-1 text-[11px] font-bold text-white/55">
+      {entries.map(({ stage, label }) => (
+        <li key={label} className="flex items-center gap-1.5">
+          <span aria-hidden="true" className="flex w-7 flex-col">
+            <StripBar stage={stage} />
+          </span>
+          {label.startsWith("library.")
+            ? t(label as TranslationKey)
+            : toneLabel(label as HoldingTone, t)}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /** A show's seasons, with what each season and episode holds and can be asked for. */
 export function TitleSeasons({
   detail,
@@ -149,8 +338,14 @@ export function TitleSeasons({
           {t("library.catalogueOffline")}
         </p>
       ) : null}
+      <StripLegend seasons={detail.seasons} />
       {detail.seasons.map((season) => {
         const held = season.episodes.filter((e) => e.hasMedia).length;
+        // Counted the way the strip is coloured: green is finished.
+        const finished = season.episodes.filter(
+          (e) => episodeStage(e, true).complete,
+        ).length;
+        const missing = season.episodes.filter(isMissingEpisode).length;
         const label =
           season.seasonNumber === 0
             ? t("library.specials")
@@ -163,20 +358,35 @@ export function TitleSeasons({
           >
             <summary className="flex cursor-pointer list-none flex-wrap items-center gap-3 px-3 py-2 text-sm font-black text-white/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]">
               <span>{label}</span>
-              <span className="text-xs font-bold tabular-nums text-white/50">
-                {held}/{season.episodes.length}
+              <span className="min-w-10 text-xs font-bold tabular-nums text-white/50">
+                {finished}/{season.episodes.length}
               </span>
-              {/* One segment per episode: the season at a glance. */}
-              <span aria-hidden="true" className="flex min-w-16 flex-1 gap-0.5">
+              {/* One pill per episode: the season at a glance. */}
+              <span aria-hidden="true" className="flex min-w-16 flex-1 gap-1">
                 {season.episodes.map((episode) => (
-                  <span
-                    key={episode.episodeNumber}
-                    className={`h-1.5 max-w-6 flex-1 rounded-full ${
-                      TONE_STYLE[toneOf(episode, true)].dot
-                    }`}
+                  <StripPill
+                    key={`${episode.episodeNumber}:${episode.id ?? ""}`}
+                    episode={episode}
                   />
                 ))}
               </span>
+              {actions.onSearchMissing && missing > 0 ? (
+                <Tooltip content={t("library.searchMissingSeason")}>
+                  <button
+                    type="button"
+                    className={actionButton}
+                    disabled={actions.busy || actions.searchingMissing}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      actions.onSearchMissing!(season.seasonNumber);
+                    }}
+                    aria-label={`${t("library.searchMissingSeason")} · ${label}`}
+                  >
+                    <Search size={13} aria-hidden="true" />
+                    <span className="tabular-nums">{missing}</span>
+                  </button>
+                </Tooltip>
+              ) : null}
               {season.id && held > 0 ? (
                 <span className="flex gap-1.5">
                   <Tooltip content={t("library.generateTrickplaySeason")}>

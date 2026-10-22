@@ -92,38 +92,6 @@
   --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-inset-left: env(safe-area-inset-left, 0px);
   --safe-area-inset-right: env(safe-area-inset-right, 0px);
-  /*
-   * Where the notification pile stands.
-   *
-   * The floor is where it sits with nothing in front of it; the lane is the
-   * floor or whatever chrome has claimed the bottom-right corner, whichever
-   * reaches higher — see src/lib/layout/bottomChrome.ts. The mobile floor
-   * keeps its standing 6rem lane, which is already taller than anything that
-   * claims it.
-   *
-   * The pile is laid out on the floor and lifted to the lane by a transform,
-   * so that it can travel the distance rather than jump it: a `transition` on
-   * a `max()` length freezes the property outright in WebKit. The lane is
-   * still what bounds the pile's height, since that is the room it really has.
-   */
-  --notification-lane-floor: calc(6rem + var(--safe-area-inset-bottom));
-  --notification-lane-bottom: max(
-    var(--notification-lane-floor),
-    var(--seyirlik-bottom-chrome, 0px)
-  );
-  /*
-   * How tall the pile is allowed to become.
-   *
-   * The pile reports on the page behind it, so it may not become the page: an
-   * opened card with a lot to say used to run from the lane to the masthead
-   * and leave nothing of the view it was reporting about. Three quarters of
-   * the viewport, measured from the bottom edge, keeps the top quarter
-   * readable however much a card has to show — and the room it really has,
-   * which is bounded by the lane rather than by the floor, is still the other
-   * limit. Inside that ceiling the column sets its own two heights: half the
-   * page as a list, three quarters once a card is opened for its detail.
-   */
-  --notification-pile-headroom: 1rem;
   --border: rgba(255, 255, 255, 0.12);
   --shadow-cinematic-card:
     0 30px 90px rgba(0, 0, 0, 0.42), 0 10px 28px rgba(0, 0, 0, 0.34),
@@ -138,9 +106,9 @@
   --shadow-floating-panel:
     0 28px 100px rgba(0, 0, 0, 0.62), 0 10px 28px rgba(0, 0, 0, 0.44),
     inset 0 1px 0 rgba(255, 255, 255, 0.09);
-  --shadow-navbar-glass:
-    0 18px 56px rgba(0, 0, 0, 0.34), 0 1px 0 rgba(255, 255, 255, 0.055),
-    inset 0 -1px 0 rgba(255, 255, 255, 0.055);
+  --filter-navbar-ink: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.75))
+    drop-shadow(0 1px 6px rgba(0, 0, 0, 0.5))
+    drop-shadow(0 2px 16px rgba(0, 0, 0, 0.35));
   --shadow-artwork-glow:
     0 34px 120px rgba(0, 0, 0, 0.68), 0 12px 36px rgba(0, 0, 0, 0.48),
     0 0 54px color-mix(in srgb, var(--accent) 14%, transparent);
@@ -164,24 +132,6 @@
     --accent 260ms cubic-bezier(0.22, 1, 0.36, 1),
     --accent-hover 260ms cubic-bezier(0.22, 1, 0.36, 1),
     --accent-soft 260ms cubic-bezier(0.22, 1, 0.36, 1); */
-}
-
-/*
- * Resolved on the pile rather than on :root. A custom property is computed
- * where it is declared, so a formula on :root would be fixed against :root's
- * lane — and the pile writes the lane it actually stands on to itself
- * (`useLaneTravel`), which is the room it really has. Standing below a
- * control it no longer follows, that lane is its own floor, not the
- * control's top.
- */
-[data-notification-host] {
-  --notification-pile-max-height: min(
-    calc(
-      100dvh - var(--notification-pile-headroom) -
-        var(--notification-lane-bottom) - var(--safe-area-inset-top)
-    ),
-    calc(300dvh / 4 - var(--notification-lane-bottom))
-  );
 }
 
 * {
@@ -217,15 +167,6 @@ body,
 @media (min-width: 640px) {
   .seyirlik-layout-main {
     padding-top: calc(5rem + var(--safe-area-inset-top));
-  }
-
-  :root {
-    --notification-lane-floor: max(1.5rem, var(--safe-area-inset-bottom));
-    --notification-lane-bottom: max(
-      var(--notification-lane-floor),
-      var(--seyirlik-bottom-chrome, 0px)
-    );
-    --notification-pile-headroom: 1.5rem;
   }
 }
 
@@ -288,8 +229,12 @@ img {
   box-shadow: var(--shadow-floating-panel);
 }
 
-.shadow-navbar-glass {
-  box-shadow: var(--shadow-navbar-glass);
+/* What the navbar draws stands on: over a hero the bar is clear, and the
+   artwork behind it can be as light as the ink. A filter, never a
+   text-shadow or box-shadow, so it follows the glyphs and icons and draws
+   after any clip their animation frames make. Black only. */
+.navbar-ink-shadow {
+  filter: var(--filter-navbar-ink);
 }
 
 .shadow-artwork-glow {
@@ -500,7 +445,7 @@ img {
     transition-duration: 0.01ms !important;
   }
 
-  .shimmer {
+  .shimmer::after {
     animation: none;
   }
 }
@@ -519,38 +464,6 @@ img {
   width: 0;
   height: 0;
   display: none;
-}
-
-/*
- * The ends of the opened notification pile.
- *
- * A scrolling column that simply stops at its boundary reads as a card sliced
- * through; fading the last few pixels reads as one that carries on past the
- * edge, which is what it does.
- *
- * Only the ends something is actually running past, though. A gradient at an
- * edge no card is crossing is not a soft edge at all — it is a veil over the
- * last card, and the thing it veiled was the progress bar along the foot of
- * the one at the front. The host measures which ends are overrun and hands the
- * answer down as these two lengths.
- */
-.notification-pile-fade {
-  --pile-fade-top: 0px;
-  --pile-fade-bottom: 0px;
-  -webkit-mask-image: linear-gradient(
-    to bottom,
-    transparent 0,
-    #000 var(--pile-fade-top),
-    #000 calc(100% - var(--pile-fade-bottom)),
-    transparent 100%
-  );
-  mask-image: linear-gradient(
-    to bottom,
-    transparent 0,
-    #000 var(--pile-fade-top),
-    #000 calc(100% - var(--pile-fade-bottom)),
-    transparent 100%
-  );
 }
 
 /*

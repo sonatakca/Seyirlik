@@ -4,16 +4,12 @@ import {
   DEFAULT_READER_SETTINGS,
   EPUB_PREPARATION_TIMEOUT_MS,
   EPUB_REQUEST_CREDENTIALS,
-  READER_BOOKMARKS_KEY,
   READER_PROGRESS_KEY,
   READER_SETTINGS_KEY,
   getReaderFormat,
-  isHighlight,
   isReaderPlace,
-  readBookmarks,
   readReaderProgress,
   readStoredReaderSettings,
-  writeBookmarks,
   writeReaderProgress,
 } from "./reader/readerModel";
 
@@ -53,9 +49,9 @@ describe("readerModel", () => {
       lineHeight: 1.25,
       width: 48,
       spotlight: "soft",
-      lightShape: "paragraph",
+      lightShape: "line",
       paragraphReach: 0.3,
-      lineReach: 0.18,
+      lineReach: 0.85,
       showRuler: true,
       showTimeLeft: true,
     });
@@ -103,9 +99,9 @@ describe("readerModel", () => {
       lineHeight: 1.7,
       width: 74,
       spotlight: "soft",
-      lightShape: "paragraph",
+      lightShape: "line",
       paragraphReach: 0.3,
-      lineReach: 0.18,
+      lineReach: 0.85,
       showRuler: true,
       showTimeLeft: true,
     });
@@ -161,26 +157,5 @@ describe("readerModel", () => {
     ]) {
       expect(isReaderPlace(broken)).toBe(false);
     }
-  });
-
-  it("keeps highlights beside bookmarks and drops an unknown colour", () => {
-    const base = { label: "Bir", progress: 0.1, createdAt: 1 };
-    writeBookmarks("book", [
-      { ...base, id: "a", cfi: "epubcfi(/6/4!/4/2/1:0)", excerpt: "Yer" },
-      {
-        ...base,
-        id: "b",
-        cfi: "epubcfi(/6/4!/4/2,/1:0,/1:12)",
-        excerpt: "Vurgulanan cümle.",
-        color: "green",
-      },
-    ]);
-    const stored = JSON.parse(localStorage.getItem(READER_BOOKMARKS_KEY)!);
-    stored.book.push({ ...stored.book[1], id: "c", color: "teal" });
-    localStorage.setItem(READER_BOOKMARKS_KEY, JSON.stringify(stored));
-
-    const list = readBookmarks("book");
-    expect(list.map((bookmark) => bookmark.id)).toEqual(["a", "b"]);
-    expect(list.map(isHighlight)).toEqual([false, true]);
   });
 });

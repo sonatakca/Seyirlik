@@ -145,6 +145,35 @@ export interface AcquisitionService {
    * row moved under it; throws when it is in a state that cannot be stopped.
    */
   blocklist(acquisitionId: string, signal?: AbortSignal): Promise<boolean>;
+  /**
+   * Holds or releases the job this acquisition owns in SABnzbd's queue.
+   * Throws `AcquisitionControlError` when it has no job waiting there.
+   */
+  setPaused(
+    acquisitionId: string,
+    paused: boolean,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  /**
+   * Moves the job this acquisition owns to a place in SABnzbd's queue, from
+   * 0, and returns the place it was given. Same error as `setPaused`.
+   */
+  move(
+    acquisitionId: string,
+    index: number,
+    signal?: AbortSignal,
+  ): Promise<number>;
+}
+
+/** Why a queue control could not be applied to an acquisition. */
+export class AcquisitionControlError extends Error {
+  readonly kind: "not-found" | "not-in-queue";
+
+  constructor(kind: "not-found" | "not-in-queue", message: string) {
+    super(message);
+    this.name = "AcquisitionControlError";
+    this.kind = kind;
+  }
 }
 
 export function createAcquisitionService({
@@ -184,6 +213,40 @@ export function createAcquisitionService({
     };
     assertTransition(record.state, next);
     return store.update(record.id, record.state, patch, detail);
+  }
+
+  /**
+   * The queue job this acquisition owns, or an error saying why there is none.
+   *
+   * Owned means what the ownership rule says everywhere else: filed under
+   * Seyirlik's category and named with this row's key. A job that is only in
+   * history has finished downloading, and holding or moving it means nothing.
+   */
+  async function ownedQueueJob(
+    acquisitionId: string,
+    signal: AbortSignal | undefined,
+  ): Promise<{ job: SabJob; queueLength: number }> {
+    const record = await store.get(acquisitionId);
+    if (!record) {
+      throw new AcquisitionControlError("not-found", "No such acquisition.");
+    }
+    const queue = await sab.listQueue(signal);
+    const job =
+      (record.externalId
+        ? queue.find((entry) => entry.nzoId === record.externalId)
+        : undefined) ??
+      queue.find((entry) => entry.name === record.idempotencyKey);
+    if (
+      !job ||
+      job.name !== record.idempotencyKey ||
+      (job.category !== undefined && job.category !== category)
+    ) {
+      throw new AcquisitionControlError(
+        "not-in-queue",
+        "This download is not waiting in the download client's queue.",
+      );
+    }
+    return { job, queueLength: queue.length };
   }
 
   async function fail(
@@ -494,6 +557,22 @@ export function createAcquisitionService({
           .catch(() => undefined);
       }
       return true;
+    },
+
+    async setPaused(acquisitionId, paused, signal) {
+      const { job } = await ownedQueueJob(acquisitionId, signal);
+      await (paused
+        ? sab.pauseJob(job.nzoId, signal)
+        : sab.resumeJob(job.nzoId, signal));
+    },
+
+    async move(acquisitionId, index, signal) {
+      const { job, queueLength } = await ownedQueueJob(acquisitionId, signal);
+      // Past the end means last; SABnzbd itself refuses a place it lacks.
+      const place = Math.max(0, Math.min(index, queueLength - 1));
+      // SABnzbd answers a move onto its own place as a failure.
+      if (job.queuePosition === place) return place;
+      return sab.moveJob(job.nzoId, place, signal);
     },
 
     async cancel(acquisitionId, signal) {

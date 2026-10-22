@@ -19,7 +19,7 @@ it("keeps the logo's shadow in proportion to a small poster", () => {
     <TitlePoster itemId="a" title="A" artwork={artwork} width={48} />,
   );
   const logo = container.querySelector(
-    '[data-logo-layout="true"] img',
+    '[data-logo-layout="true"] [data-logo-shadow="true"]',
   ) as HTMLElement;
   const backdrop = container.querySelector(
     "[data-logo-shadow-backdrop]",
@@ -36,7 +36,7 @@ it("draws a card-sized poster with the card's own shadow", () => {
     <TitlePoster itemId="a" title="A" artwork={artwork} width={200} />,
   );
   const logo = container.querySelector(
-    '[data-logo-layout="true"] img',
+    '[data-logo-layout="true"] [data-logo-shadow="true"]',
   ) as HTMLElement;
   expect(logo.style.filter.replace(/\s+/g, "")).toBe(
     getLogoShadowFilter(1)!.replace(/\s+/g, ""),

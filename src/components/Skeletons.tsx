@@ -2,7 +2,9 @@ import { useLanguage } from "../i18n/LanguageContext";
 import { HomeHeroSkeleton, TitleHeroSkeleton } from "./home/HomeHeroSkeleton";
 import type { MediaItem } from "../lib/types";
 import { useIsPhoneView } from "../hooks/useIsPhoneView";
+import { HeroBackButtonPlaceholder } from "./mobile/HeroBackButton";
 import { PhoneTitleHeroSkeleton } from "./mobile/PhoneTitleHeroSkeleton";
+import { PhoneHomeHeroSkeleton } from "./mobile/phoneHomeHeroFrame";
 import { isOfflineSupported } from "../lib/offline/offlineLibrary";
 import { AnimatedText } from "./AnimatedText";
 import { AnimatedWidth } from "./AnimatedWidth";
@@ -238,7 +240,7 @@ export function HomeSkeleton() {
 
   return (
     <div className="layout-no-offset">
-      <div className="min-h-[100svh] full-bleed">
+      <div className="full-bleed flow-root">
         {/* Placed from the hero's own geometry, so nothing moves when it
             arrives. */}
         <HomeHeroSkeleton />
@@ -249,6 +251,53 @@ export function HomeSkeleton() {
         <MediaRowSkeleton title={t("home.latestAddedMovies")} />
         <ShowRowSkeleton title={t("home.latestAddedShows")} />
         <BookRowSkeleton title={t("home.latestAddedBooks")} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The page while it has no data: the hero's own skeleton, built from the
+ * hero's own frame, so nothing moves when the hero mounts over it, and the
+ * rows' placeholders under it.
+ */
+export function MobileHomeSkeleton({ isPhone }: { isPhone: boolean }) {
+  return (
+    <div className="layout-no-offset min-h-screen pb-[calc(5.75rem+env(safe-area-inset-bottom))]">
+      {isPhone ? (
+        <PhoneHomeHeroSkeleton />
+      ) : (
+        <div className="full-bleed">
+          <HomeHeroSkeleton fit="mobile" />
+        </div>
+      )}
+
+      <div className="mx-auto w-full px-4 pt-5">
+        <div className="mb-8">
+          <div className="shimmer mb-4 h-5 w-40 rounded-full" />
+          <div className="flex gap-4 overflow-hidden">
+            {Array.from({ length: 3 }, (_, index) => (
+              <div key={index} className="w-56 shrink-0 sm:w-64">
+                <div className="shimmer aspect-video w-full rounded-xl" />
+                <div className="mt-3 space-y-2">
+                  <div className="shimmer h-4 w-3/4 rounded-full" />
+                  <div className="shimmer h-3 w-1/2 rounded-full" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="mb-8">
+          <div className="shimmer mb-4 h-5 w-32 rounded-full" />
+          <div className="flex gap-4 overflow-hidden">
+            {Array.from({ length: 4 }, (_, index) => (
+              <div key={index} className="w-32 shrink-0 sm:w-40">
+                <div className="shimmer aspect-[2/3] w-full rounded-xl" />
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -601,28 +650,22 @@ function MobileDetailsSkeleton({
   kind: "movie" | "show";
   item?: MediaItem;
 }) {
-  // A phone keeps its own title hero; a tablet gets the desktop's.
+  // A phone or an upright tablet has the phone's title hero; a tablet on its
+  // side gets the desktop's.
   const isPhone = useIsPhoneView();
   return (
     <div className="layout-no-offset min-w-0 pb-7">
-      {/* The page's own furniture, where the page puts it, over the title
-          hero's skeleton at the hero's own height. */}
-      <div className="fixed left-4 top-[calc(4.5rem+env(safe-area-inset-top))] z-[80]">
-        <div className="shimmer h-12 w-12 rounded-full" />
-      </div>
-      {/* A phone's watched button is in the hero's action row. */}
-      {isPhone ? null : (
-        <div
-          className="shimmer fixed right-4 top-[calc(4.5rem+env(safe-area-inset-top))] z-[80] h-10 rounded-full"
-          style={{ width: kind === "show" ? 252 : 187 }}
-        />
-      )}
+      {/* A phone's back button is pinned over its hero, and its watched
+          button sits in the hero's action row; the wider title hero's
+          skeleton holds both itself, as the hero does. */}
+      {isPhone ? <HeroBackButtonPlaceholder /> : null}
       <div className="full-bleed relative">
         {isPhone ? (
           <PhoneTitleHeroSkeleton kind={kind} item={item} />
         ) : (
           <TitleHeroSkeleton
             fit="mobile"
+            kind={kind}
             item={item}
             canDownload={kind === "movie" && isOfflineSupported()}
           />
@@ -633,9 +676,9 @@ function MobileDetailsSkeleton({
       ) : (
         <MobileTrailerShelfSkeleton />
       )}
-      <MobileSimilarShelfSkeleton />
       <MobileCastSkeleton />
       <MobileAboutInformationSkeleton kind={kind} />
+      <MobileSimilarShelfSkeleton />
     </div>
   );
 }
@@ -656,16 +699,9 @@ function HeroLibrarySkeleton({
 
   return (
     <div className="layout-no-offset min-w-0 pb-7">
-      {/* The page's own furniture, where the page puts it. */}
-      <div className="fixed left-5 top-24 z-[80] lg:left-8">
-        <BackButtonSkeleton />
-      </div>
-      <div
-        className="shimmer fixed right-5 top-24 z-[80] h-10 rounded-full lg:right-8"
-        style={{ width: kind === "show" ? 294 : 218 }}
-      />
-      <div className="full-bleed relative min-h-[100svh]">
+      <div className="full-bleed relative flow-root">
         <TitleHeroSkeleton
+          kind={kind}
           item={item}
           canDownload={kind === "movie" && isOfflineSupported()}
         />

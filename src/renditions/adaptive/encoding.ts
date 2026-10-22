@@ -44,6 +44,14 @@ import {
 /** Group id the master playlist ties every video variant to. */
 export const ADAPTIVE_AUDIO_GROUP = "aud";
 
+/** A rung's encoder rate: the average asked for and the cap over it. */
+export interface RungBitrate {
+  /** `-b`: the average the encoder aims for. */
+  target: number;
+  /** `-maxrate`: always above the target; equal would select CBR. */
+  max: number;
+}
+
 export interface AdaptiveVideoOutput {
   /** Standard class (144…2160) that selects the rate policy. */
   qualityHeight: number;
@@ -59,6 +67,11 @@ export interface AdaptiveVideoOutput {
    * frame count, so a 30 and a 60 rung still cut on the same instants.
    */
   frameRate?: number;
+  /**
+   * This title's rate for the rung, when a rate probe found the table's more
+   * than the picture needs (see `rateProbe.ts`). Absent, the table applies.
+   */
+  bitrate?: RungBitrate;
 }
 
 export type AdaptiveAudioAction = "copy" | "transcode";
@@ -263,14 +276,19 @@ function pixelFormatFor(
   encoder: RenditionVideoEncoder,
   hdr: RenditionHdrSignal | undefined,
 ): string {
+  // NVENC takes 10-bit only as P010; it has no planar yuv420p10le input.
   if (hdr)
-    return encoder === "hevc_qsv" || encoder === "hevc_videotoolbox"
+    return encoder === "hevc_qsv" ||
+      encoder === "hevc_videotoolbox" ||
+      encoder === "hevc_nvenc"
       ? "p010le"
       : "yuv420p10le";
   return encoder === "h264_qsv" ||
     encoder === "hevc_qsv" ||
     encoder === "h264_videotoolbox" ||
-    encoder === "hevc_videotoolbox"
+    encoder === "hevc_videotoolbox" ||
+    encoder === "h264_nvenc" ||
+    encoder === "hevc_nvenc"
     ? "nv12"
     : "yuv420p";
 }
@@ -410,6 +428,32 @@ function qsvTargetBitrate(specifier: string, bitrate: number): string[] {
   return [`-b:${specifier}`, String(bitrate)];
 }
 
+/**
+ * NVENC's rate control: variable bitrate at the rung's target, held under the
+ * cap that follows, like QSV's.
+ *
+ * `vbr` is named rather than left to the preset, which may pick constant QP
+ * when no rate mode is given. `multipass qres` runs a quarter-resolution first
+ * pass per frame, so the bits go where the picture needs them while the
+ * average still lands on the target. Spatial AQ moves bits from flat areas to
+ * detailed ones within a frame, which is where a fixed-rate ladder otherwise
+ * shows its blocks. `tune hq` is the quality tuning, not low latency.
+ */
+function nvencTargetBitrate(specifier: string, bitrate: number): string[] {
+  return [
+    `-tune:${specifier}`,
+    "hq",
+    `-rc:${specifier}`,
+    "vbr",
+    `-multipass:${specifier}`,
+    "qres",
+    `-spatial-aq:${specifier}`,
+    "1",
+    `-b:${specifier}`,
+    String(bitrate),
+  ];
+}
+
 function videoEncoderArgsFor(
   encoder: RenditionVideoEncoder,
   ordinal: number,
@@ -422,6 +466,10 @@ function videoEncoderArgsFor(
 ): string[] {
   const family = codecFamilyForEncoder(encoder);
   const policy = getEncodingPolicy(output.qualityHeight, family);
+  const rate: RungBitrate = output.bitrate ?? {
+    target: policy.expectedVideoBitrate,
+    max: policy.maxVideoBitrate,
+  };
   // A rung encoded at half the source rate has half the macroblock rate and
   // half the frames in a two-second GOP, so both the level and `-g` have to be
   // read from the rung rather than from the source.
@@ -441,7 +489,13 @@ function videoEncoderArgsFor(
     args.push(
       `-profile:${specifier}`,
       hdr ? "main10" : "main",
-      ...qsvTargetBitrate(specifier, policy.expectedVideoBitrate),
+      ...qsvTargetBitrate(specifier, rate.target),
+    );
+  } else if (encoder === "hevc_nvenc") {
+    args.push(
+      `-profile:${specifier}`,
+      hdr ? "main10" : "main",
+      ...nvencTargetBitrate(specifier, rate.target),
     );
   } else if (encoder === "libx265") {
     args.push(`-crf:${specifier}`, String(policy.crf));
@@ -450,11 +504,19 @@ function videoEncoderArgsFor(
       `-profile:${specifier}`,
       hdr ? "main10" : "main",
       `-b:${specifier}`,
-      String(policy.expectedVideoBitrate),
+      String(rate.target),
     );
   } else if (encoder === "h264_qsv") {
     args.push(
-      ...qsvTargetBitrate(specifier, policy.expectedVideoBitrate),
+      ...qsvTargetBitrate(specifier, rate.target),
+      `-profile:${specifier}`,
+      "high",
+      `-level:${specifier}`,
+      levelFor(output, family, rungFrameRate),
+    );
+  } else if (encoder === "h264_nvenc") {
+    args.push(
+      ...nvencTargetBitrate(specifier, rate.target),
       `-profile:${specifier}`,
       "high",
       `-level:${specifier}`,
@@ -463,7 +525,7 @@ function videoEncoderArgsFor(
   } else if (encoder === "h264_videotoolbox") {
     args.push(
       `-b:${specifier}`,
-      String(policy.expectedVideoBitrate),
+      String(rate.target),
       `-profile:${specifier}`,
       "high",
       `-level:${specifier}`,
@@ -485,13 +547,17 @@ function videoEncoderArgsFor(
     // in fragmented MP4. Epoch assembly requires a zero-based local timeline;
     // progressive MP4 edit lists cannot repair independently joined fragments.
     args.push(`-bf:${specifier}`, "0", `-async_depth:${specifier}`, "1");
+  } else if (encoder === "h264_nvenc" || encoder === "hevc_nvenc") {
+    // The same timeline rule. NVENC's presets enable B-frames, which delay the
+    // first presentation time just as QSV's do.
+    args.push(`-bf:${specifier}`, "0");
   }
 
   args.push(
     `-maxrate:${specifier}`,
-    String(policy.maxVideoBitrate),
+    String(rate.max),
     `-bufsize:${specifier}`,
-    String(policy.maxVideoBitrate * 2),
+    String(rate.max * 2),
   );
 
   // Colour has to be written explicitly. An HDR rendition that inherits nothing
@@ -806,6 +872,80 @@ export function buildAdaptivePackageFfmpegArgs({
     `${outputRoot}/%v/${ADAPTIVE_PLAYLIST_FILE}`,
   );
 
+  return args;
+}
+
+/**
+ * One short stretch of the source, encoded exactly as the ladder would be.
+ *
+ * The same filter graph and the same per-rung encoder arguments as a real
+ * epoch, so what the rate probe measures is what the job will produce; only
+ * the muxer differs, a plain MP4 with one video track per rung in place of
+ * HLS.
+ */
+export function buildAdaptiveSampleFfmpegArgs({
+  inputPath,
+  startSeconds,
+  durationSeconds,
+  outputPath,
+  videoOutputs,
+  encoder,
+  preset,
+  frameRate,
+  segmentSeconds = SEGMENT_TARGET_SECONDS,
+  filterComplexThreads,
+}: {
+  inputPath: string;
+  startSeconds: number;
+  durationSeconds: number;
+  outputPath: string;
+  videoOutputs: AdaptiveVideoOutput[];
+  encoder: RenditionVideoEncoder;
+  preset: string;
+  frameRate?: number;
+  segmentSeconds?: number;
+  filterComplexThreads?: number;
+}): string[] {
+  const args = [
+    "-hide_banner",
+    "-nostdin",
+    "-loglevel",
+    "error",
+    "-y",
+    ...(filterComplexThreads === undefined
+      ? []
+      : ["-filter_complex_threads", String(filterComplexThreads)]),
+    ...(startSeconds > 0 ? ["-ss", startSeconds.toFixed(6)] : []),
+    "-t",
+    durationSeconds.toFixed(6),
+    "-i",
+    inputPath,
+    "-filter_complex",
+    buildAdaptiveFilterComplex({
+      videoOutputs,
+      encoder,
+      trimSeekPreroll: startSeconds > 0,
+    }),
+  ];
+  videoOutputs.forEach((_, index) => {
+    args.push("-map", `[out${index}]`);
+  });
+  args.push("-an", "-sn", "-dn");
+  videoOutputs.forEach((output, index) => {
+    args.push(
+      ...videoEncoderArgsFor(
+        encoder,
+        index,
+        output,
+        preset,
+        undefined,
+        frameRate,
+        segmentSeconds,
+        undefined,
+      ),
+    );
+  });
+  args.push("-f", "mp4", outputPath);
   return args;
 }
 

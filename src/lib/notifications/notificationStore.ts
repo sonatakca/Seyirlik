@@ -75,7 +75,111 @@ const listeners = new Set<Listener>();
 /** Beyond this the oldest are dropped; nobody reads a hundred of them. */
 const MAX_NOTIFICATIONS = 12;
 
+/*
+ * Lifetimes run here, not in whatever draws them. Nothing is on screen until
+ * someone opens the notification centre, so a short notice must still expire
+ * on its own, and its clock holds while the centre is open and being read.
+ */
+interface Clock {
+  createdAt: number;
+  remaining: number;
+  startedAt: number;
+  timer: number | undefined;
+}
+const clocks = new Map<string, Clock>();
+let clocksHeld = false;
+
+function stopClock(clock: Clock): void {
+  if (clock.timer === undefined) return;
+  window.clearTimeout(clock.timer);
+  clock.timer = undefined;
+  clock.remaining = Math.max(
+    0,
+    clock.remaining - (Date.now() - clock.startedAt),
+  );
+}
+
+function startClock(id: string, clock: Clock): void {
+  if (clock.timer !== undefined || clocksHeld) return;
+  clock.startedAt = Date.now();
+  clock.timer = window.setTimeout(() => {
+    clocks.delete(id);
+    dismissNotification(id);
+  }, clock.remaining);
+}
+
+function syncClocks(): void {
+  if (typeof window === "undefined") return;
+  const live = new Set<string>();
+  for (const entry of notifications) {
+    if (entry.life === "persistent") continue;
+    live.add(entry.id);
+    let clock = clocks.get(entry.id);
+    if (!clock || clock.createdAt !== entry.createdAt) {
+      if (clock) stopClock(clock);
+      clock = {
+        createdAt: entry.createdAt,
+        remaining: Math.max(
+          0,
+          NOTIFICATION_LIFETIMES_MS[entry.life] -
+            (Date.now() - entry.createdAt),
+        ),
+        startedAt: Date.now(),
+        timer: undefined,
+      };
+      clocks.set(entry.id, clock);
+    }
+    startClock(entry.id, clock);
+  }
+  for (const [id, clock] of clocks) {
+    if (live.has(id)) continue;
+    stopClock(clock);
+    clocks.delete(id);
+  }
+}
+
+/** Holds every notice's clock while the centre is open, and lets them go. */
+export function holdNotificationClocks(hold: boolean): void {
+  if (clocksHeld === hold) return;
+  clocksHeld = hold;
+  for (const [id, clock] of clocks) {
+    if (hold) stopClock(clock);
+    else startClock(id, clock);
+  }
+}
+
+/*
+ * What has been looked at. A notice is new until the centre is opened after
+ * it arrived or last changed; the bell shows that there is something new
+ * without putting the notice itself on screen.
+ */
+let seenAt = 0;
+
+export function getNotificationsSeenAt(): number {
+  return seenAt;
+}
+
+export function markNotificationsSeen(): void {
+  seenAt = Date.now();
+  emit();
+}
+
+/**
+ * New since the centre was last opened: it arrived since, or it came to an
+ * outcome since. A running job's progress ticks are not news.
+ */
+export function isNotificationUnseen(
+  entry: SeyirlikNotification,
+  since: number = seenAt,
+): boolean {
+  if ((entry.firstShownAt ?? entry.createdAt) > since) return true;
+  return entry.tone !== "progress" && entry.tone !== "info"
+    ? (entry.updatedAt ?? entry.createdAt) > since
+    : false;
+}
+
 function emit(): void {
+  syncClocks();
   for (const listener of listeners) listener();
 }
 
@@ -223,4 +327,8 @@ export function resetNotificationsForTests(): void {
   history = [];
   keyed.clear();
   listeners.clear();
+  for (const clock of clocks.values()) stopClock(clock);
+  clocks.clear();
+  clocksHeld = false;
+  seenAt = 0;
 }

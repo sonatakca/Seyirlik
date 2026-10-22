@@ -147,6 +147,12 @@ export interface JobHandlerOptions {
   /** Writes NFO metadata as the final, observable stage of a library scan. */
   nfoService?: NfoService;
   /**
+   * Whether a scan deletes titles that stayed missing past the grace period.
+   * Defaults to true; see `ReconcileOptions.deleteMissing` for the host that
+   * turns it off.
+   */
+  deleteMissing?: boolean;
+  /**
    * Tidies the media folders before they are read. Absent, or in `off` mode,
    * a scan never writes to the media volume.
    */
@@ -365,6 +371,7 @@ export function createJobHandlers({
   nfoService,
   organizer,
   catalogue,
+  deleteMissing = true,
 }: JobHandlerOptions): Record<string, JobHandler> {
   /**
    * Live processing work, meaning queued as much as running.
@@ -1258,6 +1265,7 @@ export function createJobHandlers({
       libraryId,
       scan: mergeScans(results),
       allowMassRemoval: job.payload.allowMassRemoval === true,
+      deleteMissing,
     });
     const reconciled: MaintenanceCounters = {
       filesDiscovered: discovered,

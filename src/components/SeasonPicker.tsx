@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, ChevronDown } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { move, REST, settle } from "../lib/compositorMotion";
 import { useNavigate } from "react-router-dom";
 import { glassPillButton } from "./ui/glassControlStyles";
 
@@ -120,18 +121,18 @@ export function SeasonPicker({
             initial={
               shouldReduceMotion
                 ? { opacity: 0 }
-                : { opacity: 0, y: -6, scale: 0.94 }
+                : { opacity: 0, transform: move({ y: -6, scale: 0.94 }) }
             }
             animate={{
               opacity: 1,
-              y: 0,
-              scale: 1,
+              ...(shouldReduceMotion ? {} : settle),
               transition: { type: "spring", bounce: 0, duration: 0.32 },
             }}
             exit={{
               opacity: 0,
-              y: shouldReduceMotion ? 0 : -4,
-              scale: shouldReduceMotion ? 1 : 0.97,
+              ...(shouldReduceMotion
+                ? {}
+                : { transform: [REST, move({ y: -4, scale: 0.97 })] }),
               transition: { duration: 0.12, ease: [0.4, 0, 1, 1] },
             }}
             style={{ transformOrigin: "100% 0%" }}
@@ -147,10 +148,14 @@ export function SeasonPicker({
 
               return (
                 <motion.button
-                  initial={shouldReduceMotion ? false : { opacity: 0, x: 8 }}
+                  initial={
+                    shouldReduceMotion
+                      ? false
+                      : { opacity: 0, transform: move({ x: 8 }) }
+                  }
                   animate={{
                     opacity: 1,
-                    x: 0,
+                    ...(shouldReduceMotion ? {} : settle),
                     transition: {
                       duration: 0.22,
                       delay: 0.04 + Math.min(index * 0.028, 0.2),

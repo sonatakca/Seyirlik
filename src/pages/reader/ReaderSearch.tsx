@@ -1,19 +1,29 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Search } from "lucide-react";
 
 import { useLanguage } from "../../i18n/LanguageContext";
 import {
   searchBook,
+  type BookSearchFound,
   type BookSearchHit,
   type BookSearchOutcome,
 } from "../../lib/bookSearchApi";
+import { searchExcerpt } from "../../lib/bookSearchText";
+import { formatPercent } from "./readerText";
 
 /** How often a book being prepared is asked about again. */
 const PREPARING_POLL_MS = 2500;
 
 /**
- * The contents drawer's search: a moment described in the reader's own words,
- * answered with the passages that mean it, whatever words the book used.
+ * How long a search may take before the wait is explained. A warm search
+ * answers well inside this; a slower one is the server loading its model.
+ */
+const SLOW_SEARCH_MS = 1500;
+
+/**
+ * The contents drawer's search: a name, a word or a line of the book, or a
+ * moment described in the reader's own words, answered with the passages
+ * that hold those words or mean that moment, whatever words the book used.
  *
  * Opening the tab asks the server to prepare the book (a few minutes, once per
  * book); until then it shows how far along that is and asks again.
@@ -21,17 +31,26 @@ const PREPARING_POLL_MS = 2500;
 export function ReaderSearch({
   itemId,
   active,
+  hidden = false,
   chapterOf,
+  bookPlaceOf,
   onShow,
 }: {
   itemId: string;
   /** The tab is on screen: prepare the book, and keep asking while it prepares. */
   active: boolean;
+  /** Another tab is shown; the search and its results wait for it. */
+  hidden?: boolean;
   /** The chapter a section belongs to, as the contents list names it. */
   chapterOf: (section: number) => string | null;
-  onShow: (hit: BookSearchHit) => void;
+  /**
+   * A place in a section as a share of the whole book, as the reader counts
+   * it; null until the reader has measured the book.
+   */
+  bookPlaceOf?: (section: number, place: number) => number | null;
+  onShow: (hit: BookSearchHit, found: BookSearchFound) => void;
 }) {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const [query, setQuery] = useState("");
   /** The question last sent; empty until one is. */
   const [asked, setAsked] = useState("");
@@ -40,9 +59,23 @@ export function ReaderSearch({
   const [outcome, setOutcome] = useState<BookSearchOutcome | null>(null);
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [slow, setSlow] = useState(false);
+  /** The question whose answer is on screen. */
+  const answered = useRef("");
 
   useEffect(() => {
-    if (!active) {
+    if (!busy) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => setSlow(true), SLOW_SEARCH_MS);
+    return () => window.clearTimeout(timer);
+  }, [busy]);
+
+  useEffect(() => {
+    // Coming back to a question already answered asks nothing again.
+    const question = JSON.stringify([itemId, asked, round]);
+    if (!active || answered.current === question) {
       return;
     }
 
@@ -54,6 +87,9 @@ export function ReaderSearch({
         setOutcome(next);
         setFailed(false);
         setBusy(false);
+        if (next.state === "ready") {
+          answered.current = question;
+        }
 
         if (next.state === "preparing") {
           pollTimer = window.setTimeout(
@@ -76,8 +112,36 @@ export function ReaderSearch({
   }, [active, asked, itemId, round]);
 
   const hits = outcome?.state === "ready" && asked ? outcome.hits : null;
+  const found: BookSearchFound =
+    outcome?.state === "ready"
+      ? {
+          terms: outcome.terms ?? [],
+          phrase: outcome.phrase ?? [],
+          exact: outcome.exact ?? false,
+        }
+      : { terms: [], phrase: [] };
 
   const status = (() => {
+    // Until the answer comes, whatever is on screen answered something else:
+    // saying "nothing matches" now would send the reader away too early.
+    if (busy) {
+      return (
+        <div className="rd-search-preparing" role="status">
+          <p className="rd-search-preparing-title">
+            {t("reader.search.searching")}
+          </p>
+          <div className="rd-search-meter" data-searching aria-hidden="true">
+            <span />
+          </div>
+          {slow ? (
+            <p className="rd-search-slow">
+              {t("reader.search.searchingDetail")}
+            </p>
+          ) : null}
+        </div>
+      );
+    }
+
     if (failed) {
       return <p className="rd-empty">{t("reader.search.failed")}</p>;
     }
@@ -108,7 +172,10 @@ export function ReaderSearch({
           >
             <span
               style={{
-                width: progress === null ? undefined : `${progress * 100}%`,
+                transform:
+                  progress === null
+                    ? undefined
+                    : `translateX(${(progress - 1) * 100}%)`,
               }}
             />
           </div>
@@ -128,7 +195,7 @@ export function ReaderSearch({
   })();
 
   return (
-    <div className="rd-search" role="tabpanel">
+    <div className="rd-search" role="tabpanel" hidden={hidden}>
       <form
         className="rd-search-field"
         role="search"
@@ -139,6 +206,7 @@ export function ReaderSearch({
           if (next) {
             // Results already on screen stay, dimmed, until the new ones come.
             setBusy(true);
+            setSlow(false);
             setAsked(next);
             setRound((value) => value + 1);
           }
@@ -161,25 +229,41 @@ export function ReaderSearch({
 
       {hits && hits.length > 0 ? (
         <ol className="rd-list" aria-busy={busy || undefined}>
-          {hits.map((hit) => (
-            <li
-              key={`${hit.section}:${hit.block}:${hit.anchor}`}
-              className="rd-bookmark rd-search-hit"
-            >
-              <button
-                type="button"
-                className="rd-bookmark-go"
-                onClick={() => onShow(hit)}
+          {hits.map((hit) => {
+            const excerpt = searchExcerpt(hit.text, found);
+            const inBook = bookPlaceOf?.(hit.section, hit.place ?? 0) ?? null;
+            return (
+              <li
+                key={`${hit.section}:${hit.block}:${hit.anchor}`}
+                className="rd-bookmark rd-search-hit"
               >
-                <span className="rd-bookmark-excerpt">{hit.text}</span>
-                <span className="rd-bookmark-label">
-                  <span>
-                    {chapterOf(hit.section) ?? t("reader.search.inBook")}
+                <button
+                  type="button"
+                  className="rd-bookmark-go"
+                  onClick={() => onShow(hit, found)}
+                >
+                  <span className="rd-bookmark-excerpt">
+                    {excerpt.cut ? "…" : null}
+                    {excerpt.parts.map((part, at) =>
+                      part.marked ? (
+                        <mark key={at}>{part.text}</mark>
+                      ) : (
+                        part.text
+                      ),
+                    )}
                   </span>
-                </span>
-              </button>
-            </li>
-          ))}
+                  <span className="rd-bookmark-label">
+                    <span>
+                      {chapterOf(hit.section) ?? t("reader.search.inBook")}
+                    </span>
+                    {inBook !== null ? (
+                      <b>{formatPercent(inBook, language)}</b>
+                    ) : null}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
         </ol>
       ) : null}
     </div>

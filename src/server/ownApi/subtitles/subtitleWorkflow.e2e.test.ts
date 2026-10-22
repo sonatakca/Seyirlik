@@ -44,6 +44,7 @@ import type {
   SubtitleExecutionRepository,
   SubtitleWork,
 } from "./subtitleExecution";
+import type { SubtitleCatalogueAttachment } from "./subtitleAttachment";
 import { createSubtitleJobHandlers, SUBTITLE_JOB_TYPES } from "./subtitleJobs";
 import {
   createProviderSession,
@@ -476,6 +477,7 @@ function handlersFor(
   world: World,
   providers: SubtitleProvider[],
   sessions: ProviderSessionManager,
+  catalogue?: SubtitleCatalogueAttachment,
 ): Record<string, JobHandler> {
   return createSubtitleJobHandlers(
     createSubtitleService({
@@ -484,6 +486,7 @@ function handlersFor(
       providers,
       sessions,
       playback: createPlaybackRefreshBoundary(),
+      ...(catalogue ? { catalogue } : {}),
     }),
     world.repository,
   );
@@ -899,6 +902,92 @@ describe("what a provider offers and what is accepted", () => {
         "utf8",
       ),
     ).toContain("The second one.");
+  });
+
+  /*
+   * The Sopranos, 2026-10-19: every chosen download was a pack without this
+   * episode. That is an absence, and it was being filed as failed/unknown.
+   */
+  it("calls it unavailable when every chosen download held nothing for this episode", async () => {
+    const provider = scriptedProvider({
+      search: {
+        outcome: "ok",
+        value: [
+          candidate({ candidateId: "a" }),
+          candidate({ candidateId: "b" }),
+        ],
+      },
+      download: { outcome: "empty" },
+    });
+    const result = await invoke(
+      handlersFor(world, [provider], steerableSessions()),
+      SUBTITLE_JOB_TYPES.run,
+    );
+    expect(result).toMatchObject({ state: "unavailable" });
+    expect(provider.calls.download).toBe(2);
+    expect(world.attempts.get(ATTEMPT_ID)!.failureClass).toBeNull();
+  });
+
+  /*
+   * The Sopranos S01E01–04 and E06, 2026-10-19: their sources were removed
+   * once their packages were whole, and every want failed as media-missing
+   * within milliseconds of search-started, before any provider was asked. The
+   * package plays and the sidecar is served on its own, so the subtitle is
+   * installed where the source was and recorded for the player at once — a
+   * scan reads such a title from its package and would never list it.
+   */
+  it("installs beside a source that has been removed, and lists it for the player", async () => {
+    await rm(path.join(world.root, RELATIVE));
+    const attached: Parameters<
+      SubtitleCatalogueAttachment["attachExternalSubtitle"]
+    >[0][] = [];
+    const provider = scriptedProvider({
+      search: { outcome: "ok", value: [candidate()] },
+      download: { outcome: "ok", value: payload("Fear is the mind-killer.") },
+    });
+    const result = await invoke(
+      handlersFor(world, [provider], steerableSessions(), {
+        attachExternalSubtitle: async (input) => {
+          attached.push(input);
+        },
+      }),
+      SUBTITLE_JOB_TYPES.run,
+    );
+
+    expect(result).toMatchObject({ state: "installed", duplicate: false });
+    expect(provider.calls.download).toBe(1);
+    expect(await world.sidecars()).toEqual([
+      "Dune (2021) [BluRay-1080p].tur.srt",
+    ]);
+    expect(world.installs).toEqual([
+      expect.objectContaining({
+        relativePath: "Movies/Dune (2021)/Dune (2021) [BluRay-1080p].tur.srt",
+      }),
+    ]);
+    expect(attached).toEqual([
+      {
+        mediaFileId: MEDIA_ID,
+        relativePath: "Movies/Dune (2021)/Dune (2021) [BluRay-1080p].tur.srt",
+        codec: "subrip",
+        isText: true,
+        language: "tur",
+        isForced: false,
+      },
+    ]);
+    expect(world.events.map((event) => event.type)).toContain(
+      "catalogue-attached",
+    );
+  });
+
+  it("still says the media is missing when the source's folder is gone", async () => {
+    await rm(path.join(world.root, path.dirname(RELATIVE)), {
+      recursive: true,
+    });
+    const result = await invoke(
+      handlersFor(world, [scriptedProvider({})], steerableSessions()),
+      SUBTITLE_JOB_TYPES.run,
+    );
+    expect(result).toMatchObject({ state: "failed", failure: "media-missing" });
   });
 
   /*

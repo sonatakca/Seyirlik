@@ -19,12 +19,34 @@ open with a signature). Reading only the first 64 bytes keeps a pass over a
 
 # Returns how many files it looked at and the full path of every damaged one,
 # so a caller can report both a clean pass and a refusal the same way.
-function Find-ZeroFilledFiles([string] $Root) {
+#
+# -SkipTopLevel leaves out whole top-level directories, for content that is
+# already known to be on disk and checked: staging hard-links an unchanged
+# node_modules from an earlier release, and those links are that release's own
+# files, flushed and checked when it was staged and never written since.
+function Find-ZeroFilledFiles([string] $Root, [string[]] $SkipTopLevel = @(), [string[]] $OnlyRelative = $null) {
   $probe = New-Object byte[] 64
   $damaged = New-Object System.Collections.Generic.List[string]
   $checked = 0
 
-  foreach ($file in Get-ChildItem -LiteralPath $Root -Recurse -File -Force) {
+  # Given a list, only those files: the ones a staging run actually wrote,
+  # when the rest are hard links to a release already checked.
+  $files = if ($null -ne $OnlyRelative) {
+    foreach ($relative in $OnlyRelative) {
+      Get-Item -LiteralPath (Join-Path $Root $relative) -Force
+    }
+  }
+  else {
+    foreach ($entry in Get-ChildItem -LiteralPath $Root -Force) {
+      if ($entry.PSIsContainer) {
+        if ($SkipTopLevel -contains $entry.Name) { continue }
+        Get-ChildItem -LiteralPath $entry.FullName -Recurse -File -Force
+      }
+      else { $entry }
+    }
+  }
+
+  foreach ($file in $files) {
     $checked++
     # Empty is a legitimate state for a file; zero-filled is not, and the two
     # are only distinguishable when there is something to read.

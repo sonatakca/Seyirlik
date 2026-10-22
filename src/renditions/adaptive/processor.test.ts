@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { defaultSubtitleStreamIndexes, planRetainedStreams } from "./processor";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import {
+  defaultSubtitleStreamIndexes,
+  planRetainedSidecarSubtitles,
+  planRetainedStreams,
+} from "./processor";
 
 function audioTrack(
   overrides: Partial<{
@@ -50,6 +57,20 @@ function subtitleTrack(
 }
 
 describe("offline adaptive subtitle selection", () => {
+  it("keeps analysis usable when a sidecar is unreadable", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "seyirlik-sidecar-read-"));
+    try {
+      const source = path.join(root, "Film.mkv");
+      await writeFile(source, "source");
+      await mkdir(path.join(root, "Film.tur.srt"));
+      const [sidecar] = await planRetainedSidecarSubtitles(source);
+      expect(sidecar).toMatchObject({ language: "tur" });
+      expect(sidecar?.sidecarFingerprint).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps every text subtitle and excludes bitmap streams", () => {
     expect(
       defaultSubtitleStreamIndexes({

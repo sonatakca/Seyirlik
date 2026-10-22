@@ -5,6 +5,7 @@ import {
   type MouseEvent,
   type PointerEvent,
 } from "react";
+import { stepFineSeek, type FineSeekState } from "./fineSeek";
 import { useLanguage } from "../../i18n/LanguageContext";
 import { getItemTrickplayImageUrl } from "../../lib/mediaApi";
 
@@ -18,6 +19,8 @@ interface SeekBarProps {
   previewAspectRatio?: number;
   onSeek: (seconds: number) => void;
   onSeekPreview?: (seconds: number) => void;
+  /** The scrub ended without a seek, so its preview should go. */
+  onSeekPreviewCancel?: () => void;
   pointerAxis?: SeekPointerAxis;
   compactPreview?: boolean;
 }
@@ -104,6 +107,7 @@ export function SeekBar({
   previewAspectRatio,
   onSeek,
   onSeekPreview,
+  onSeekPreviewCancel,
   pointerAxis = "horizontal",
   compactPreview = false,
 }: SeekBarProps) {
@@ -111,6 +115,8 @@ export function SeekBar({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const pointerDownSeekStateRef = useRef<HoverPreviewState | null>(null);
+  // Where precision scrubbing has got to; null starts it from the pointer.
+  const fineSeekRef = useRef<FineSeekState | null>(null);
   const pointerStartRef = useRef<{
     pointerId: number;
     axisCoordinate: number;
@@ -191,6 +197,9 @@ export function SeekBar({
   const getPointerSeekState = (
     clientX: number,
     clientY: number,
+    // Touch keeps the plain mapping: a finger rests unsteadily, and its drift
+    // would read as nudges.
+    precise = true,
   ): HoverPreviewState | null => {
     const bounds = rootRef.current?.getBoundingClientRect();
 
@@ -206,9 +215,25 @@ export function SeekBar({
         : pointerAxis === "vertical-forward"
           ? verticalPercent
           : 100 - verticalPercent;
-    const percent = clamp(rawPercent, 0, 100);
-    const rawSeconds = (percent / 100) * duration;
+    const pointerPercent = clamp(rawPercent, 0, 100);
+    const lengthPx =
+      pointerAxis === "horizontal" ? bounds.width : bounds.height;
+    let rawSeconds = (pointerPercent / 100) * duration;
+    if (precise && lengthPx > 0) {
+      fineSeekRef.current = stepFineSeek(fineSeekRef.current, {
+        position: (pointerPercent / 100) * lengthPx,
+        at: performance.now(),
+        secondsPerPx: duration / lengthPx,
+        duration,
+      });
+      rawSeconds = fineSeekRef.current.seconds;
+    } else {
+      fineSeekRef.current = null;
+    }
     const displaySeconds = getDisplaySeekPoint(rawSeconds, duration);
+    // The preview stands at the time it shows, which precision keeps within
+    // a few pixels of the pointer.
+    const percent = clamp((displaySeconds / duration) * 100, 0, 100);
     const seconds = getSafeSeekTargetSeconds(displaySeconds, duration);
 
     return {
@@ -274,7 +299,11 @@ export function SeekBar({
       return;
     }
 
-    const nextSeekState = getPointerSeekState(event.clientX, event.clientY);
+    const nextSeekState = getPointerSeekState(
+      event.clientX,
+      event.clientY,
+      event.pointerType !== "touch",
+    );
 
     if (!nextSeekState) {
       return;
@@ -301,7 +330,11 @@ export function SeekBar({
       return;
     }
 
-    const nextSeekState = getPointerSeekState(event.clientX, event.clientY);
+    const nextSeekState = getPointerSeekState(
+      event.clientX,
+      event.clientY,
+      event.pointerType !== "touch",
+    );
 
     if (!nextSeekState) {
       return;
@@ -345,8 +378,11 @@ export function SeekBar({
 
     const pointerStart = pointerStartRef.current;
     const nextSeekState = pointerStart?.didPassDragThreshold
-      ? (getPointerSeekState(event.clientX, event.clientY) ??
-        pointerDownSeekStateRef.current)
+      ? (getPointerSeekState(
+          event.clientX,
+          event.clientY,
+          event.pointerType !== "touch",
+        ) ?? pointerDownSeekStateRef.current)
       : pointerDownSeekStateRef.current;
 
     if (nextSeekState) {
@@ -372,12 +408,15 @@ export function SeekBar({
     pointerStartRef.current = null;
     pointerDownSeekStateRef.current = null;
     setIsSeeking(false);
+    onSeekPreviewCancel?.();
   };
 
   const hideHoverPreview = () => {
     if (isSeeking) {
       return;
     }
+
+    fineSeekRef.current = null;
 
     setHoverPreview((current) => ({
       ...current,

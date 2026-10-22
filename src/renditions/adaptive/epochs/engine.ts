@@ -3,7 +3,7 @@
  *
  * One loop, one rule: for every epoch in the plan, either a valid checkpoint
  * already exists and is reused, or one FFmpeg process reads the source once,
- * decodes it once, and produces every rung of the ladder for that five minutes.
+ * decodes it once, and produces every rung of the ladder for that half hour.
  * Nothing else in the system decides what to encode — the CLI and the server
  * job both come through here, so "why did it re-encode that" has one answer.
  *
@@ -586,6 +586,18 @@ export async function runEpochBuild({
   const salvaged: SourceDamageRecord[] = [];
   let bytesWritten = 0;
   let videoCodecStrings = new Map<string, string>();
+
+  // Subtitle/audio-only updates have no video epochs to encode or assemble.
+  if (videoOutputs.length === 0) {
+    return {
+      manifests,
+      reconciliation,
+      encodedEpochs,
+      bytesWritten,
+      videoCodecStrings,
+      salvaged,
+    };
+  }
 
   /**
    * One frame of the source, which is the closest two rungs can ever land.

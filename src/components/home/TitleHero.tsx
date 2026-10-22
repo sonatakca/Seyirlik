@@ -5,12 +5,8 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  animate,
-  motion,
-  useMotionValue,
-  useReducedMotion,
-} from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
+import { Curve } from "../../lib/timeline/curve";
 import { Video, VideoOff, Volume2, VolumeX } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
 import { getHeroPreviewUrl } from "../../lib/mediaApi";
@@ -20,13 +16,17 @@ import {
   saveHeroTrailersEnabledPreference,
 } from "../hero/heroModel";
 import { HeroComposition, createCompositionMotion } from "./HeroComposition";
+import { NavbarVeil } from "./NavbarVeil";
+import { BackButton } from "../BackButton";
 import { HeroControlButton, HeroCopyBlock } from "./HeroCopy";
+import type { DrawnSize } from "./useReportedSize";
 import {
-  HANDOVER_GRADIENT,
   HERO_HEIGHT_CLASS,
   HERO_MOTION,
   HERO_TRAILER_DELAY_MS,
+  TITLE_BACK_TOP_PX,
   TITLE_SCALE,
+  heroDock,
   heroLayout,
   queueSlots,
   stagePlacement,
@@ -34,6 +34,7 @@ import {
   type StageSize,
 } from "./homeHeroModel";
 import { useSmartContinueItems } from "./useSmartContinueItems";
+import { useHeroCentreDock } from "./heroCentreDock";
 
 /**
  * A title's own hero, on its film or series page: the home hero's stage with
@@ -47,8 +48,14 @@ export function TitleHero({
   isRevealed = true,
   fit = "screen",
   trailers = true,
+  backTo,
+  onWatchedSlot,
 }: {
   item: MediaItem;
+  /** Where the back button goes with no history to return through. */
+  backTo?: string;
+  /** Receives the place, beside the dock, for the page's watched button. */
+  onWatchedSlot?: (slot: HTMLSpanElement | null) => void;
   /** The screen, or (phone and tablet) the screen above the tab bar. */
   fit?: HeroFit;
   /** Whether the title's trailer may start once its artwork has had a moment. */
@@ -64,6 +71,7 @@ export function TitleHero({
 }) {
   const { t } = useLanguage();
   const reduceMotion = Boolean(useReducedMotion());
+  const renderCentreDock = useHeroCentreDock();
   const sectionRef = useRef<HTMLElement | null>(null);
   const [stage, setStage] = useState<StageSize | null>(null);
   const [isArtworkLoaded, setIsArtworkLoaded] = useState(false);
@@ -101,41 +109,49 @@ export function TitleHero({
 
   // --------------------------------------------------------- the overview
   const [isOverviewHovered, setIsOverviewHovered] = useState(false);
+  /** The title as drawn, for the copy's hover target. */
+  const [titleSize, setTitleSize] = useState<
+    (DrawnSize & { id: string }) | null
+  >(null);
   const [isOverviewPinned, setIsOverviewPinned] = useState(false);
   const [isOverviewFocused, setIsOverviewFocused] = useState(false);
   const isOverviewOpen =
     isOverviewHovered || isOverviewPinned || isOverviewFocused;
-  const overview = useMotionValue(0);
+  const [overview] = useState(() => new Curve(0));
   const overviewLift = layout?.overviewLift ?? 0;
   const closeOverview = useCallback(() => {
     setIsOverviewHovered(false);
     setIsOverviewPinned(false);
     setIsOverviewFocused(false);
   }, []);
-  // One value drives the title's rise and growth and the copy's, as at home.
-  useEffect(
-    () =>
-      overview.on("change", (value) => {
-        composition.titleY.set(-value * overviewLift);
-        composition.titleScale.set(
-          titleScale.rest + (titleScale.open - titleScale.rest) * value,
-        );
-      }),
-    [composition, overview, overviewLift, titleScale],
-  );
   // The composition is made before the stage is measured; once its shape is
-  // known the title takes that shape's resting size.
+  // known the title takes that shape's resting size and rise.
   useEffect(() => {
+    const value = overview.get();
+    composition.titleY.set(-value * overviewLift);
     composition.titleScale.set(
-      titleScale.rest + (titleScale.open - titleScale.rest) * overview.get(),
+      titleScale.rest + (titleScale.open - titleScale.rest) * value,
     );
-  }, [composition, overview, titleScale]);
+  }, [composition, overview, overviewLift, titleScale]);
+  // One course drives the title's rise and growth and the copy's, as at home:
+  // each is linear in the overview, so it is tweened on the same duration and
+  // curve from where it stands.
   useEffect(() => {
-    const controls = animate(overview, isOverviewOpen ? 1 : 0, {
-      duration: reduceMotion ? 0 : 0.32,
-      ease: isOverviewOpen ? HERO_MOTION.settleEase : HERO_MOTION.travelEase,
-    });
+    const open = isOverviewOpen ? 1 : 0;
+    const options = {
+      duration: reduceMotion ? 0 : HERO_MOTION.overviewS,
+      ease: HERO_MOTION.travelEase,
+    };
+    const controls = overview.tween(open, options);
+    composition.titleY.tween(-open * overviewLift, options);
+    composition.titleScale.tween(
+      titleScale.rest + (titleScale.open - titleScale.rest) * open,
+      options,
+    );
     return () => controls.stop();
+    // Only the overview opening or closing sets it moving; a new shape is
+    // taken up by the effect above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOverviewOpen, overview, reduceMotion]);
 
   // ---------------------------------------------------------- the trailer
@@ -212,9 +228,8 @@ export function TitleHero({
       duration: reduceMotion ? 0 : 0.8,
       ease: HERO_MOTION.travelEase,
     };
-    void animate(composition.trailer, isTrailerPlaying ? 1 : 0, options);
-    void animate(
-      composition.titleScale,
+    void composition.trailer.tween(isTrailerPlaying ? 1 : 0, options);
+    void composition.titleScale.tween(
       isTrailerPlaying ? titleScale.trailer : titleScale.rest,
       options,
     );
@@ -223,12 +238,50 @@ export function TitleHero({
   const endTrailer = useCallback(() => setIsTrailerPlaying(false), []);
   const copyItem = isArtworkReady && !isTrailerPlaying ? item : null;
 
+  const sideBar = (
+    <motion.div
+      className="hero-dock-bar text-white"
+      data-hide-empty
+      initial={{ opacity: 0 }}
+      animate={{ opacity: isArtworkReady ? 1 : 0 }}
+      transition={{ duration: reduceMotion ? 0 : 0.5, ease: "easeOut" }}
+    >
+      {onWatchedSlot ? <span ref={onWatchedSlot} className="contents" /> : null}
+      {trailerUrl ? (
+        <HeroControlButton
+          label={
+            areTrailersEnabled
+              ? t("hero.disableTrailers")
+              : t("hero.enableTrailers")
+          }
+          onClick={() => {
+            const next = !areTrailersEnabled;
+            saveHeroTrailersEnabledPreference(next);
+            setAreTrailersEnabled(next);
+            if (!next) setIsTrailerPlaying(false);
+          }}
+        >
+          {areTrailersEnabled ? <Video size={16} /> : <VideoOff size={16} />}
+        </HeroControlButton>
+      ) : null}
+      {trailerUrl && isTrailerPlaying ? (
+        <HeroControlButton
+          label={isTrailerMuted ? t("player.unmute") : t("player.mute")}
+          onClick={() => setIsTrailerMuted((current) => !current)}
+        >
+          {isTrailerMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+        </HeroControlButton>
+      ) : null}
+    </motion.div>
+  );
+
   // --------------------------------------------------------------- render
   return (
     <section
       ref={sectionRef}
-      className={`relative w-full overflow-hidden bg-[#050607] ${HERO_HEIGHT_CLASS[fit]}`}
+      className={`seyirlik-hero-stage relative mx-4 mt-2 mb-4 w-[calc(100%-2rem)] rounded-2xl overflow-hidden bg-[#050607] ${HERO_HEIGHT_CLASS[fit]}`}
     >
+      <NavbarVeil />
       {stage && layout ? (
         <HeroComposition
           item={item}
@@ -250,6 +303,7 @@ export function TitleHero({
           isTrailerMuted={isTrailerMuted}
           onTrailerEnded={endTrailer}
           onArtworkReady={() => setIsArtworkLoaded(true)}
+          onTitleSize={(size) => setTitleSize({ id: item.Id, ...size })}
           isRevealed={isRevealed}
         />
       ) : null}
@@ -259,6 +313,7 @@ export function TitleHero({
           stage={stage}
           layout={layout}
           item={copyItem}
+          titleSize={titleSize?.id === item.Id ? titleSize : null}
           overview={overview}
           isOverviewOpen={isOverviewOpen}
           onHoverIntent={setIsOverviewHovered}
@@ -270,51 +325,54 @@ export function TitleHero({
           onShowDetails={onShowDetails}
           reduceMotion={reduceMotion}
           smartContinueItems={smartContinueItems}
+          withQueue={false}
+          dockAside={sideBar}
         />
       ) : null}
 
-      {/* With nothing queued, the pill holds only the trailer's controls,
-          level with the actions at the right. */}
-      {layout && trailerUrl ? (
-        <motion.div
-          className="absolute z-[6] flex items-center gap-1 rounded-full border border-white/[0.14] bg-black/60 p-1 text-white shadow-[0_18px_60px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-2xl"
-          style={{ right: layout.copy.left, bottom: layout.copy.bottom + 1 }}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: isArtworkReady ? 1 : 0 }}
-          transition={{ duration: reduceMotion ? 0 : 0.5, ease: "easeOut" }}
-        >
-          <HeroControlButton
-            label={
-              areTrailersEnabled
-                ? t("hero.disableTrailers")
-                : t("hero.enableTrailers")
-            }
-            onClick={() => {
-              const next = !areTrailersEnabled;
-              saveHeroTrailersEnabledPreference(next);
-              setAreTrailersEnabled(next);
-              if (!next) setIsTrailerPlaying(false);
-            }}
-          >
-            {areTrailersEnabled ? <Video size={16} /> : <VideoOff size={16} />}
-          </HeroControlButton>
-          {isTrailerPlaying ? (
-            <HeroControlButton
-              label={isTrailerMuted ? t("player.unmute") : t("player.mute")}
-              onClick={() => setIsTrailerMuted((current) => !current)}
-            >
-              {isTrailerMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
-            </HeroControlButton>
-          ) : null}
-        </motion.div>
+      {backTo && layout ? (
+        <BackButton
+          variant="dock"
+          fallbackTo={backTo}
+          className="absolute z-[6]"
+          style={{ left: layout.copy.left, top: TITLE_BACK_TOP_PX }}
+        />
       ) : null}
 
-      {/* The page continues below; the hero hands over to it. */}
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 bottom-0 z-[3] h-[12%]"
-        style={{ background: HANDOVER_GRADIENT }}
-      />
+      {/* A centre dock the page asked for (an administrator's tools), level
+          with the watch dock: its width and its foot, in the stage's middle. */}
+      {renderCentreDock && layout && stage && layout.form === "wide"
+        ? (() => {
+            const dock = heroDock(stage, { withQueue: false });
+            return (
+              <div
+                className="absolute z-[7]"
+                style={{
+                  left: (stage.width - dock.width) / 2,
+                  bottom: dock.bottom,
+                  width: dock.width,
+                }}
+              >
+                {renderCentreDock({
+                  width: dock.width,
+                  compact: dock.compact,
+                  stageHeight: stage.height,
+                })}
+              </div>
+            );
+          })()
+        : null}
+
+      {/* The title's lesser actions, on the dock's glass: over the dock
+          where it stands at the right, else under the menu at the right. */}
+      {layout && layout.form === "tall" ? (
+        <div
+          className="absolute z-[6]"
+          style={{ right: layout.copy.left, top: TITLE_BACK_TOP_PX }}
+        >
+          {sideBar}
+        </div>
+      ) : null}
     </section>
   );
 }

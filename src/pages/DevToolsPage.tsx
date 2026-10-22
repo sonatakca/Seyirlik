@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { Fragment, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { setPageTitle } from "../lib/pageTitle";
@@ -6,6 +6,7 @@ import { useLanguage } from "../i18n/LanguageContext";
 import { visibleGroups } from "../lib/adminSections";
 import { ADMIN_ICONS } from "../components/admin/adminIcons";
 import { useDevToolsStatus } from "../components/admin/useDevToolsStatus";
+import { formatFileSize } from "./admin/processingModel";
 
 /**
  * The administration index: what is happening, and everything you can open.
@@ -30,6 +31,9 @@ const SERVER_TONE: Record<string, string> = {
   degraded: "text-amber-300",
   unreachable: "text-rose-300",
 };
+
+/** Below a tenth of the volume free, the figure turns amber. */
+const LOW_SPACE_RATIO = 0.1;
 
 export function DevToolsPage() {
   const { t } = useLanguage();
@@ -72,7 +76,7 @@ export function DevToolsPage() {
           {t("admin.overview.status.heading")}
         </h2>
 
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           <Link
             to="/admin/health"
             className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-black/30 px-4 py-3 transition hover:border-[var(--accent)]/35 hover:bg-white/[0.06] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
@@ -118,6 +122,63 @@ export function DevToolsPage() {
             >
               {downloadsLabel()}
             </span>
+          </Link>
+
+          <Link
+            to="/dev/media-processing"
+            className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-black/30 px-4 py-3 transition hover:border-[var(--accent)]/35 hover:bg-white/[0.06] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] sm:col-span-2 xl:col-span-1"
+          >
+            <span className="shrink-0 whitespace-nowrap text-sm font-bold text-white/55">
+              {t("admin.overview.space.label")}
+            </span>
+            {status.loading || !status.space || status.space.length === 0 ? (
+              <span className="text-sm font-black text-white/45">
+                {t(
+                  status.loading
+                    ? "admin.overview.status.checking"
+                    : "admin.overview.status.unavailable",
+                )}
+              </span>
+            ) : (
+              <span className="grid grid-cols-[auto_auto_auto_auto] items-baseline gap-x-1.5 gap-y-0.5 whitespace-nowrap text-sm font-black tabular-nums">
+                {status.space.map((volume) => {
+                  const known =
+                    volume.freeBytes !== null && volume.totalBytes !== null;
+                  const low =
+                    known &&
+                    volume.totalBytes! > 0 &&
+                    volume.freeBytes! / volume.totalBytes! < LOW_SPACE_RATIO;
+                  return (
+                    <Fragment key={volume.role}>
+                      <span className="pr-1 font-bold text-white/45">
+                        {t(`admin.overview.space.${volume.role}`)}
+                      </span>
+                      {known ? (
+                        <>
+                          <span
+                            className={`justify-self-end ${
+                              low ? "text-amber-300" : "text-white/80"
+                            }`}
+                          >
+                            {formatFileSize(volume.freeBytes)}
+                          </span>
+                          <span aria-hidden="true" className="text-white/20">
+                            /
+                          </span>
+                          <span className="justify-self-end font-bold text-white/45">
+                            {formatFileSize(volume.totalBytes)}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="col-span-3 justify-self-end text-white/45">
+                          {t("admin.overview.status.unavailable")}
+                        </span>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </span>
+            )}
           </Link>
         </div>
       </section>

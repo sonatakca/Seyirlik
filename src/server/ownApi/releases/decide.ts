@@ -23,18 +23,31 @@ import {
 } from "./qualityProfile";
 import { scoreRelease, scoreReasons, type PreferenceRule } from "./preferences";
 import type { ReleaseFacts } from "./releaseFacts";
+import { foldLatin } from "./titleIdentity";
 
+/**
+ * `aliases` are the other names the same work goes by — its English and
+ * original titles when `title` is the Turkish one — so a release named
+ * `The.Dark.Knight` is recognised as "Kara Şövalye".
+ */
 export type MediaTarget =
-  | { readonly kind: "movie"; readonly title: string; readonly year?: number }
+  | {
+      readonly kind: "movie";
+      readonly title: string;
+      readonly aliases?: readonly string[];
+      readonly year?: number;
+    }
   | {
       readonly kind: "episode";
       readonly title: string;
+      readonly aliases?: readonly string[];
       readonly season: number;
       readonly episode: number;
     }
   | {
       readonly kind: "season";
       readonly title: string;
+      readonly aliases?: readonly string[];
       readonly season: number;
     };
 
@@ -85,11 +98,16 @@ function formatGigabytes(bytes: number): string {
   return `${(bytes / 1e9).toFixed(1)} GB`;
 }
 
-/** Punctuation and articles removed, so "The Expanse" matches "Expanse". */
+/**
+ * Marks, punctuation and articles removed, so "The Expanse" matches
+ * `Expanse`, "Folie à Deux" matches `Folie.a.Deux` and "Ocean's Eleven"
+ * matches `Oceans.Eleven`.
+ */
 function comparableTitle(value: string): string {
-  return value
+  return foldLatin(value)
     .toLowerCase()
     .replace(/&/g, " and ")
+    .replace(/['’`]/g, "")
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\b(?:the|a|an)\b/g, " ")
     .replace(/\s+/g, " ")
@@ -136,7 +154,8 @@ function matchTarget(
   facts: ReleaseFacts,
   target: MediaTarget,
 ): { ok: true } | { ok: false; code: RejectionCode; detail: string } {
-  if (!titlesMatch(facts.normalizedTitle, target.title)) {
+  const names = [target.title, ...(target.aliases ?? [])];
+  if (!names.some((name) => titlesMatch(facts.normalizedTitle, name))) {
     return {
       ok: false,
       code: "title-mismatch",

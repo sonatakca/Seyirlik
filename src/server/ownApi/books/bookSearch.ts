@@ -26,6 +26,7 @@ import {
   type BookSearchProcess,
 } from "./bookSearchProcess";
 import { EMBEDDING_MODEL, INDEX_KEY } from "./bookSearchProtocol";
+import { rankPassages } from "./bookSearchRank";
 
 export interface BookToSearch {
   itemId: string;
@@ -39,12 +40,23 @@ export interface BookSearchHit {
   block: number;
   anchor: string;
   text: string;
-  /** Cosine similarity, -1 to 1; only meaningful against other hits. */
+  /** Where in its section the passage starts, 0 to 1, by its text. */
+  place: number;
+  /** Meaning and words together; only meaningful against other hits. */
   score: number;
 }
 
 export type BookSearchOutcome =
-  | { state: "ready"; hits: BookSearchHit[] }
+  | {
+      state: "ready";
+      hits: BookSearchHit[];
+      /** The query's words a hit holds, to mark: see `markText`. */
+      terms: string[];
+      /** The whole query, to mark as one, when a hit holds it as written. */
+      phrase: string[];
+      /** A quoted search: its words are marked only as written. */
+      exact: boolean;
+    }
   /** `progress` is 0 to 1, or null while the book waits its turn or the model loads. */
   | { state: "preparing"; progress: number | null }
   | { state: "unavailable"; reason: string };
@@ -76,7 +88,6 @@ interface StoredIndex {
   vectors: string;
 }
 
-const HITS = 6;
 /** Indexes held in memory; a few MB each. */
 const LOADED = 6;
 /** A failure that may pass (a download, a crash) is retried after this. */
@@ -115,24 +126,69 @@ function fromStored(value: unknown, sourceKey: string): BookIndex | null {
   return { sourceKey, passages: stored.passages, vectors };
 }
 
-/** The passages most like the question, best first. */
-function rank(index: BookIndex, query: Float32Array): BookSearchHit[] {
+const placesOf = new WeakMap<BookIndex["passages"], Float64Array>();
+
+/**
+ * Where each passage starts in its section, 0 to 1, by the text before it:
+ * the reader turns this into a place in the whole book with its own map of
+ * the book, so a hit is told in the reader's own percentages.
+ */
+function places(passages: BookIndex["passages"]): Float64Array {
+  let found = placesOf.get(passages);
+  if (!found) {
+    found = new Float64Array(passages.length);
+    const lengths = new Map<number, number>();
+    for (const { section, text } of passages)
+      lengths.set(section, (lengths.get(section) ?? 0) + text.length);
+    const before = new Map<number, number>();
+    passages.forEach(({ section, text }, at) => {
+      const done = before.get(section) ?? 0;
+      found![at] = done / Math.max(1, lengths.get(section)!);
+      before.set(section, done + text.length);
+    });
+    placesOf.set(passages, found);
+  }
+  return found;
+}
+
+/** The passages that best answer the query, best first (bookSearchRank.ts). */
+function rank(
+  index: BookIndex,
+  query: string,
+  vector: Float32Array,
+): BookSearchOutcome {
   const dimensions = EMBEDDING_MODEL.dimensions;
-  const scored = index.passages.map((passage, at) => {
+  const meaning = new Float64Array(index.passages.length);
+  for (let at = 0; at < index.passages.length; at++) {
     let score = 0;
     const offset = at * dimensions;
     for (let k = 0; k < dimensions; k++)
-      score += index.vectors[offset + k]! * query[k]!;
-    return { passage, score };
-  });
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, HITS).map(({ passage, score }) => ({
-    section: passage.section,
-    block: passage.block,
-    anchor: passage.anchor,
-    text: passage.text,
-    score: Math.round(score * 1000) / 1000,
-  }));
+      score += index.vectors[offset + k]! * vector[k]!;
+    meaning[at] = score;
+  }
+  const { ranked, terms, phrase, exact } = rankPassages(
+    index.passages,
+    meaning,
+    query,
+  );
+  const placeOf = places(index.passages);
+  return {
+    state: "ready",
+    hits: ranked.map(({ at, score }) => {
+      const passage = index.passages[at]!;
+      return {
+        section: passage.section,
+        block: passage.block,
+        anchor: passage.anchor,
+        text: passage.text,
+        place: Math.round(placeOf[at]! * 1000) / 1000,
+        score: Math.round(score * 1000) / 1000,
+      };
+    }),
+    terms,
+    phrase,
+    exact,
+  };
 }
 
 export function createBookSearch({
@@ -300,11 +356,15 @@ export function createBookSearch({
       // While a book is being read, nothing on disk can be newer.
       const index = jobs.has(book.itemId) ? null : await load(book);
       if (!index) return prepare(book);
-      if (!query) return { state: "ready", hits: [] };
-      return {
-        state: "ready",
-        hits: rank(index, await engine.embedQuery(query)),
-      };
+      if (!query)
+        return {
+          state: "ready",
+          hits: [],
+          terms: [],
+          phrase: [],
+          exact: false,
+        };
+      return rank(index, query, await engine.embedQuery(query));
     },
     preindex: async (books) => {
       for (const book of books) {

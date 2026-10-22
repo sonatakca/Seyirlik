@@ -47,6 +47,8 @@ export interface UpsertItemInput {
   parentIndexNumber: number | undefined;
   /** Field names the reconciler must not overwrite because an admin edited them. */
   lockedFields: string[];
+  /** `title` is a stand-in; it names a new item but never replaces a title. */
+  titleIsPlaceholder?: boolean;
 }
 
 export interface UpsertFileInput {
@@ -104,6 +106,16 @@ export interface ReconcileOptions {
    * removal pass that the mass-disappearance guard would otherwise suppress.
    */
   allowMassRemoval?: boolean;
+  /**
+   * Whether a title missing for longer than the grace period is deleted.
+   *
+   * Off on a host whose library is a partial copy — the Google Drive mount
+   * that stood in for the failed Expansion drive held a fraction of the
+   * catalogue. There a missing title is one waiting to be uploaded again, so
+   * the scan only hides it (and shows it again when its files come back), and
+   * its watch history, metadata and identity survive however long that takes.
+   */
+  deleteMissing?: boolean;
   now?: () => Date;
 }
 
@@ -147,6 +159,7 @@ export async function reconcileLibraryScan({
   missingGraceMs = DEFAULT_MISSING_GRACE_MS,
   massDisappearanceRatio = DEFAULT_MASS_DISAPPEARANCE_RATIO,
   allowMassRemoval = false,
+  deleteMissing = true,
   now = () => new Date(),
 }: ReconcileOptions): Promise<ReconcileSummary> {
   const summary: ReconcileSummary = {
@@ -209,6 +222,7 @@ export async function reconcileLibraryScan({
       indexNumber: scanned.indexNumber,
       parentIndexNumber: scanned.parentIndexNumber,
       lockedFields: existing?.lockedFields ?? [],
+      ...(scanned.titleIsPlaceholder ? { titleIsPlaceholder: true } : {}),
     });
 
     itemIdBySourceKey.set(scanned.sourceKey, itemId);
@@ -292,10 +306,22 @@ export async function reconcileLibraryScan({
 
   // A scan that finds almost nothing is far more likely to be a storage failure
   // than a real deletion, so it must not propagate into the catalogue.
+  //
+  // Measured against the files that were present before this scan. Files that
+  // were already missing did not disappear now, and counting them made a
+  // library that is mostly absent — a partial copy on a cloud mount — look like
+  // a mount failure on every scan, so nothing that vanished afterwards was ever
+  // marked missing again.
+  const presentBefore = existingFiles.filter(
+    (file) => file.missingSince === null,
+  );
+  const newlyVanished = vanishedFiles.filter(
+    (file) => file.missingSince === null,
+  );
   const disappearanceRatio =
-    existingFiles.length === 0
+    presentBefore.length === 0
       ? 0
-      : vanishedFiles.length / existingFiles.length;
+      : newlyVanished.length / presentBefore.length;
   if (!allowMassRemoval && disappearanceRatio > massDisappearanceRatio) {
     summary.removalsSuppressed = true;
     await store.refreshItemCounts(libraryId);
@@ -309,7 +335,10 @@ export async function reconcileLibraryScan({
     .map((file) => file.id);
   const filesToDelete = vanishedFiles
     .filter(
-      (file) => file.missingSince !== null && file.missingSince <= graceCutoff,
+      (file) =>
+        deleteMissing &&
+        file.missingSince !== null &&
+        file.missingSince <= graceCutoff,
     )
     .map((file) => file.id);
   const itemsToMark = vanishedItems
@@ -317,7 +346,10 @@ export async function reconcileLibraryScan({
     .map((item) => item.id);
   const itemsToDelete = vanishedItems
     .filter(
-      (item) => item.missingSince !== null && item.missingSince <= graceCutoff,
+      (item) =>
+        deleteMissing &&
+        item.missingSince !== null &&
+        item.missingSince <= graceCutoff,
     )
     .map((item) => item.id);
 

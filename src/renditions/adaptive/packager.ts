@@ -8,7 +8,7 @@
  * leaves the previously active package — legacy or adaptive — exactly as it was.
  *
  * The unit of *work*, however, is no longer the whole package. The timeline is
- * cut into nominal five-minute epochs, each encoded by one FFmpeg process that
+ * cut into nominal thirty-minute epochs, each encoded by one FFmpeg process that
  * reads and decodes the source once and produces every rung of the ladder for
  * that stretch. An epoch that finishes is validated, manifested and renamed
  * into place, and from that moment it is immutable: a crash, a cancel, an
@@ -20,10 +20,14 @@
 
 import { readFile, rm, stat, statfs, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { resolvePublishedTitleRoot } from "./publishedRoot";
 import { SEGMENT_TARGET_SECONDS } from "../../lib/playback-planner/gopPolicy";
 import { UNKNOWN_LANGUAGE } from "../processing/languages";
 import type { PauseController } from "../processing/pauseController";
-import type { SidecarSubtitle } from "./sidecarSubtitles";
+import {
+  sidecarSubtitleIsCurrent,
+  type SidecarSubtitle,
+} from "./sidecarSubtitles";
 import type { DriveSpace, RenditionPaths } from "../analysis";
 import { getDriveSpace } from "../analysis";
 import {
@@ -82,6 +86,7 @@ import {
   videoRenditionId,
 } from "./profile";
 import { frameRateForClass } from "./layout";
+import { probeTitleRates, readStoredRateProbe } from "./rateProbe";
 import { besideTitleRoot } from "./titleRoot";
 import {
   publishAdditionalRenditions,
@@ -98,7 +103,10 @@ import {
   safeFraction,
   VERIFICATION_STALE_MS,
   type AssemblyPhaseProgress,
+  type PlanningPhaseProgress,
   type PublishPhaseProgress,
+  type SubtitlePhaseProgress,
+  type SubtitleTrackProgress,
 } from "./phaseProgress";
 import {
   defaultSoftwareEncoderThreads,
@@ -114,6 +122,7 @@ import {
   audioStagePath,
   checkpointBytes,
   checkpointRoot,
+  listCompletedEpochIndexes,
   reconcilePlan,
 } from "./epochs/checkpoints";
 import type { ClassifiedFailure } from "./epochs/failure";
@@ -125,8 +134,15 @@ import {
   DEFAULT_EPOCH_TARGET_SECONDS,
   EPOCH_TIMELINE_POLICY_VERSION,
 } from "./epochs/policy";
-import { buildEpochPlan, nominalEpochBoundaries } from "./epochs/plan";
-import { probeSourceFrameTimeline } from "./epochs/sourceTimeline";
+import {
+  buildEpochPlan,
+  nominalEpochBoundaries,
+  withVideoEnd,
+} from "./epochs/plan";
+import {
+  probeSourceFrameTimeline,
+  probeSourceVideoEndSeconds,
+} from "./epochs/sourceTimeline";
 import { runEpochBuild, type SourceProbeWindow } from "./epochs/engine";
 import { ensureAudioStage } from "./epochs/audioStage";
 import { assembleVideoRenditions, copyStageDirectory } from "./epochs/assemble";
@@ -182,6 +198,7 @@ async function titleRenditionPresence(
   titleRoot: string,
   manifest: TitlePackageManifest,
 ): Promise<RenditionPresence> {
+  titleRoot = await resolvePublishedTitleRoot(titleRoot);
   const intact = async (relatives: readonly string[]): Promise<boolean> => {
     for (const relative of relatives) {
       const stats = await stat(
@@ -333,6 +350,11 @@ export interface AdaptivePackagerOptions {
   reserveBytes: number;
   segmentSeconds?: number;
   preset?: string;
+  /**
+   * Measure this title's rates before encoding (see `rateProbe.ts`). On by
+   * default; it only ever acts for rate-targeted encoders with `libvmaf`.
+   */
+  rateProbe?: boolean;
   /** Explicit software CPU budget; automatic topology detection is the default. */
   softwareThreads?: number;
   /**
@@ -706,6 +728,38 @@ export async function hasVerifiedScratchPackage({
   );
 }
 
+/**
+ * Bytes in this job's scratch package that a rebuild will remove first.
+ *
+ * A package assembled but not yet marked verified — the state a restart finds
+ * mid-validation — is deleted before the packager re-assembles from its
+ * checkpoints. Planning must count those bytes as space that will come back,
+ * or it demands room for a copy it is about to free: a restart during
+ * validation then failed a finished 4-hour encode on disk space. A verified
+ * package is not counted; it is published as it is, and planning already
+ * asks no scratch for it.
+ */
+export async function replaceableScratchPackageBytes({
+  workRoot,
+  workspaceId,
+  sourceFingerprint,
+}: {
+  workRoot: string;
+  workspaceId: string;
+  sourceFingerprint: string;
+}): Promise<number> {
+  const workspaceDirectory = assertOwnedJobWorkspace(
+    workRoot,
+    path.join(workRoot, assertWorkspaceId(workspaceId)),
+  );
+  const paths = verifiedPackagePaths(workspaceDirectory, sourceFingerprint);
+  if (
+    (await readVerifiedScratchPackage({ ...paths, sourceFingerprint })) !== null
+  )
+    return 0;
+  return checkpointBytes(paths.workVersionRoot);
+}
+
 async function readVerifiedScratchPackage({
   marker,
   workVersionRoot,
@@ -780,6 +834,7 @@ export async function packageAdaptiveRendition(
     reserveBytes,
     segmentSeconds = SEGMENT_TARGET_SECONDS,
     preset,
+    rateProbe = true,
     softwareThreads = defaultSoftwareEncoderThreads(),
     allAudioTracks = false,
     audioStreamIndexes,
@@ -907,6 +962,20 @@ export async function packageAdaptiveRendition(
     const presence: RenditionPresence = existing
       ? await titleRenditionPresence(existingTitleRoot, existing)
       : { video: new Set(), audio: new Set(), subtitle: new Set() };
+    // A synthetic index is a position in a directory listing, not an identity.
+    // Adding a file can put a different translation at an already published id.
+    const reusableSubtitles = new Set(presence.subtitle);
+    for (const sidecar of sidecarSubtitles) {
+      const id = subtitleRenditionId(sidecar.streamIndex);
+      if (
+        !sidecarSubtitleIsCurrent(
+          sidecar,
+          existing?.subtitle.find((track) => track.id === id),
+        )
+      ) {
+        reusableSubtitles.delete(id);
+      }
+    }
 
     if (verifySourceFingerprint) {
       const { computeSourceFingerprint } = await import("../registry");
@@ -946,7 +1015,7 @@ export async function packageAdaptiveRendition(
     const work: PackageWorkPlan = planPackageWork({
       requirements,
       existing,
-      presence,
+      presence: { ...presence, subtitle: reusableSubtitles },
       sourceFingerprint: request.sourceFingerprint,
       profileVersion: ADAPTIVE_PROFILE_VERSION,
       requiredAudioStreamIndexes: audioPlan.outputs.map(
@@ -1015,11 +1084,31 @@ export async function packageAdaptiveRendition(
      */
     const { workVersionRoot, marker: verificationMarker } =
       verifiedPackagePaths(workspaceDirectory, request.sourceFingerprint);
-    const verifiedScratchPackage = await readVerifiedScratchPackage({
+    const scratchCandidate = await readVerifiedScratchPackage({
       marker: verificationMarker,
       workVersionRoot,
       sourceFingerprint: request.sourceFingerprint,
     });
+    // The video fingerprint does not change when a sidecar is corrected while
+    // publication waits. Reuse scratch only if it still covers today's files;
+    // unchanged tracks in an incremental package can live in the current title.
+    const verifiedScratchPackage =
+      scratchCandidate &&
+      sidecarSubtitles.every((sidecar) => {
+        const id = subtitleRenditionId(sidecar.streamIndex);
+        const scratchTrack = scratchCandidate.metadata.subtitleRenditions?.find(
+          (track) => track.id === id,
+        );
+        return sidecarSubtitleIsCurrent(
+          sidecar,
+          scratchTrack ??
+            (reusableSubtitles.has(id)
+              ? existing?.subtitle.find((track) => track.id === id)
+              : undefined),
+        );
+      })
+        ? scratchCandidate
+        : null;
 
     /**
      * Publishes a verified scratch package and finishes the job.
@@ -1308,10 +1397,20 @@ export async function packageAdaptiveRendition(
      * what stopped a nearly finished title from resuming on a full-ish drive.
      */
     const drive = await driveSpaceProvider();
+    /*
+     * An assembled package that never earned its verified marker is removed
+     * just below, before re-assembly, so its bytes are coming back too. Not
+     * counting them demanded room for a copy about to be freed, and a restart
+     * during validation could not resume a finished encode.
+     */
+    const replaceablePackageBytes = verifiedScratchPackage
+      ? 0
+      : await checkpointBytes(workVersionRoot);
     const conservativeBytes = Math.max(
       0,
       Math.ceil(estimate.totalBytes * (1 + DEFAULT_STORAGE_SAFETY_MARGIN) * 2) -
-        inheritedBytes,
+        inheritedBytes -
+        replaceablePackageBytes,
     );
     if (drive.freeBytes - conservativeBytes < reserveBytes) {
       return {
@@ -1335,7 +1434,7 @@ export async function packageAdaptiveRendition(
     const plannedRequirements = requirements.filter((requirement) =>
       work.videoQualityHeights.includes(requirement.qualityHeight),
     );
-    const videoOutputs: AdaptiveVideoOutput[] = plannedRequirements.map(
+    let videoOutputs: AdaptiveVideoOutput[] = plannedRequirements.map(
       (requirement) => {
         const rate = frameRateForClass(
           requirement.qualityHeight,
@@ -1426,21 +1525,35 @@ export async function packageAdaptiveRendition(
       epochTargetSeconds,
       segmentSeconds,
     });
+    onEvent?.({
+      type: "planning-progress",
+      mediaId: request.mediaId,
+      progress: { step: "timeline", boundaryCount: boundaries.length },
+    });
     const timeline = await probeSourceFrameTimeline({
       sourcePath: request.sourcePath,
       boundaries,
       ffprobePath,
       ...(signal ? { signal } : {}),
     });
-    const freshPlan = buildEpochPlan({
-      mediaId: request.mediaId,
-      sourceFingerprint: request.sourceFingerprint,
-      profileVersion: ADAPTIVE_PROFILE_VERSION,
-      sourceDurationSeconds: probe.durationSeconds,
-      epochTargetSeconds,
-      segmentSeconds,
-      timeline,
+    const videoEndSeconds = await probeSourceVideoEndSeconds({
+      sourcePath: request.sourcePath,
+      containerDurationSeconds: probe.durationSeconds,
+      ffprobePath,
+      ...(signal ? { signal } : {}),
     });
+    const freshPlan = withVideoEnd(
+      buildEpochPlan({
+        mediaId: request.mediaId,
+        sourceFingerprint: request.sourceFingerprint,
+        profileVersion: ADAPTIVE_PROFILE_VERSION,
+        sourceDurationSeconds: probe.durationSeconds,
+        epochTargetSeconds,
+        segmentSeconds,
+        timeline,
+      }),
+      videoEndSeconds,
+    );
     const planExpectation = {
       mediaId: request.mediaId,
       sourceFingerprint: request.sourceFingerprint,
@@ -1449,11 +1562,14 @@ export async function packageAdaptiveRendition(
       segmentSeconds,
       sourceDurationSeconds: probe.durationSeconds,
     };
-    const { plan } = await reconcilePlan({
+    const { plan: reconciledPlan } = await reconcilePlan({
       root: checkpoints,
       plan: freshPlan,
       expected: planExpectation,
     });
+    // A plan from an earlier attempt still expects its final epoch to reach
+    // the container's end; see `withVideoEnd`.
+    const plan = withVideoEnd(reconciledPlan, videoEndSeconds);
 
     const identity = {
       mediaId: request.mediaId,
@@ -1461,6 +1577,98 @@ export async function packageAdaptiveRendition(
       adaptiveProfileVersion: ADAPTIVE_PROFILE_VERSION,
       timelinePolicyVersion: EPOCH_TIMELINE_POLICY_VERSION,
     };
+
+    const encodePreset =
+      preset ??
+      (encoder === "h264_qsv" || encoder === "hevc_qsv"
+        ? "veryfast"
+        : encoder === "h264_nvenc" || encoder === "hevc_nvenc"
+          ? // p5 of p1-p7: the GPU is rarely the bottleneck of a full ladder
+            // (decoding and scaling on the CPU are), so it spends its spare
+            // time on quality.
+            "p5"
+          : "medium");
+    const qsvFilterThreads =
+      encoder === "h264_qsv" || encoder === "hevc_qsv" ? 2 : undefined;
+
+    /*
+     * This title's rates. A resumed job reuses what its first attempt decided,
+     * so every epoch is encoded alike; one whose epochs predate the probe stays
+     * on the table rates they were made with. HDR is left on the table because
+     * VMAF is not calibrated for PQ, and an incremental run because the rungs
+     * it joins were not measured with it.
+     */
+    if (rateProbe && !preserveHdr && work.mode !== "incremental") {
+      const stored = await readStoredRateProbe(
+        checkpoints,
+        encoder,
+        encodePreset,
+      );
+      const reportRates = (
+        rates: NonNullable<PlanningPhaseProgress["rateProbe"]>,
+      ) =>
+        onEvent?.({
+          type: "planning-progress",
+          mediaId: request.mediaId,
+          progress: {
+            step: "rates",
+            boundaryCount: boundaries.length,
+            epochCount: plan.epochs.length,
+            rateProbe: rates,
+          },
+        });
+      reportRates(
+        stored
+          ? { encodes: 0, measurements: 0, reused: true }
+          : { encodes: 0, measurements: 0 },
+      );
+      const probed =
+        stored ??
+        ((await listCompletedEpochIndexes(checkpoints)).length > 0
+          ? null
+          : await probeTitleRates({
+              ffmpegPath,
+              sourcePath: request.sourcePath,
+              durationSeconds: probe.durationSeconds,
+              outputs: videoOutputs,
+              encoder,
+              codecFamily,
+              preset: encodePreset,
+              ...(gopFrameRate === undefined
+                ? {}
+                : { frameRate: gopFrameRate }),
+              segmentSeconds,
+              ...(qsvFilterThreads === undefined
+                ? {}
+                : { filterComplexThreads: qsvFilterThreads }),
+              checkpointRoot: checkpoints,
+              ...(signal ? { signal } : {}),
+              onProgress: reportRates,
+              waitWhilePaused: async () => {
+                while (pauseController?.pauseRequested && !signal?.aborted) {
+                  await new Promise((resolve) => setTimeout(resolve, 1_000));
+                }
+              },
+            }));
+      if (probed) {
+        videoOutputs = videoOutputs.map((output) => {
+          const rate = probed.rates[output.qualityHeight];
+          return rate ? { ...output, bitrate: rate } : output;
+        });
+        console.info(
+          `[seyirlik] ${request.relativePath}: ${stored ? "reusing " : ""}measured rates ${videoOutputs
+            .map(
+              (output) =>
+                `${output.qualityHeight}p ${
+                  output.bitrate
+                    ? `${(output.bitrate.target / 1e6).toFixed(2)} Mbps`
+                    : "table"
+                }`,
+            )
+            .join(", ")}`,
+        );
+      }
+    }
 
     let completedEpochBytes = 0;
     let currentEpochBytes = 0;
@@ -1513,11 +1721,7 @@ export async function packageAdaptiveRendition(
         hdrState: hdrStateFor(probe),
         ...(gopFrameRate === undefined ? {} : { frameRate: gopFrameRate }),
         segmentSeconds,
-        preset:
-          preset ??
-          (encoder === "h264_qsv" || encoder === "hevc_qsv"
-            ? "veryfast"
-            : "medium"),
+        preset: encodePreset,
         ...(encoder === "libx264" || encoder === "libx265"
           ? {
               softwareThreads,
@@ -2255,14 +2459,95 @@ export async function packageAdaptiveRendition(
       });
     }
 
-    if (
-      plannedSubtitleStreamIndexes.length > 0 ||
-      plannedSidecarSubtitles.length > 0
-    ) {
+    /*
+     * Every track this stage will convert, named up front, so the page can list
+     * them all from the first sample and tick them off as each run finishes.
+     */
+    const subtitleProgress: SubtitlePhaseProgress = {
+      tracks: [
+        ...plannedSubtitleStreamIndexes.flatMap((streamIndex) => {
+          const track = probe.subtitleTracks.find(
+            (candidate) =>
+              candidate.streamIndex === streamIndex && candidate.isTextBased,
+          );
+          return track
+            ? [
+                {
+                  id: subtitleRenditionId(streamIndex),
+                  origin: "embedded" as const,
+                  ...(track.language ? { language: track.language } : {}),
+                  ...(track.title ? { title: track.title } : {}),
+                  ...(track.isForced ? { isForced: true } : {}),
+                  state: "waiting" as const,
+                },
+              ]
+            : [];
+        }),
+        ...plannedSidecarSubtitles.map((sidecar) => ({
+          id: subtitleRenditionId(sidecar.streamIndex),
+          origin: "sidecar" as const,
+          ...(sidecar.language !== UNKNOWN_LANGUAGE
+            ? { language: sidecar.language }
+            : {}),
+          ...(sidecar.isForced ? { isForced: true } : {}),
+          state: "waiting" as const,
+        })),
+      ],
+      completedTracks: 0,
+      fraction: 0,
+      writtenBytes: 0,
+    };
+    const reportSubtitle = (
+      id: string,
+      state: SubtitleTrackProgress["state"],
+      bytes?: number,
+    ): void => {
+      const track = subtitleProgress.tracks.find((entry) => entry.id === id);
+      if (!track) return;
+      track.state = state;
+      if (bytes !== undefined) track.bytes = bytes;
+      const finished = subtitleProgress.tracks.filter(
+        (entry) => entry.state === "complete" || entry.state === "skipped",
+      ).length;
+      subtitleProgress.completedTracks = finished;
+      subtitleProgress.fraction = safeFraction(
+        finished,
+        subtitleProgress.tracks.length,
+      );
+      subtitleProgress.writtenBytes = subtitleProgress.tracks.reduce(
+        (sum, entry) => sum + (entry.bytes ?? 0),
+        0,
+      );
+      if (state === "running") {
+        subtitleProgress.currentId = id;
+        subtitleProgress.currentStartedAtMs = Date.now();
+      } else if (subtitleProgress.currentId === id) {
+        delete subtitleProgress.currentId;
+        delete subtitleProgress.currentStartedAtMs;
+      }
+      onEvent?.({
+        type: "subtitle-progress",
+        mediaId: request.mediaId,
+        progress: {
+          ...subtitleProgress,
+          tracks: subtitleProgress.tracks.map((entry) => ({ ...entry })),
+        },
+      });
+    };
+
+    if (subtitleProgress.tracks.length > 0) {
       onEvent?.({
         type: "build-stage",
         mediaId: request.mediaId,
         stage: "subtitles",
+      });
+      onEvent?.({
+        type: "subtitle-progress",
+        mediaId: request.mediaId,
+        progress: {
+          ...subtitleProgress,
+          tracks: subtitleProgress.tracks.map((entry) => ({ ...entry })),
+        },
       });
     }
     for (const streamIndex of plannedSubtitleStreamIndexes) {
@@ -2271,6 +2556,7 @@ export async function packageAdaptiveRendition(
       );
       if (!sourceTrack) continue;
       const id = subtitleRenditionId(streamIndex);
+      reportSubtitle(id, "running");
       const playlistPath = `${ADAPTIVE_SUBTITLE_DIRECTORY}/${id}/${ADAPTIVE_PLAYLIST_FILE}`;
       const subtitlePath = `${ADAPTIVE_SUBTITLE_DIRECTORY}/${id}/${ADAPTIVE_SUBTITLE_FILE}`;
       const absoluteSubtitle = path.join(
@@ -2305,6 +2591,7 @@ export async function packageAdaptiveRendition(
         "utf8",
       );
       subtitleBytes += extracted.fileSizeBytes;
+      reportSubtitle(id, "complete", extracted.fileSizeBytes);
       subtitleRenditions.push({
         id,
         sourceStreamIndex: streamIndex,
@@ -2335,6 +2622,7 @@ export async function packageAdaptiveRendition(
         ...subtitlePath.split("/"),
       );
       let extracted: { fileSizeBytes: number };
+      reportSubtitle(id, "running");
       try {
         extracted = await extractWebVttFile({
           ffmpegPath,
@@ -2355,6 +2643,7 @@ export async function packageAdaptiveRendition(
             sidecar.fileName
           } — ${error instanceof Error ? error.message : String(error)}`,
         );
+        reportSubtitle(id, "skipped");
         continue;
       }
       await writeFile(
@@ -2363,9 +2652,13 @@ export async function packageAdaptiveRendition(
         "utf8",
       );
       subtitleBytes += extracted.fileSizeBytes;
+      reportSubtitle(id, "complete", extracted.fileSizeBytes);
       subtitleRenditions.push({
         id,
         sourceStreamIndex: sidecar.streamIndex,
+        ...(sidecar.sidecarFingerprint
+          ? { sidecarFingerprint: sidecar.sidecarFingerprint }
+          : {}),
         ...(sidecar.language !== UNKNOWN_LANGUAGE
           ? { language: sidecar.language }
           : {}),
@@ -2386,6 +2679,8 @@ export async function packageAdaptiveRendition(
         videoRenditions,
         audioRenditions,
         subtitleRenditions,
+        allowMissingVideo:
+          work.mode === "incremental" && videoRenditions.length === 0,
         videoCodecStrings,
         audioCodecStrings,
       }),
@@ -2414,6 +2709,7 @@ export async function packageAdaptiveRendition(
       },
       segmentTargetSeconds: segmentSeconds,
       switchingSetDurationSeconds: Math.max(
+        ...(videoRenditions.length === 0 ? [probe.durationSeconds] : []),
         ...videoRenditions.map((rendition) => rendition.durationSeconds),
       ),
       masterPlaylistPath: ADAPTIVE_MASTER_PLAYLIST,
@@ -2473,6 +2769,8 @@ export async function packageAdaptiveRendition(
       // An incremental run's work directory holds only what it built, which is
       // video alone whenever the published audio is being reused.
       allowMissingAudio: audioRenditions.length === 0,
+      allowMissingVideo:
+        work.mode === "incremental" && videoRenditions.length === 0,
       ...(signal ? { signal } : {}),
     });
 

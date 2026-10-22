@@ -832,6 +832,10 @@ describe("findPackagedVideo", () => {
       /\/video\/720p\.mp4$/,
     );
     expect((await stat(video!.path)).isFile()).toBe(true);
+    expect(video?.playlistPath.split(path.sep).join("/")).toMatch(
+      /720p.*\.m3u8$/,
+    );
+    expect((await stat(video!.playlistPath)).isFile()).toBe(true);
   });
 
   it("names nothing for a title with no adaptive package", async () => {
@@ -846,6 +850,33 @@ describe("findPackagedVideo", () => {
         mtimeMs: sourceStats.mtimeMs,
       }),
     ).resolves.toBeNull();
+  });
+});
+
+describe("findPackagedAudio", () => {
+  it("names the package's default audio rendition and its playlist once the source is gone", async () => {
+    const { service, sourcePath } = await fixture({
+      includeGenerated: false,
+      includeAdaptive: true,
+    });
+    const sourceStats = await stat(sourcePath);
+    await unlink(sourcePath);
+
+    const audio = await service.findPackagedAudio({
+      mediaId,
+      filePath: sourcePath,
+      size: sourceStats.size,
+      mtimeMs: sourceStats.mtimeMs,
+    });
+    expect(audio?.durationSeconds).toBe(60);
+    expect(audio?.path.split(path.sep).join("/")).toMatch(
+      /\/audio\/english\.m4a$/,
+    );
+    expect((await stat(audio!.path)).isFile()).toBe(true);
+    expect(audio?.playlistPath.split(path.sep).join("/")).toMatch(
+      /\/\.seyirlik\/audio\/english\.m3u8$/,
+    );
+    expect((await stat(audio!.playlistPath)).isFile()).toBe(true);
   });
 });
 

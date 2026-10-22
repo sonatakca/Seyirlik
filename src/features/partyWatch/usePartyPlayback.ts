@@ -248,6 +248,17 @@ export function usePartyPlayback({
           m.blocked = true;
           partyLog("engine.autoplay-blocked", {});
           reconcileRef.current();
+        } else if (
+          error instanceof DOMException &&
+          error.name === "AbortError" &&
+          m.intent === "play"
+        ) {
+          // A pause() or a load elsewhere interrupted this start. The element
+          // is paused, but nobody chose that: left as it is, the pause would
+          // read as the viewer's and the tab would sit out the party.
+          partyLog("engine.play-interrupted", {});
+          m.intent = null;
+          reconcileRef.current();
         }
       });
   }, []);
@@ -449,7 +460,14 @@ export function usePartyPlayback({
     const driftMs = localMs - target.positionMs;
 
     if (isNewRevision) {
-      if (Math.abs(driftMs) >= tuning.seekThresholdMs) {
+      // The wide seek threshold spares a moving picture a visible freeze. A
+      // player that has not started — joining, reloaded, or handed a start
+      // that arrived late — has no picture to interrupt, and rate would take
+      // a minute to close what one landing closes now.
+      const landingToleranceMs = video.paused
+        ? tuning.pausedSnapToleranceMs
+        : tuning.seekThresholdMs;
+      if (Math.abs(driftMs) >= landingToleranceMs) {
         startCatchUp(video, target.positionMs);
         return;
       }

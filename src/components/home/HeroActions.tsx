@@ -1,4 +1,4 @@
-import type { MouseEvent, ReactNode } from "react";
+import type { MouseEvent } from "react";
 import { AlignLeft, Info, Play, RotateCcw } from "lucide-react";
 import { motion, type Variants } from "framer-motion";
 import { Link } from "react-router-dom";
@@ -10,18 +10,10 @@ import { canStartOverFromHero } from "../HeroSection";
 import { FavouriteButton } from "../FavouriteButton";
 import { DownloadButton } from "../offline/DownloadButton";
 import { isOfflineSupported } from "../../lib/offline/offlineLibrary";
-import { Tooltip } from "../ui/Tooltip";
+import "./heroDock.css";
 
-/**
- * The hero's ways in: play, start over, details, My List, the overview.
- * They sit straight on the artwork, whose brightness nothing controls, so
- * every surface here is opaque enough to hold its contrast over a white
- * sky as well as a night scene, and every shadow has room to fall.
- *
- * They fade with the title, and the fade is on each surface, never on a
- * box around them: while anything around a blurred surface is translucent
- * the browser has nothing behind it to blur, so a faded container shows
- * flat glass for the whole fade and snaps the blur on at the end.
+/** A centre dock: play above labelled actions, on smoked glass over the artwork.
+ * One opacity boundary fades the glass and its controls together.
  */
 
 const FOCUS =
@@ -29,11 +21,6 @@ const FOCUS =
 const PRESS =
   "transition-transform duration-200 ease-out active:scale-[0.97] motion-reduce:active:scale-100";
 
-/** Smoked glass: dark enough to read on any artwork, still of the room. */
-const SMOKE =
-  "border border-white/[0.13] bg-[rgba(10,11,13,0.66)] backdrop-blur-2xl backdrop-saturate-[1.4] shadow-[inset_0_1px_0_rgba(255,255,255,0.09),0_12px_32px_-10px_rgba(0,0,0,0.7),0_2px_8px_rgba(0,0,0,0.28)] transition-[background-color,border-color] duration-200 ease-out group-hover:border-white/[0.22] group-hover:bg-[rgba(24,26,29,0.8)]";
-/** The overview button while the overview is open. */
-const LIT = "bg-white transition-colors duration-200 group-hover:bg-zinc-100";
 /**
  * The one bright thing: solid white, lifted by a soft falling shadow, with a
  * hairline that keeps its edge against a white sky.
@@ -50,40 +37,6 @@ export { FOCUS as HERO_FOCUS, PRESS as HERO_PRESS, PLAY as HERO_PLAY };
  * twice in a row would read as nothing having happened.
  */
 const SCROLL_TO_DETAILS_STATE = { scrollToDetails: true } as const;
-
-const ROUND =
-  "inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full";
-const PILL =
-  "inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-full px-6 text-[0.9375rem] font-bold";
-
-/**
- * A control on the artwork: its surface is a layer of its own, faded with
- * its content, so no parent of the blur is ever translucent.
- */
-function Surfaced({
-  fade,
-  surface,
-  children,
-}: {
-  fade: Variants;
-  surface: string;
-  children: ReactNode;
-}) {
-  return (
-    <span
-      className={`group relative inline-flex shrink-0 rounded-full ${PRESS}`}
-    >
-      <motion.span
-        aria-hidden="true"
-        variants={fade}
-        className={`pointer-events-none absolute inset-0 rounded-full ${surface}`}
-      />
-      <motion.span variants={fade} className="relative inline-flex">
-        {children}
-      </motion.span>
-    </span>
-  );
-}
 
 /**
  * What play says and where it starts: the title itself, or for a title under
@@ -140,7 +93,6 @@ export function heroPlayState(
  * this, so a placeholder is reserved for exactly what will load.
  */
 export function heroRowParts({
-  compact,
   onTitlePage,
   isFilm,
   canStartOver,
@@ -153,26 +105,19 @@ export function heroRowParts({
   hasOverview: boolean;
 }) {
   return {
-    // A phone's home row already holds details, My List and the overview;
-    // starting over waits on the title's page, so play keeps room for its
-    // label and the row never holds more than three rounds.
-    startOver: canStartOver && !(compact && !onTitlePage),
-    // On a phone's title page its details, overview included, are the very
-    // next thing down the page, and the row has no room to spare for ways
-    // to them: "Details" and the overview button stay home.
-    details: compact ? (onTitlePage ? null : "round") : "pill",
+    startOver: canStartOver,
+    details: "pill",
     // On a film's own page only: the home hero is for choosing, and a
     // series is downloaded an episode at a time.
     download: onTitlePage && isFilm && isOfflineSupported(),
-    overview: hasOverview && !(compact && onTitlePage),
+    overview: hasOverview,
   } as const;
 }
 
-/** The round buttons a row holds: the parts that are round, and My List. */
+/** Controls in the second floor, including My List. */
 export function heroRoundCount(parts: ReturnType<typeof heroRowParts>) {
   return (
-    Number(parts.startOver) +
-    Number(parts.details === "round") +
+    Number(Boolean(parts.details)) +
     1 +
     Number(parts.download) +
     Number(parts.overview)
@@ -180,9 +125,9 @@ export function heroRoundCount(parts: ReturnType<typeof heroRowParts>) {
 }
 
 /** Play's shape on a full row; the skeleton draws its placeholder from it. */
-export const PLAY_PILL = `${PILL} pl-5 pr-6`;
+export const PLAY_PILL = "hero-dock-play";
 /** "Details" on a full row. */
-export const DETAILS_PILL = PILL;
+export const DETAILS_PILL = "hero-dock-action";
 /** What a full row's play shows, in the order it shows it. */
 export const PLAY_TIME_LEFT = "font-semibold tabular-nums";
 
@@ -234,132 +179,109 @@ export function HeroActions({
   compact = false,
 }: HeroActionsProps) {
   const { t } = useLanguage();
-  const parts = heroRowParts({
-    compact,
-    onTitlePage: Boolean(onShowDetails),
-    isFilm: item.Type === "Movie",
-    canStartOver: Boolean(startOverTo),
-    hasOverview,
-  });
   const overviewLabel = isOverviewOpen
     ? t("hero.hideOverview")
     : t("hero.showOverview");
-
+  const action = `hero-dock-action ${FOCUS}`;
   return (
-    <div
-      className={`flex flex-nowrap items-center ${compact ? "gap-1.5" : "gap-2.5"}`}
+    <motion.div
+      initial="initial"
+      animate="animate"
+      exit="exit"
+      variants={fade}
+      className={`hero-dock ${compact ? "hero-dock-compact" : ""}`}
     >
-      <motion.span
-        variants={fade}
-        className={`inline-flex ${compact ? "min-w-0 flex-1" : "shrink-0"} ${PRESS}`}
-      >
+      <span className={`flex ${PRESS}`}>
         <Link
           to={playTo}
           onClick={onPlay}
-          aria-label={compact ? playLabel : undefined}
-          className={`relative ${PLAY} ${FOCUS} ${
-            compact ? `${PILL} w-full min-w-0 shrink px-4` : PLAY_PILL
-          }`}
+          aria-label={
+            progress
+              ? `${playLabel}, ${t("hero.timeLeft").replace("{time}", progress.left)}`
+              : playLabel
+          }
+          className={`hero-dock-play ${PLAY} ${FOCUS}`}
         >
-          <Play size={19} fill="currentColor" className="shrink-0" />
-          {compact ? (
-            <span className="truncate">{shortPlayLabel}</span>
-          ) : (
-            <span>{playLabel}</span>
-          )}
           {progress ? (
-            <>
-              {compact ? null : (
-                <span className={`${PLAY_TIME_LEFT} text-zinc-500`}>
-                  {t("hero.timeLeft").replace("{time}", progress.left)}
-                </span>
-              )}
-              {/* How far in, drawn under the label rather than as a halo. */}
-              <span
-                aria-hidden="true"
-                className="absolute inset-x-6 bottom-[7px] h-[2px] overflow-hidden rounded-full bg-zinc-950/[0.12]"
-              >
-                <span
-                  className="block h-full rounded-full bg-zinc-950"
-                  style={{ width: `${Math.max(3, progress.share * 100)}%` }}
-                />
-              </span>
-            </>
+            <span
+              aria-hidden="true"
+              className="hero-dock-watched"
+              style={{
+                width: `${Math.min(100, Math.max(0, progress.share * 100))}%`,
+              }}
+            />
+          ) : null}
+          <Play size={18} fill="currentColor" className="relative shrink-0" />
+          <span className="relative truncate">{shortPlayLabel}</span>
+          {progress ? (
+            <span
+              className={`relative shrink-0 text-xs text-zinc-600 ${PLAY_TIME_LEFT}`}
+            >
+              {t("hero.timeLeft").replace("{time}", progress.left)}
+            </span>
           ) : null}
         </Link>
-      </motion.span>
-
-      {parts.startOver && startOverTo ? (
-        <Surfaced fade={fade} surface={SMOKE}>
-          <Tooltip content={t("details.playFromBeginning")} placement="top">
-            <Link
-              to={startOverTo}
-              aria-label={t("details.playFromBeginning")}
-              className={`${ROUND} text-white ${FOCUS}`}
-            >
-              <RotateCcw size={18} strokeWidth={2.2} />
-            </Link>
-          </Tooltip>
-        </Surfaced>
+      </span>
+      {startOverTo ? (
+        <Link
+          to={startOverTo}
+          aria-label={t("details.playFromBeginning")}
+          title={t("details.playFromBeginning")}
+          className={`${action} hero-dock-restart`}
+        >
+          <RotateCcw size={16} />
+          <span>{t("details.restartWatching")}</span>
+        </Link>
       ) : null}
-      {parts.details === null ? null : (
-        <Surfaced fade={fade} surface={SMOKE}>
-          {onShowDetails ? (
-            <button
-              type="button"
-              onClick={onShowDetails}
-              aria-label={compact ? t("common.details") : undefined}
-              className={`${compact ? ROUND : PILL} text-white ${FOCUS}`}
-            >
-              <Info size={19} strokeWidth={2.2} />
-              {compact ? null : t("common.details")}
-            </button>
-          ) : (
-            <Link
-              to={detailsTo}
-              state={SCROLL_TO_DETAILS_STATE}
-              aria-label={compact ? t("common.details") : undefined}
-              className={`${compact ? ROUND : PILL} text-white ${FOCUS}`}
-            >
-              <Info size={19} strokeWidth={2.2} />
-              {compact ? null : t("common.details")}
-            </Link>
-          )}
-        </Surfaced>
-      )}
-      <Surfaced fade={fade} surface={SMOKE}>
+      <div className="hero-dock-row">
+        {onShowDetails ? (
+          <button type="button" onClick={onShowDetails} className={action}>
+            <Info size={16} />
+            <span>{t("common.details")}</span>
+          </button>
+        ) : (
+          <Link
+            to={detailsTo}
+            state={SCROLL_TO_DETAILS_STATE}
+            className={action}
+          >
+            <Info size={16} />
+            <span>{t("common.details")}</span>
+          </Link>
+        )}
         <FavouriteButton
           item={item}
-          iconSize={20}
-          className={`${ROUND} text-white ${FOCUS}`}
+          iconSize={16}
+          showLabel
+          shortLabel={t("myList.title")}
+          className={action}
         />
-      </Surfaced>
-      {parts.download ? (
-        <Surfaced fade={fade} surface={SMOKE}>
+        {hasOverview ? (
+          <button
+            type="button"
+            aria-label={overviewLabel}
+            aria-expanded={isOverviewOpen}
+            aria-controls={overviewId}
+            onClick={onToggleOverview}
+            className={action}
+          >
+            <AlignLeft size={16} />
+            <span>{t("details.overview")}</span>
+            <span
+              aria-hidden="true"
+              className="hero-dock-story-dot"
+              data-open={isOverviewOpen}
+            />
+          </button>
+        ) : null}
+        {onShowDetails && item.Type === "Movie" && isOfflineSupported() ? (
           <DownloadButton
             item={item}
-            className={`${ROUND} text-white ${FOCUS}`}
+            iconSize={16}
+            className={`${action} hero-dock-extra`}
           />
-        </Surfaced>
-      ) : null}
-      {parts.overview ? (
-        <Surfaced fade={fade} surface={isOverviewOpen ? LIT : SMOKE}>
-          <Tooltip content={overviewLabel} placement="top">
-            <button
-              type="button"
-              aria-label={overviewLabel}
-              aria-expanded={isOverviewOpen}
-              aria-controls={overviewId}
-              onClick={onToggleOverview}
-              className={`${ROUND} ${FOCUS} transition-colors duration-200 ${
-                isOverviewOpen ? "text-zinc-950" : "text-white"
-              }`}
-            >
-              <AlignLeft size={19} strokeWidth={2.2} />
-            </button>
-          </Tooltip>
-        </Surfaced>
-      ) : null}
-    </div>
+        ) : null}
+      </div>
+    </motion.div>
   );
 }

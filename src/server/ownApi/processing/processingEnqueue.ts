@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises";
+import { stat, unlink } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import path from "node:path";
 import { OwnApiError } from "../ownApiHandler";
@@ -34,7 +34,14 @@ import {
   summarisePackage,
   type PackageDamage,
 } from "./packageIndex";
-import { missingPackageAssets } from "./packageAssets";
+import {
+  describeMissingPackageAssets,
+  missingPackageAssets,
+} from "./packageAssets";
+import { resolvePublishedTitleRoot } from "../../../renditions/adaptive/publishedRoot";
+import { planRetainedSidecarSubtitles } from "../../../renditions/adaptive/processor";
+import { sidecarSubtitleIsCurrent } from "../../../renditions/adaptive/sidecarSubtitles";
+import { subtitleRenditionId } from "../../../renditions/adaptive/profile";
 
 /**
  * The one way a processing job is created.
@@ -58,10 +65,19 @@ export interface ProcessingEnqueueOptions {
   store: ProcessingJobStore;
   queue: JobQueue;
   mediaRoot: string;
-  renditionRoot: string;
+  workRoot: string;
   ffprobePath: string;
   hardware: () => Promise<HardwareReport>;
   storageGuard: StorageGuard;
+  /**
+   * Encodes run on another machine (this host's worker is `light`).
+   *
+   * Free space on this host's scratch then says nothing about the job, so it is
+   * not measured: the estimate is left unknown rather than refused on the
+   * wrong disk. The worker that claims the job checks its own scratch before
+   * planning, which is where the space is actually spent.
+   */
+  processingElsewhere?: boolean;
 }
 
 export interface LocatedSource {
@@ -96,6 +112,14 @@ export interface AnalysisResult {
   titleRoot: string;
   mtimeMs: number;
   existing: ExistingPackageView;
+}
+
+/** What removing a source did. A refusal is thrown, never returned. */
+export interface SourceRemoval {
+  file: MediaFileRow;
+  deleted: boolean;
+  alreadyAbsent: boolean;
+  freedBytes: number;
 }
 
 /** Why one title in a bulk request was not queued. */
@@ -186,6 +210,25 @@ export interface ProcessingEnqueuer {
   enqueueAll(
     targets: ReadonlyArray<{ itemId: string; mediaFileId?: string }>,
   ): Promise<BulkEnqueueOutcome>;
+  /**
+   * Deletes the source of a title whose package already holds every rendition
+   * it would ever be given, or refuses with an `OwnApiError` saying why the
+   * source is still needed.
+   *
+   * The one place this decision is made — for the button and for a helper
+   * removing sources after upload alike — because the bytes are gone for good.
+   * `expectedFingerprint` further requires the source to still be the bytes a
+   * particular job built from. `onDamage` hears of a package found incomplete,
+   * so a caller with a package index can stop advertising it as whole.
+   */
+  removeSource(
+    itemId: string,
+    mediaFileId?: string,
+    options?: {
+      expectedFingerprint?: string;
+      onDamage?: (mediaFileId: string, damage: PackageDamage) => void;
+    },
+  ): Promise<SourceRemoval>;
 }
 
 export function createProcessingEnqueuer({
@@ -193,10 +236,11 @@ export function createProcessingEnqueuer({
   store,
   queue,
   mediaRoot,
-  renditionRoot,
+  workRoot,
   ffprobePath,
   hardware,
   storageGuard,
+  processingElsewhere = false,
 }: ProcessingEnqueueOptions): ProcessingEnqueuer {
   const resolvedMediaRoot = path.resolve(mediaRoot);
 
@@ -304,7 +348,10 @@ export function createProcessingEnqueuer({
      * subtitle track — cannot be repaired by re-encoding one rung, so it is
      * reported as an incomplete package instead of being quietly excused.
      */
-    const missing = await missingPackageAssets(titleRoot, manifest);
+    const missing = await missingPackageAssets(
+      await resolvePublishedTitleRoot(titleRoot),
+      manifest,
+    );
     const damage: PackageDamage = {
       manifestId: manifestIdentity(manifest),
       rungs: [
@@ -340,7 +387,9 @@ export function createProcessingEnqueuer({
     }
     const probe = await probeMediaFile(absolutePath, ffprobePath);
     const report = await hardware();
-    const freeBytes = await freeBytesOn(renditionRoot);
+    const freeBytes = processingElsewhere
+      ? undefined
+      : await freeBytesOn(workRoot);
     const fingerprint = await computeSourceFingerprint(absolutePath, stats);
     const titleRoot = await titleRootFor(itemId, absolutePath);
     const existing = await existingPackage(titleRoot, fingerprint);
@@ -366,6 +415,28 @@ export function createProcessingEnqueuer({
      * only the values above, so asking it twice costs nothing.
      */
     const planned = decideProcessing(plan);
+    const retainedSidecars = await planRetainedSidecarSubtitles(absolutePath);
+    const manifest = existing.present
+      ? await readTitlePackageManifest(titleRoot)
+      : null;
+    const missingSidecars = retainedSidecars.filter(
+      (sidecar) =>
+        !sidecarSubtitleIsCurrent(
+          sidecar,
+          manifest?.subtitle.find(
+            (track) => track.id === subtitleRenditionId(sidecar.streamIndex),
+          ),
+        ),
+    );
+    const missingEmbeddedSubtitles =
+      planned.streams.keptSubtitleStreamIndexes.filter(
+        (index) =>
+          !manifest?.subtitle.some(
+            (track) => track.id === subtitleRenditionId(index),
+          ),
+      );
+    const missingSubtitleCount =
+      missingSidecars.length + missingEmbeddedSubtitles.length;
     const missingRungs = planned.ladder
       .map((rung) => rung.qualityHeight)
       .filter(
@@ -374,7 +445,9 @@ export function createProcessingEnqueuer({
     const isCurrent =
       existing.present &&
       existing.current === true &&
-      missingRungs.length === 0;
+      !existing.damage?.elsewhere &&
+      missingRungs.length === 0 &&
+      missingSubtitleCount === 0;
 
     /*
      * Re-decided once the outstanding work is known, so the estimate and the
@@ -386,7 +459,7 @@ export function createProcessingEnqueuer({
       !isCurrent &&
       existing.present &&
       existing.current === true &&
-      missingRungs.length > 0;
+      !existing.damage?.elsewhere;
     const decision = isCurrent
       ? decideProcessing({ ...plan, alreadyCurrent: true })
       : incremental
@@ -398,6 +471,9 @@ export function createProcessingEnqueuer({
             audioTracksToEncode: 0,
           })
         : planned;
+    if (incremental && missingSubtitleCount > 0 && missingRungs.length === 0) {
+      decision.summary = `Refresh ${missingSubtitleCount} subtitle track(s), reusing the published video and audio.`;
+    }
 
     return {
       decision,
@@ -710,6 +786,130 @@ export function createProcessingEnqueuer({
     return outcome;
   };
 
+  /*
+   * Nothing a caller believes is taken on trust: the source is
+   * re-fingerprinted, the ladder is re-decided from it, and every file the
+   * package claims is checked before the source is unlinked. A page can be
+   * looking at a preview minutes old, and in that time the file can have been
+   * replaced or the package half-removed.
+   */
+  const removeSource: ProcessingEnqueuer["removeSource"] = async (
+    itemId,
+    mediaFileId,
+    options = {},
+  ) => {
+    const located = await locateSource(itemId, mediaFileId);
+    const active = await store.findActiveForFile(located.file.id);
+    if (active) {
+      throw new OwnApiError(
+        "PROCESSING_JOB_EXISTS",
+        "This file has a processing job that has not finished, and that job is still reading it.",
+        409,
+      );
+    }
+
+    const stats = await statSource(located.file, located.absolutePath);
+    if (!stats) {
+      /*
+       * The state being asked for is already the state on disk. Reporting
+       * that is more useful than failing: a double submission, or a page
+       * that lost the response, must not read as a problem.
+       */
+      return {
+        file: located.file,
+        deleted: false,
+        alreadyAbsent: true,
+        freedBytes: 0,
+      };
+    }
+    if (!stats.isFile()) {
+      throw new OwnApiError(
+        "SOURCE_NOT_A_FILE",
+        "The source path is not a regular file.",
+        409,
+      );
+    }
+
+    /*
+     * The package's real location, which for an episode is its own folder
+     * inside the season rather than the season folder itself. Removing a
+     * source is the one action here that cannot be taken back, so it must
+     * be checking the package that actually belongs to these bytes.
+     */
+    const titleRoot = await titleRootFor(itemId, located.absolutePath);
+    const manifest = await readTitlePackageManifest(titleRoot).catch(
+      () => undefined,
+    );
+    if (!manifest) {
+      throw new OwnApiError(
+        "PROCESSING_PACKAGE_INCOMPLETE",
+        "This title's package manifest could not be read, so its renditions cannot be confirmed.",
+        409,
+      );
+    }
+    // Checked where the manifest was read from: behind a publication pointer
+    // that is the current generation, not the title folder.
+    const missing = await missingPackageAssets(
+      await resolvePublishedTitleRoot(titleRoot),
+      manifest,
+    );
+    if (missing.length > 0) {
+      options.onDamage?.(located.file.id, {
+        manifestId: manifestIdentity(manifest),
+        rungs: [
+          ...new Set(
+            missing
+              .map((asset) => asset.qualityHeight)
+              .filter((height): height is number => height !== undefined),
+          ),
+        ],
+        elsewhere: missing.some((asset) => asset.qualityHeight === undefined),
+      });
+      throw new OwnApiError(
+        "PROCESSING_PACKAGE_INCOMPLETE",
+        `This title's package is incomplete on disk, so its source is still the only whole copy: ${describeMissingPackageAssets(missing)}.`,
+        409,
+      );
+    }
+
+    /*
+     * Then the questions the files cannot answer: whether these are still
+     * the bytes the package was built from, and whether today's ladder
+     * would give the title a rung it does not have.
+     */
+    const { existing, fingerprint } = await analyse(itemId, located.file.id);
+    if (
+      !existing.present ||
+      !existing.sourceMatches ||
+      !existing.profileMatches ||
+      existing.missingRungs.length > 0
+    ) {
+      throw new OwnApiError(
+        "PROCESSING_PACKAGE_INCOMPLETE",
+        "This title still needs its source: its package is missing renditions, was built from different bytes, or was built by an older profile.",
+        409,
+      );
+    }
+    if (
+      options.expectedFingerprint !== undefined &&
+      fingerprint !== options.expectedFingerprint
+    ) {
+      throw new OwnApiError(
+        "SOURCE_CHANGED",
+        "The source is no longer the file this package was built from.",
+        409,
+      );
+    }
+
+    await unlink(located.absolutePath);
+    return {
+      file: located.file,
+      deleted: true,
+      alreadyAbsent: false,
+      freedBytes: stats.size,
+    };
+  };
+
   return {
     locateSource,
     statSource,
@@ -719,6 +919,7 @@ export function createProcessingEnqueuer({
     enqueue,
     ensureAttempt,
     enqueueAll,
+    removeSource,
   };
 }
 

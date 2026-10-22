@@ -26,7 +26,9 @@ export interface RenditionFileMetadata {
     | "h264_videotoolbox"
     | "libx265"
     | "hevc_qsv"
-    | "hevc_videotoolbox";
+    | "hevc_videotoolbox"
+    | "h264_nvenc"
+    | "hevc_nvenc";
   /** True when the file carries the source HDR10 grade rather than SDR. */
   hdr?: boolean;
   /** True when an HDR master was tone mapped to SDR for this rendition. */

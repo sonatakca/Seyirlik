@@ -19,12 +19,19 @@ const STORED_IMAGE = {
   storageKey: "ab/cd/hash-original.jpg",
 };
 
-function buildRoutes() {
+function buildRoutes({ originalOnDisk = false } = {}) {
   const getVariant = vi.fn(async (_image: unknown, maxWidth: number) => ({
     contentHash: `hash-w${maxWidth}`,
     contentType: "image/webp",
     storageKey: `variants/v1/hash-w${maxWidth}.webp`,
   }));
+  const getCardLogoOverlay = vi.fn(
+    async (_image: unknown, _layout: unknown, maxWidth: number) => ({
+      contentHash: `overlay-w${maxWidth}`,
+      contentType: "image/webp",
+      storageKey: `card-logo-overlay-v1/overlay-w${maxWidth}.webp`,
+    }),
+  );
 
   const images = {
     findByItemAndType: vi.fn(async () => STORED_IMAGE),
@@ -33,20 +40,27 @@ function buildRoutes() {
 
   const imageStorage = {
     getVariant,
+    getCardLogoOverlay,
     // Resolving to a path that does not exist makes serveImage throw
     // IMAGE_NOT_FOUND after the width has been negotiated, which is all these
     // tests need to observe.
-    resolve: (storageKey: string) => `/nonexistent/${storageKey}`,
+    resolve: (storageKey: string) =>
+      originalOnDisk && !storageKey.startsWith("variants/")
+        ? import.meta.filename
+        : `/nonexistent/${storageKey}`,
   } as unknown as ImageStorage;
 
   const catalogue = {
     canUserAccessItem: vi.fn(async () => true),
-    getItem: vi.fn(async () => null),
+    getItem: vi.fn(async () => ({
+      logoLayout: { x: 0.5, y: 0.8, width: 0.74, shadow: 1 },
+    })),
   } as unknown as CatalogueRepository;
 
   return {
     routes: createImageRoutes({ images, imageStorage, catalogue }),
     getVariant,
+    getCardLogoOverlay,
   };
 }
 
@@ -62,7 +76,11 @@ function itemImageRoute(routes: RouteDefinition[]): RouteDefinition {
   return route;
 }
 
-async function callRoute(route: RouteDefinition, query: string) {
+async function callRoute(
+  route: RouteDefinition,
+  query: string,
+  imageType = "backdrop",
+) {
   const context = {
     request: { headers: {} } as unknown as IncomingMessage,
     response: {
@@ -72,9 +90,9 @@ async function callRoute(route: RouteDefinition, query: string) {
     } as unknown as ServerResponse,
     requestId: "req-1",
     url: new URL(
-      `https://seyirlik.test/items/${ITEM_ID}/images/backdrop${query}`,
+      `https://seyirlik.test/items/${ITEM_ID}/images/${imageType}${query}`,
     ),
-    params: { itemId: ITEM_ID, imageType: "backdrop" },
+    params: { itemId: ITEM_ID, imageType },
     method: "GET",
     principal: { userId: "user-1" },
     requirePrincipal: () => ({ userId: "user-1" }),
@@ -121,10 +139,41 @@ describe("image routes", () => {
   });
 
   it("serves the original when no width is requested", async () => {
-    const { routes, getVariant } = buildRoutes();
+    const { routes, getVariant } = buildRoutes({ originalOnDisk: true });
 
     await callRoute(itemImageRoute(routes), "");
 
     expect(getVariant).not.toHaveBeenCalled();
+  });
+
+  it("serves the widest variant when the original's file is gone", async () => {
+    const { routes, getVariant } = buildRoutes();
+
+    await callRoute(itemImageRoute(routes), "");
+
+    expect(getVariant).toHaveBeenCalledWith(
+      expect.anything(),
+      MAX_ARTWORK_WIDTH,
+    );
+  });
+
+  it("renders a placed logo into a transparent card layer", async () => {
+    const { routes, getVariant, getCardLogoOverlay } = buildRoutes();
+
+    const error = await callRoute(
+      itemImageRoute(routes),
+      `?maxWidth=440&variant=card-logo-overlay-v1&layoutItemId=${ITEM_ID}`,
+      "logo",
+    );
+
+    expect(getCardLogoOverlay).toHaveBeenCalledWith(
+      expect.anything(),
+      { x: 0.5, y: 0.8, width: 0.74, shadow: 1 },
+      440,
+    );
+    expect(getVariant).not.toHaveBeenCalled();
+    // The request reached the generated file; this fixture deliberately has
+    // no files on disk, so serving it is the only remaining failure.
+    expect((error as { code?: string })?.code).toBe("IMAGE_NOT_FOUND");
   });
 });

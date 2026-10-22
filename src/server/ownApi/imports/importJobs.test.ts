@@ -270,6 +270,7 @@ describe("declaring where downloads are read from", () => {
       downloadRoot: "C:\\SeyirlikDownloads\\complete\\seyirlik",
       retainSource: true,
       forceCopy: true,
+      autoProcess: true,
     });
   });
 
@@ -280,7 +281,21 @@ describe("declaring where downloads are read from", () => {
       downloadRoot: "/downloads",
       retainSource: false,
       forceCopy: false,
+      autoProcess: true,
     });
+  });
+
+  it("queues imports for processing unless told not to", () => {
+    expect(
+      parseImportConfig(
+        env(JSON.stringify({ downloadRoot: "/d", autoProcess: false })),
+      )?.autoProcess,
+    ).toBe(false);
+    expect(() =>
+      parseImportConfig(
+        env(JSON.stringify({ downloadRoot: "/d", autoProcess: "no" })),
+      ),
+    ).toThrow(/autoProcess must be true or false/);
   });
 
   it.each([

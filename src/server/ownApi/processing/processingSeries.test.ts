@@ -28,6 +28,7 @@ import {
   type ProcessingJobRecord,
   type ProcessingJobStore,
 } from "./jobStore";
+import * as processingDecision from "../../../renditions/processing/decide";
 import { createProcessingRoutes } from "./processingRoutes";
 
 vi.mock("../../../renditions/probe", () => ({
@@ -407,7 +408,12 @@ async function call(
   };
 }
 
-function build(library: Library, seed: ProcessingJobRecord[] = []) {
+function build(
+  library: Library,
+  seed: ProcessingJobRecord[] = [],
+  workRoot = library.root,
+  processingElsewhere = false,
+) {
   const store = createStore(seed);
   const queue = createQueue();
   const routes = createProcessingRoutes({
@@ -415,7 +421,8 @@ function build(library: Library, seed: ProcessingJobRecord[] = []) {
     store,
     queue,
     mediaRoot: library.root,
-    renditionRoot: library.root,
+    workRoot,
+    processingElsewhere,
   });
   return { routes, store, queue };
 }
@@ -552,7 +559,7 @@ describe("GET /processing/overview", () => {
       store: createStore(),
       queue: createQueue(),
       mediaRoot: library.root,
-      renditionRoot: library.root,
+      workRoot: library.root,
     });
     await call(routes, "GET", "/processing/overview");
     expect(kindsAsked[0]).toEqual(["movie", "episode"]);
@@ -560,6 +567,65 @@ describe("GET /processing/overview", () => {
 });
 
 // ----------------------------------------------------------- single title
+
+describe("processing scratch capacity", () => {
+  it("checks the scratch volume for preview and refuses enqueue when it is full", async () => {
+    const library = await buildLibrary(SEASON_ONE);
+    const workRoot = path.join(library.root, "scratch");
+    const space = vi
+      .spyOn(processingDecision, "freeBytesOn")
+      .mockImplementation(async (directory) =>
+        directory === workRoot ? 1_000_000 : 900_000_000_000,
+      );
+    try {
+      const { routes, store, queue } = build(library, [], workRoot);
+      const itemId = library.rows.find((row) => row.kind === "episode")!.itemId;
+      const preview = await call(routes, "POST", "/processing/preview", {
+        body: { itemId },
+      });
+      expect(preview.error).toBeUndefined();
+      expect(preview.data).toMatchObject({
+        decision: { estimate: { freeBytes: 1_000_000, sufficient: false } },
+      });
+      const queued = await call(routes, "POST", "/processing/jobs", {
+        body: { itemId },
+      });
+      expect(queued.error?.statusCode).toBe(507);
+      expect(store.created).toHaveLength(0);
+      expect(queue.enqueued).toHaveLength(0);
+    } finally {
+      space.mockRestore();
+    }
+  });
+});
+
+describe("encodes that run on another machine", () => {
+  /*
+   * The server's worker is `light` and a laptop encodes. The server's own
+   * scratch says nothing about that job, and refusing on it blocked every
+   * title while the laptop had hundreds of gigabytes free.
+   */
+  it("queues the job without measuring this host's scratch", async () => {
+    const library = await buildLibrary(SEASON_ONE);
+    const workRoot = path.join(library.root, "scratch");
+    const space = vi
+      .spyOn(processingDecision, "freeBytesOn")
+      .mockImplementation(async () => 1_000_000);
+    try {
+      const { routes, store, queue } = build(library, [], workRoot, true);
+      const itemId = library.rows.find((row) => row.kind === "episode")!.itemId;
+      const queued = await call(routes, "POST", "/processing/jobs", {
+        body: { itemId },
+      });
+      expect(queued.error).toBeUndefined();
+      expect(store.created).toHaveLength(1);
+      expect(queue.enqueued).toHaveLength(1);
+      expect(space).not.toHaveBeenCalledWith(workRoot);
+    } finally {
+      space.mockRestore();
+    }
+  });
+});
 
 describe("POST /processing/jobs", () => {
   it("queues one episode through the same path a movie uses", async () => {

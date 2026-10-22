@@ -296,7 +296,7 @@ describe("SearchOverlay", () => {
     expect(placement).not.toBeNull();
     expect(placement!.style.left).toBe("25%");
     expect(placement!.style.top).toBe("40%");
-    expect(placement!.style.width).toBe("60%");
+    expect(placement!.style.width).toMatch(/^calc\(60% \+ \d+px\)$/);
   });
 
   it("falls back to the default placement when a title was never adjusted", async () => {

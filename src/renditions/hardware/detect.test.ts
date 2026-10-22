@@ -37,7 +37,8 @@ describe("adapter ordering", () => {
   it("knows which encoders this build can actually configure", () => {
     expect(isDriveableEncoder("h264_videotoolbox")).toBe(true);
     expect(isDriveableEncoder("libx264")).toBe(true);
-    expect(isDriveableEncoder("h264_nvenc")).toBe(false);
+    expect(isDriveableEncoder("hevc_nvenc")).toBe(true);
+    expect(isDriveableEncoder("h264_amf")).toBe(false);
   });
 });
 
@@ -87,10 +88,35 @@ describe("detectHardware", () => {
       platform: "linux",
       probe: ok as never,
     });
-    const nvenc = report.adapters.find((adapter) => adapter.id === "nvenc");
+    const vaapi = report.adapters.find((adapter) => adapter.id === "vaapi");
 
-    expect(nvenc?.available).toBe(false);
-    expect(nvenc?.lanes[0]?.reason).toBe("not-implemented");
+    expect(vaapi?.available).toBe(false);
+    expect(vaapi?.lanes[0]?.reason).toBe("not-implemented");
+  });
+
+  it("prefers NVENC on a machine with an NVIDIA GPU", async () => {
+    const report = await detectHardware({
+      platform: "win32",
+      probe: ok as never,
+    });
+
+    expect(report.selected.hevcTenBit).toBe("hevc_nvenc");
+    expect(report.selected.h264).toBe("h264_nvenc");
+  });
+
+  it("keeps Quick Sync where NVENC cannot open a session", async () => {
+    const probe = vi.fn(async (_ffmpeg: string, encoder: string) =>
+      encoder.endsWith("_nvenc")
+        ? { ok: false, detail: "No NVENC capable devices found" }
+        : { ok: true },
+    );
+    const report = await detectHardware({
+      platform: "win32",
+      probe: probe as never,
+    });
+
+    expect(report.selected.hevcTenBit).toBe("hevc_qsv");
+    expect(report.selectedAdapter.h264).toBe("qsv");
   });
 
   it("reports FFmpeg's own reason when a probe fails", async () => {

@@ -6,6 +6,7 @@ import {
   useReducedMotion,
   type HTMLMotionProps,
 } from "framer-motion";
+import { move, REST, settle } from "../../lib/compositorMotion";
 import { Loader2, Search, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useLanguage } from "../../i18n/LanguageContext";
@@ -18,7 +19,8 @@ import {
   getLogoLayout,
   getLogoLayoutStyle,
   getLogoShadowBackdropStyle,
-  getLogoShadowFilter,
+  getLogoShadowFrameStyle,
+  getLogoShadowReach,
 } from "../../lib/logoLayout";
 import { getMediaArtwork } from "../../lib/mediaArtwork";
 import { getLatestMediaItems, searchItems } from "../../lib/mediaApi";
@@ -75,21 +77,26 @@ function getResultSubtitle(item: MediaItem): string {
  */
 function ResultLogo({ item, logoUrl }: { item: MediaItem; logoUrl: string }) {
   const logoLayout = getLogoLayout(item);
-  const logoShadowFilter = getLogoShadowFilter(
+  const logoShadowFrame = getLogoShadowFrameStyle(
     logoLayout?.shadow ?? DEFAULT_LOGO_SHADOW,
   );
 
   if (!logoLayout) {
     // Never adjusted, so it sits where an untouched card draws it.
     return (
-      <img
-        src={logoUrl}
-        alt=""
-        aria-hidden="true"
-        loading="lazy"
-        style={logoShadowFilter ? { filter: logoShadowFilter } : undefined}
-        className="pointer-events-none absolute inset-x-0 bottom-1.5 mx-auto h-auto max-h-[42%] w-auto max-w-[82%] object-contain"
-      />
+      <span
+        data-logo-shadow="true"
+        style={logoShadowFrame}
+        className="pointer-events-none absolute inset-0 flex items-end justify-center"
+      >
+        <img
+          src={logoUrl}
+          alt=""
+          aria-hidden="true"
+          loading="lazy"
+          className="mb-1.5 h-auto max-h-[42%] w-auto max-w-[82%] object-contain"
+        />
+      </span>
     );
   }
 
@@ -98,25 +105,35 @@ function ResultLogo({ item, logoUrl }: { item: MediaItem; logoUrl: string }) {
   return (
     <span
       data-logo-layout="true"
-      style={getLogoLayoutStyle(logoLayout)}
+      style={getLogoLayoutStyle(
+        logoLayout,
+        getLogoShadowReach(logoLayout.shadow),
+      )}
       className="pointer-events-none absolute block"
     >
-      {logoShadowBackdropStyle ? (
+      <span className="relative flow-root">
+        {logoShadowBackdropStyle ? (
+          <span
+            aria-hidden="true"
+            data-logo-shadow-backdrop="true"
+            style={logoShadowBackdropStyle}
+            className="absolute inset-[6%] rounded-[45%]"
+          />
+        ) : null}
         <span
-          aria-hidden="true"
-          data-logo-shadow-backdrop="true"
-          style={logoShadowBackdropStyle}
-          className="absolute inset-[6%] rounded-[45%]"
-        />
-      ) : null}
-      <img
-        src={logoUrl}
-        alt=""
-        aria-hidden="true"
-        loading="lazy"
-        style={logoShadowFilter ? { filter: logoShadowFilter } : undefined}
-        className="relative block h-auto w-full object-contain"
-      />
+          data-logo-shadow="true"
+          style={logoShadowFrame}
+          className="relative block"
+        >
+          <img
+            src={logoUrl}
+            alt=""
+            aria-hidden="true"
+            loading="lazy"
+            className="block h-auto w-full object-contain"
+          />
+        </span>
+      </span>
     </span>
   );
 }
@@ -364,17 +381,15 @@ export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {
         exit: { opacity: 0 },
       }
     : {
-        initial: { opacity: 0, y: -18, scale: 0.97 },
+        initial: { opacity: 0, transform: move({ y: -18, scale: 0.97 }) },
         animate: {
           opacity: 1,
-          y: 0,
-          scale: 1,
+          ...settle,
           transition: { type: "spring", bounce: 0, duration: 0.38 },
         },
         exit: {
           opacity: 0,
-          y: -10,
-          scale: 0.985,
+          transform: [REST, move({ y: -10, scale: 0.985 })],
           transition: { duration: 0.14, ease: [0.4, 0, 1, 1] as const },
         },
       };
@@ -429,9 +444,12 @@ export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {
                 {status === "loading" ? (
                   <motion.span
                     key="search-loading"
-                    initial={{ opacity: 0, scale: 0.6 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.6 }}
+                    initial={{ opacity: 0, transform: move({ scale: 0.6 }) }}
+                    animate={{ opacity: 1, ...settle }}
+                    exit={{
+                      opacity: 0,
+                      transform: [REST, move({ scale: 0.6 })],
+                    }}
                     transition={{ duration: 0.16 }}
                     className="flex shrink-0"
                   >
@@ -498,11 +516,11 @@ export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {
                               initial={
                                 shouldReduceMotion
                                   ? { opacity: 0 }
-                                  : { opacity: 0, y: 8 }
+                                  : { opacity: 0, transform: move({ y: 8 }) }
                               }
                               animate={{
                                 opacity: 1,
-                                y: 0,
+                                ...(shouldReduceMotion ? {} : settle),
                                 transition: {
                                   duration: 0.26,
                                   delay,

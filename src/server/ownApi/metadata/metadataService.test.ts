@@ -123,6 +123,13 @@ function fakeStorage(): ImageStorage {
       contentType: "image/webp",
       sizeBytes: 10,
     }),
+    getCardLogoOverlay: async (image) => ({
+      ...image,
+      contentType: "image/webp",
+      sizeBytes: 10,
+    }),
+    readSource: async () => Buffer.alloc(0),
+    hasSource: async () => true,
     remove: async () => undefined,
   };
 }
@@ -518,5 +525,76 @@ describe("film collections", () => {
 
     await service.refreshItem("item-1");
     expect(collections.calls).toEqual([]);
+  });
+});
+
+describe("episodes that arrive after their series was identified", () => {
+  function episode(
+    id: string,
+    episodeNumber: number,
+    metadataState: string,
+  ): MetadataTarget {
+    return target({
+      id,
+      kind: "episode",
+      title: `Episode ${episodeNumber}`,
+      productionYear: null,
+      seriesId: "series-1",
+      parentIndexNumber: 1,
+      indexNumber: episodeNumber,
+      metadataState,
+    });
+  }
+
+  it("describes the new ones and settles those the provider does not list", async () => {
+    const series = target({
+      id: "series-1",
+      kind: "series",
+      title: "Lilyhammer",
+      providerIds: { tmdb: "42368" },
+      metadataState: "matched",
+    });
+    const metadata = fakeMetadata(series);
+    metadata.repository.listEpisodesForSeries = async () => [
+      episode("e3", 3, "pending"),
+      episode("e9", 9, "pending"),
+      episode("e1", 1, "matched"),
+    ];
+    const service = createMetadataService({
+      metadata: metadata.repository,
+      images: fakeImages(),
+      imageStorage: fakeStorage(),
+      tmdb: fakeTmdb({
+        getSeries: async () =>
+          details({ providerId: "42368", title: "Lilyhammer" }),
+        getSeasonEpisodes: async () => [
+          {
+            seasonNumber: 1,
+            episodeNumber: 3,
+            title: "Guantanamo Blues",
+            overview: "Frank joins a real estate deal.",
+            airDate: "2012-02-08",
+            stillPath: "/still3.jpg",
+          },
+        ],
+      }),
+    });
+
+    await service.identify(series);
+
+    const byItem = (id: string) =>
+      metadata.updates
+        .filter((entry) => entry.itemId === id)
+        .map((entry) => entry.update);
+    expect(byItem("e3")).toContainEqual(
+      expect.objectContaining({
+        title: "Guantanamo Blues",
+        metadataState: "matched",
+      }),
+    );
+    // Not in the provider's season: settled, so the series is not picked again.
+    expect(byItem("e9")).toEqual([{ metadataState: "unmatched" }]);
+    // Already described before, and not touched.
+    expect(byItem("e1")).toEqual([]);
   });
 });

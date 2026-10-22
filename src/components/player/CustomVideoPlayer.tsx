@@ -76,12 +76,10 @@ import {
   TRICKPLAY_COLUMNS,
   TRICKPLAY_IMAGES_PER_SHEET,
   TRICKPLAY_INTERVAL_SECONDS,
-  TRICKPLAY_ROWS,
   VIEW_MODE_CURSOR_HIDE_MS,
 } from "./constants";
 import {
   clamp,
-  getSpritePositionPercent,
   getVideoAspectRatioFromElement,
   getVideoAspectRatioFromSource,
 } from "./mediaGeometry";
@@ -169,6 +167,9 @@ import {
   type VideoFit,
 } from "./useVideoFit";
 import { usePartyEventToast } from "./usePartyEventToast";
+import { QualityChangeToast } from "./QualityChangeToast";
+import { useQualityChangeToast } from "./useQualityChangeToast";
+import { formatQualityHeight, type PlayingQuality } from "./qualityToastModel";
 import { useMediaSessionControls } from "./useMediaSessionControls";
 import { useSubtitleEditor } from "./useSubtitleEditor";
 import { useTouchSeek } from "./useTouchSeek";
@@ -177,6 +178,8 @@ import {
   buildQualityFileSourceFor,
 } from "./qualityOptions";
 import { LoadingSpinner } from "../LoadingSpinner";
+import { SeekPreviewFrame } from "./SeekPreviewFrame";
+import { useLoadingReveal, useSeekPreview } from "./useSeekPreview";
 import {
   adaptiveQualityRequestForMode,
   displayTargetHeight,
@@ -371,12 +374,9 @@ export function CustomVideoPlayer({
     key: number;
   } | null>(null);
   const suppressMouseMoveUntilRef = useRef(0);
-  const fullscreenSeekPreviewTokenRef = useRef(0);
-  const pendingFullscreenSeekPreviewRef = useRef<{
-    token: number;
-    targetSeconds: number;
-  } | null>(null);
-  const fullscreenSeekPreviewFallbackTimerRef = useRef<number | null>(null);
+  // The seek preview is set up further down, after the source it resets on;
+  // the checkpoint return, above it, reaches it through this.
+  const landSeekPreviewAtElementRef = useRef<() => void>(() => undefined);
   const viewModeCursorHideTimerRef = useRef<number | null>(null);
   const { resetTouchSeekSession, handleTouchTap } = useTouchSeek(containerRef);
 
@@ -636,6 +636,7 @@ export function CustomVideoPlayer({
         : Math.max(0, checkpointSeconds);
 
     partyWatch.seekTo(target);
+    landSeekPreviewAtElementRef.current();
     setCheckpointSeconds(null);
 
     if (!isViewModeEnabled) {
@@ -652,8 +653,6 @@ export function CustomVideoPlayer({
 
   const { displayedPartyEventMessage, isPartyEventToastLeaving } =
     usePartyEventToast(partyNoticeMessage);
-  const [fullscreenSeekPreviewSeconds, setFullscreenSeekPreviewSeconds] =
-    useState<number | null>(null);
   const [dismissedSkipSegmentId, setDismissedSkipSegmentId] = useState<
     string | null
   >(null);
@@ -1297,9 +1296,54 @@ export function CustomVideoPlayer({
     shouldShowDefaultNextEpisodeCountdown,
   ]);
 
+  const {
+    seekPreview,
+    showScrub: showSeekScrub,
+    land: landSeekPreview,
+    cancel: cancelSeekPreview,
+  } = useSeekPreview({
+    videoRef,
+    deckEpoch,
+    resetKey: `${activeSource.itemId}:${activeSource.mediaSourceId ?? ""}`,
+  });
+  const seekPreviewSeconds = seekPreview?.seconds ?? null;
+
+  // The preview is told the seek has been made before the element is asked
+  // to make it, so the `seeked` that follows always finds it landing. The seek
+  // itself still goes through the party engine untouched.
+  const handleSeekCommit = useCallback(
+    (seconds: number) => {
+      landSeekPreview(seconds);
+      partyWatch.seekTo(seconds);
+    },
+    [landSeekPreview, partyWatch.seekTo],
+  );
+
+  // For a seek whose target only the party engine works out (a step from
+  // wherever it last sent the group). The element holds the target as soon
+  // as it is asked, and `seeked` is only queued, so landing after is in time.
+  const landSeekPreviewAtElement = useCallback(() => {
+    const video = videoRef.current;
+    if (video && Number.isFinite(video.currentTime)) {
+      landSeekPreview(video.currentTime);
+    }
+  }, [landSeekPreview, videoRef]);
+  landSeekPreviewAtElementRef.current = landSeekPreviewAtElement;
+  // Scrubbing loads nothing — the film plays on under the preview — so only a
+  // seek that has been made counts as waiting.
+  const isSeekLoadingShown = useLoadingReveal(
+    seekPreview?.phase === "landing" && !error,
+  );
+  const isCenterPlayPauseLoading = useLoadingReveal(
+    (progress.isBuffering ||
+      isWaitingForAudioTranscodeReady ||
+      seekPreview?.phase === "landing") &&
+      !error,
+  );
+
   const fullscreenSeekPreview = useMemo(() => {
     if (
-      fullscreenSeekPreviewSeconds === null ||
+      seekPreviewSeconds === null ||
       !activeSource.mediaSourceId ||
       progress.duration <= 0
     ) {
@@ -1308,7 +1352,7 @@ export function CustomVideoPlayer({
 
     const globalTileIndex = Math.max(
       0,
-      Math.floor(fullscreenSeekPreviewSeconds / TRICKPLAY_INTERVAL_SECONDS),
+      Math.floor(seekPreviewSeconds / TRICKPLAY_INTERVAL_SECONDS),
     );
     const sheetIndex = Math.floor(globalTileIndex / TRICKPLAY_IMAGES_PER_SHEET);
     const tileIndexOnSheet = globalTileIndex % TRICKPLAY_IMAGES_PER_SHEET;
@@ -1323,7 +1367,7 @@ export function CustomVideoPlayer({
   }, [
     activeSource.itemId,
     activeSource.mediaSourceId,
-    fullscreenSeekPreviewSeconds,
+    seekPreviewSeconds,
     progress.duration,
   ]);
 
@@ -1367,7 +1411,7 @@ export function CustomVideoPlayer({
       height,
     };
   }, [
-    fullscreenSeekPreviewSeconds,
+    seekPreviewSeconds,
     loadedVideoAspectRatio,
     progress.duration,
     sourceVideoAspectRatio,
@@ -1593,12 +1637,14 @@ export function CustomVideoPlayer({
   const handleSeekBy = useCallback(
     (seconds: number) => {
       partyWatch.seekBy(seconds);
+      landSeekPreviewAtElement();
       triggerSeekFeedback(seconds);
       revealPlayerChrome();
       hidePlayerChromeWithSeekFeedback();
     },
     [
       hidePlayerChromeWithSeekFeedback,
+      landSeekPreviewAtElement,
       partyWatch,
       revealPlayerChrome,
       triggerSeekFeedback,
@@ -1622,10 +1668,10 @@ export function CustomVideoPlayer({
           : Math.max(0, rawTarget);
 
       setDismissedSkipSegmentId(segment.id);
-      partyWatch.seekTo(target);
+      handleSeekCommit(target);
       revealPlayerChrome();
     },
-    [partyWatch, progress.duration, revealPlayerChrome],
+    [handleSeekCommit, progress.duration, revealPlayerChrome],
   );
 
   const handleDefaultNextEpisodePlay = useCallback(() => {
@@ -1660,7 +1706,7 @@ export function CustomVideoPlayer({
     currentTime: progress.currentTime,
     duration: progress.duration,
     onTogglePlay: partyWatch.togglePlay,
-    onSeekTo: partyWatch.seekTo,
+    onSeekTo: handleSeekCommit,
     onSeekBy: handleSeekBy,
     onNextTrack:
       nextEpisode && onAutoPlayNextEpisode && !isInParty
@@ -3415,113 +3461,13 @@ export function CustomVideoPlayer({
     ],
   );
 
-  const clearFullscreenSeekPreviewFallbackTimer = useCallback(() => {
-    if (fullscreenSeekPreviewFallbackTimerRef.current !== null) {
-      window.clearTimeout(fullscreenSeekPreviewFallbackTimerRef.current);
-      fullscreenSeekPreviewFallbackTimerRef.current = null;
-    }
-  }, []);
-
-  const hideFullscreenSeekPreviewAfterPaint = useCallback(
-    (token: number) => {
-      const video = videoRef.current;
-
-      const finish = () => {
-        window.requestAnimationFrame(() => {
-          window.requestAnimationFrame(() => {
-            const pendingPreview = pendingFullscreenSeekPreviewRef.current;
-
-            if (!pendingPreview || pendingPreview.token !== token) {
-              return;
-            }
-
-            pendingFullscreenSeekPreviewRef.current = null;
-            clearFullscreenSeekPreviewFallbackTimer();
-            setFullscreenSeekPreviewSeconds(null);
-          });
-        });
-      };
-
-      const videoWithFrameCallback = video as HTMLVideoElement & {
-        requestVideoFrameCallback?: (callback: () => void) => number;
-      };
-
-      if (videoWithFrameCallback?.requestVideoFrameCallback) {
-        videoWithFrameCallback.requestVideoFrameCallback(finish);
-        return;
-      }
-
-      finish();
-    },
-    [clearFullscreenSeekPreviewFallbackTimer],
-  );
-
   const handleSeekPreview = useCallback(
     (seconds: number) => {
-      fullscreenSeekPreviewTokenRef.current += 1;
-      const token = fullscreenSeekPreviewTokenRef.current;
-
-      pendingFullscreenSeekPreviewRef.current = {
-        token,
-        targetSeconds: seconds,
-      };
-
-      clearFullscreenSeekPreviewFallbackTimer();
-      fullscreenSeekPreviewFallbackTimerRef.current = window.setTimeout(() => {
-        const pendingPreview = pendingFullscreenSeekPreviewRef.current;
-
-        if (!pendingPreview || pendingPreview.token !== token) {
-          return;
-        }
-
-        pendingFullscreenSeekPreviewRef.current = null;
-        setFullscreenSeekPreviewSeconds(null);
-      }, 3500);
-
-      setFullscreenSeekPreviewSeconds(seconds);
+      showSeekScrub(seconds);
       revealPlayerChrome();
     },
-    [clearFullscreenSeekPreviewFallbackTimer, revealPlayerChrome],
+    [revealPlayerChrome, showSeekScrub],
   );
-
-  useEffect(() => {
-    const video = videoRef.current;
-
-    if (!video) {
-      return undefined;
-    }
-
-    const handleSeekFrameReady = () => {
-      const pendingPreview = pendingFullscreenSeekPreviewRef.current;
-
-      if (!pendingPreview) {
-        return;
-      }
-
-      const currentTime = Number.isFinite(video.currentTime)
-        ? video.currentTime
-        : 0;
-
-      if (
-        !video.ended &&
-        Math.abs(currentTime - pendingPreview.targetSeconds) > 1.5
-      ) {
-        return;
-      }
-
-      hideFullscreenSeekPreviewAfterPaint(pendingPreview.token);
-    };
-
-    video.addEventListener("seeked", handleSeekFrameReady);
-    video.addEventListener("canplay", handleSeekFrameReady);
-    video.addEventListener("playing", handleSeekFrameReady);
-
-    return () => {
-      video.removeEventListener("seeked", handleSeekFrameReady);
-      video.removeEventListener("canplay", handleSeekFrameReady);
-      video.removeEventListener("playing", handleSeekFrameReady);
-    };
-  }, [deckEpoch, hideFullscreenSeekPreviewAfterPaint, videoRef]);
 
   const handleSelectSubtitleStream = useCallback(
     (streamIndex: number) => {
@@ -3907,16 +3853,25 @@ export function CustomVideoPlayer({
       }
 
       didRestore = true;
+      /*
+       * In a party the position, the rate and whether it plays are the
+       * group's: the party engine re-applies them when the source empties. A
+       * restore here used to seek back to where the old source was and pause
+       * it, aborting the engine's start — a joiner sat paused, behind.
+       */
+      const timelineIsTheParty = isInPartyRef.current;
 
       try {
         video.volume = pendingRestore.volume;
         video.muted = pendingRestore.muted;
-        video.playbackRate = pendingRestore.playbackRate;
+        if (!timelineIsTheParty) {
+          video.playbackRate = pendingRestore.playbackRate;
+        }
         setSelectedAudioStreamIndex(pendingRestore.selectedAudioStreamIndex);
         setSelectedSubtitleStreamIndex(
           pendingRestore.selectedSubtitleStreamIndex,
         );
-        if (pendingRestore.currentTime > 0) {
+        if (pendingRestore.currentTime > 0 && !timelineIsTheParty) {
           const maxTime =
             Number.isFinite(video.duration) && video.duration > 0
               ? Math.max(0, video.duration - 0.25)
@@ -3933,7 +3888,7 @@ export function CustomVideoPlayer({
 
       pendingSourceRestoreRef.current = null;
 
-      if (pendingRestore.wasPlaying) {
+      if (pendingRestore.wasPlaying && !timelineIsTheParty) {
         requestPlayWhenAudioTranscodeReady(
           "restore-playback-after-source-switch",
           true,
@@ -3942,7 +3897,7 @@ export function CustomVideoPlayer({
         pendingAudioTranscodePlayRef.current = null;
         clearAudioTranscodeReadinessTimer();
         setIsWaitingForAudioTranscodeReady(false);
-        video.pause();
+        if (!timelineIsTheParty) video.pause();
       }
 
       refreshProgress();
@@ -4671,7 +4626,6 @@ export function CustomVideoPlayer({
 
   useEffect(() => {
     return () => {
-      clearFullscreenSeekPreviewFallbackTimer();
       clearSeekFeedbackTimers();
       clearSeekFeedbackSpinTimers();
       clearSeekFeedbackChromeHideTimer();
@@ -4686,7 +4640,6 @@ export function CustomVideoPlayer({
     };
   }, [
     clearAudioTranscodeReadinessTimer,
-    clearFullscreenSeekPreviewFallbackTimer,
     clearSeekFeedbackChromeHideTimer,
     clearSeekFeedbackSpinTimers,
     clearSeekFeedbackTimers,
@@ -5210,16 +5163,68 @@ export function CustomVideoPlayer({
     : {
         transform: `translateX(-50%) scale(${subtitleSize.scale})`,
       };
-  const isCenterPlayPauseLoading =
-    (progress.isBuffering ||
-      isWaitingForAudioTranscodeReady ||
-      fullscreenSeekPreview !== null) &&
-    !error;
   const isCompactPhonePlayer =
     Math.min(viewport.width, viewport.height) < 640 &&
     Math.max(viewport.width, viewport.height) < 1024;
 
   const seekPointerAxis = "horizontal";
+
+  /*
+   * The quality on screen, read from the same rung the quality menu labels
+   * itself with. hls.js reports LEVEL_SWITCHED once the new rung's fragment is
+   * the one playing, and the decoded frame covers the engines that report
+   * nothing, so this follows the picture rather than the request.
+   */
+  const playingQuality = useMemo<PlayingQuality | null>(() => {
+    if (isAdaptiveRenditionPlayback && adaptiveQualityManifest) {
+      const ordered = [...adaptiveQualityManifest.qualities].sort(
+        (left, right) => left.height - right.height,
+      );
+      const effective = findEffectiveAdaptiveRung(
+        ordered,
+        activeAdaptiveWidth ?? decodedFrameWidth,
+        activeAdaptiveHeight,
+      );
+      return effective
+        ? { id: effective.id, height: effective.height, hdr: effective.hdr }
+        : null;
+    }
+    return activeQualityFile
+      ? {
+          id: activeQualityFile.id,
+          height: activeQualityFile.height,
+          hdr: activeQualityFile.hdr === true,
+        }
+      : null;
+  }, [
+    activeAdaptiveHeight,
+    activeAdaptiveWidth,
+    activeQualityFile,
+    adaptiveQualityManifest,
+    decodedFrameWidth,
+    isAdaptiveRenditionPlayback,
+  ]);
+  /*
+   * The skip button and the next-episode card own the bottom right; while
+   * either is up a quality change goes unannounced rather than covering them.
+   */
+  const isQualityToastSuppressed =
+    isViewModeEnabled ||
+    skippableActiveSegment !== null ||
+    (shouldShowDefaultNextEpisodeCountdown && Boolean(nextEpisode));
+  const shownQualityChange = useQualityChangeToast(
+    item.Id,
+    playingQuality,
+    isQualityToastSuppressed,
+  );
+  const qualityChangeLabel = shownQualityChange
+    ? t(`player.qualityToast.${shownQualityChange.change.kind}`).replace(
+        "{quality}",
+        `${formatQualityHeight(shownQualityChange.change.to)}${
+          shownQualityChange.change.to.hdr ? " HDR" : ""
+        }`,
+      )
+    : "";
 
   return (
     <div
@@ -5379,21 +5384,24 @@ export function CustomVideoPlayer({
                 className="absolute inset-0 h-full w-full object-cover"
                 initial={{
                   opacity: 0,
-                  scale: shouldReduceMotion ? 1 : 1.035,
+                  transform: `scale(${shouldReduceMotion ? 1 : 1.035})`,
                 }}
                 animate={{
                   opacity: 1,
-                  scale: 1.02,
+                  transform: "scale(1.02)",
                 }}
                 exit={{
                   opacity: 0,
-                  scale: shouldReduceMotion ? 1 : 1.01,
+                  transform: [
+                    "scale(1.02)",
+                    `scale(${shouldReduceMotion ? 1 : 1.01})`,
+                  ],
                 }}
                 transition={{
                   opacity: {
                     duration: shouldReduceMotion ? 0 : 0.5,
                   },
-                  scale: {
+                  transform: {
                     duration: shouldReduceMotion ? 0 : 1.2,
                     ease: [0.22, 1, 0.36, 1],
                   },
@@ -5406,7 +5414,7 @@ export function CustomVideoPlayer({
             <div className="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-black/45" />
 
             <div className="absolute inset-0 z-10 grid place-items-center">
-              <LoadingSpinner label="" variant="brand" />
+              <LoadingSpinner label="" />
             </div>
           </motion.div>
         ) : null}
@@ -5433,41 +5441,12 @@ export function CustomVideoPlayer({
         </>
       ) : null}
 
-      {fullscreenSeekPreview && fullscreenSeekPreviewRect ? (
-        <div
-          className={`pointer-events-none z-[9] overflow-hidden ${pictureBoxClass}`}
-        >
-          <div
-            className="absolute overflow-hidden bg-black"
-            style={{
-              left: `${fullscreenSeekPreviewRect.left}px`,
-              top: `${fullscreenSeekPreviewRect.top}px`,
-              width: `${fullscreenSeekPreviewRect.width}px`,
-              height: `${fullscreenSeekPreviewRect.height}px`,
-            }}
-          >
-            <div
-              className="absolute inset-0 opacity-95"
-              style={{
-                backgroundImage: `url("${fullscreenSeekPreview.imageUrl}")`,
-                backgroundSize: `${TRICKPLAY_COLUMNS * 100}% ${
-                  TRICKPLAY_ROWS * 100
-                }%`,
-                backgroundPosition: `${getSpritePositionPercent(
-                  fullscreenSeekPreview.column,
-                  TRICKPLAY_COLUMNS,
-                )}% ${getSpritePositionPercent(
-                  fullscreenSeekPreview.row,
-                  TRICKPLAY_ROWS,
-                )}%`,
-                backgroundRepeat: "no-repeat",
-              }}
-            />
-
-            <div className="absolute inset-0 bg-black/22" />
-          </div>
-        </div>
-      ) : null}
+      <SeekPreviewFrame
+        tile={fullscreenSeekPreview}
+        shown={seekPreview?.shown === true}
+        rect={fullscreenSeekPreviewRect}
+        className={pictureBoxClass}
+      />
 
       <AnimatePresence>
         {videoFitNotice ? (
@@ -5774,7 +5753,7 @@ export function CustomVideoPlayer({
             playWaiting={partyWatch.isStartPending}
             onControlsHoverStart={keepControlsVisible}
             onControlsHoverEnd={releaseControlsHover}
-            seekPreviewLoading={fullscreenSeekPreview !== null}
+            seekPreviewLoading={isSeekLoadingShown}
             seekPointerAxis={seekPointerAxis}
             compactSeekPreview={isCompactPhonePlayer}
             compactLayout={isCompactPhonePlayer}
@@ -5788,8 +5767,9 @@ export function CustomVideoPlayer({
             checkpointSeconds={checkpointSeconds}
             previewAspectRatio={previewAspectRatio}
             onTogglePlay={partyWatch.togglePlay}
-            onSeek={partyWatch.seekTo}
+            onSeek={handleSeekCommit}
             onSeekPreview={handleSeekPreview}
+            onSeekPreviewCancel={cancelSeekPreview}
             onSeekBy={handleSeekBy}
             onToggleMute={progress.toggleMute}
             onVolumeChange={progress.setVolume}
@@ -5882,6 +5862,15 @@ export function CustomVideoPlayer({
             </div>
           </div>
         </div>
+      ) : null}
+
+      {shownQualityChange ? (
+        <QualityChangeToast
+          change={shownQualityChange.change}
+          leaving={shownQualityChange.leaving}
+          reduceMotion={shouldReduceMotion}
+          label={qualityChangeLabel}
+        />
       ) : null}
 
       {!isViewModeEnabled && isPlaybackInfoOpen ? (

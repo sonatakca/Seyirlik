@@ -460,6 +460,15 @@ describe("what an error means", () => {
     expect(unsupported.failure).toBe("hardlink-unsupported");
   });
 
+  it("reads ENOTSUP from a link as an unsupported hardlink", () => {
+    // Measured on the rclone Google Drive mount the Windows host serves from.
+    const refused = Object.assign(
+      new Error("ENOTSUP: operation not supported on socket, link"),
+      { code: "ENOTSUP", syscall: "link" },
+    );
+    expect(classifyFsError(refused).failure).toBe("hardlink-unsupported");
+  });
+
   it("leaves EISDIR from anything else alone", () => {
     expect(
       classifyFsError(

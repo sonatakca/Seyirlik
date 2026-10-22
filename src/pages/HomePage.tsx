@@ -1,5 +1,7 @@
 import { lazy, Suspense } from "react";
+import { HomeSkeleton, MobileHomeSkeleton } from "../components/Skeletons";
 import { useIsMobileView } from "../hooks/useIsMobileView";
+import { useIsPhoneView } from "../hooks/useIsPhoneView";
 
 const DesktopHomePage = lazy(() =>
   import("./desktop/DesktopHomePage").then((module) => ({
@@ -12,27 +14,25 @@ const MobileHomePage = lazy(() =>
   })),
 );
 
-function HomePageLoading() {
-  return (
-    <div className="layout-no-offset min-h-screen">
-      <div className="shimmer full-bleed h-[min(62svh,31rem)] min-h-[27rem]" />
-    </div>
-  );
-}
-
+/*
+ * While a page's code loads, its fallback is the same skeleton the page shows
+ * while its data loads, so the two waits read as one: nothing is swapped, and
+ * no placeholder flashes up before the hero's own.
+ */
 export function HomePage() {
   const isMobile = useIsMobileView();
+  const isPhone = useIsPhoneView();
 
   if (isMobile) {
     return (
-      <Suspense fallback={<HomePageLoading />}>
+      <Suspense fallback={<MobileHomeSkeleton isPhone={isPhone} />}>
         <MobileHomePage />
       </Suspense>
     );
   }
 
   return (
-    <Suspense fallback={<HomePageLoading />}>
+    <Suspense fallback={<HomeSkeleton />}>
       <DesktopHomePage />
     </Suspense>
   );

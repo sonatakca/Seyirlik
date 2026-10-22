@@ -54,7 +54,9 @@ export const PARTY_SYNC_TUNING = {
    * group's position moves to it, so everyone is looking at the same frame.
    * A remote pause arrives one network trip after the pauser's, so without
    * this each player would stop a few frames past it. Nearer than this, the
-   * difference is a frame or two and not worth a visible step.
+   * difference is a frame or two and not worth a visible step. A player that
+   * has not started yet while the group plays lands on it to the same
+   * tolerance, since there is no moving picture for a seek to interrupt.
    */
   pausedSnapToleranceMs: 100,
   /**

@@ -37,6 +37,7 @@ const TASK_TITLE_KEYS: Record<string, TranslationKey> = {
   "import.run": "tasks.importRun",
   "import.reconcile": "tasks.importReconcile",
   "import.handoff": "tasks.importHandoff",
+  "import.process": "tasks.importProcess",
   "storage.collect": "tasks.storageCollect",
   "subtitle.run": "tasks.subtitleRun",
   "subtitle.reconcile": "tasks.subtitleReconcile",
@@ -224,12 +225,17 @@ export function isSpokenForByLead(
 /**
  * Work the server raises on a timer rather than because someone asked.
  *
- * The reconcilers and the download handoff each run every half-minute or two,
- * so a card per run is a card every half-minute that says nothing happened.
+ * The reconcilers, the download handoff and the processing handoff each run
+ * every half-minute or two, so a card per run is a card every half-minute that
+ * says nothing happened.
  * They share one card, and only raise it when a run found something.
  */
 export function isRoutineTask(type: string): boolean {
-  return type.endsWith(".reconcile") || type === "import.handoff";
+  return (
+    type.endsWith(".reconcile") ||
+    type === "import.handoff" ||
+    type === "import.process"
+  );
 }
 
 export function describeTask(task: TaskDto, queuedCount = 0): TaskNotification {

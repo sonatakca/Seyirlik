@@ -1,0 +1,234 @@
+/* Overlay outlines preserve the measured stage and the phone's flush reflection seam. */
+.seyirlik-hero-stage::after,
+.phone-title-frame::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  border: 1px solid rgba(205, 211, 219, 0.38);
+  border-radius: 16px;
+  pointer-events: none;
+}
+.phone-title-frame::after {
+  top: calc(3.5rem + env(safe-area-inset-top));
+}
+
+/* One rhythm for the centre dock, tablet preview and phone title actions. */
+.hero-dock {
+  --dock-pad: 7px;
+  --dock-play: 52px;
+  --dock-row: 36px;
+  --dock-gap: 9px;
+  display: grid;
+  gap: var(--dock-gap);
+  padding: var(--dock-pad);
+  border-radius: calc(var(--dock-play) / 2 + var(--dock-pad))
+    calc(var(--dock-play) / 2 + var(--dock-pad))
+    calc(var(--dock-row) / 2 + var(--dock-pad))
+    calc(var(--dock-row) / 2 + var(--dock-pad));
+}
+/* The dock's glass, which a title page's back button and its bar of lesser
+   actions (watched, the trailer's controls) share. */
+.hero-dock,
+.hero-dock-bar {
+  isolation: isolate;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(11, 12, 14, 0.76);
+  backdrop-filter: blur(22px) saturate(1.3);
+  -webkit-backdrop-filter: blur(22px) saturate(1.3);
+  box-shadow:
+    0 18px 44px -14px rgba(0, 0, 0, 0.75),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+.hero-dock-bar {
+  --dock-row: 36px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 999px;
+}
+/* Nothing to hold yet (the watched button arrives with the details). */
+.hero-dock-bar[data-hide-empty]:not(:has(button)) {
+  display: none;
+}
+.hero-dock-bar .hero-dock-action {
+  width: auto;
+  gap: 6px;
+  padding: 0 14px;
+}
+.hero-dock-bar .hero-dock-action:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.hero-dock:has(> .hero-dock-restart) {
+  --dock-gap: 4px;
+}
+.hero-dock-compact {
+  --dock-pad: 6px;
+  --dock-play: 48px;
+  --dock-row: 32px;
+  --dock-gap: 8px;
+}
+.hero-dock-play {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: var(--dock-play);
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 16px;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 800;
+}
+.hero-dock-watched {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: color-mix(in srgb, var(--accent) 24%, white);
+}
+.hero-dock-watched::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 11px;
+  bottom: 11px;
+  width: 2px;
+  background: var(--accent);
+}
+.hero-dock-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+  min-height: var(--dock-row);
+}
+.hero-dock .hero-dock-row > * {
+  width: auto;
+  flex: 1 0 auto;
+  min-width: max-content;
+}
+.hero-dock-row > :empty {
+  display: none;
+}
+.hero-dock-action {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: var(--dock-row);
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  transition:
+    color 160ms,
+    background-color 160ms;
+}
+.hero-dock-action:hover {
+  color: white;
+  background: rgba(255, 255, 255, 0.08);
+}
+.hero-dock-action svg {
+  flex-shrink: 0;
+}
+.hero-dock-action span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hero-dock-row > .hero-dock-extra {
+  flex: 0 0 32px;
+  padding: 0;
+}
+.hero-dock-row > .hero-dock-action {
+  width: auto;
+}
+.hero-dock-story-dot {
+  position: absolute;
+  right: 5px;
+  top: 4px;
+  width: 5px;
+  height: 5px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0;
+  transform: scale(0.4);
+  transition:
+    opacity 240ms cubic-bezier(0.37, 0, 0.63, 1),
+    transform 240ms cubic-bezier(0.37, 0, 0.63, 1);
+}
+.hero-dock-story-dot[data-open="true"] {
+  opacity: 1;
+  transform: scale(1);
+}
+.hero-dock-compact .hero-dock-action {
+  font-size: 11px;
+  padding: 0 3px;
+  gap: 3px;
+}
+.hero-dock-compact .hero-dock-action svg {
+  width: 14px;
+  height: 14px;
+}
+.phone-title-dock {
+  position: fixed;
+  z-index: 45;
+  left: 50%;
+  width: min(300px, calc(100% - 32px));
+  transform: translateX(-50%);
+  bottom: calc(6.25rem + env(safe-area-inset-bottom));
+}
+.phone-title-dock .hero-dock {
+  --dock-row: 36px;
+}
+.phone-title-reflection {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  border-radius: 0 0 16px 16px;
+  background: #050607;
+  pointer-events: none;
+}
+.phone-title-reflection img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  transform: scaleY(-1);
+  filter: blur(30px);
+  opacity: 0.6;
+}
+@media (orientation: landscape) and (max-height: 599px) {
+  .phone-title-dock {
+    bottom: calc(1rem + env(safe-area-inset-bottom));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hero-dock-story-dot {
+    transition: none;
+  }
+}
+
+.phone-title-dock .hero-dock-play svg,
+.phone-title-dock .hero-dock-play > span:not(.hero-dock-watched) {
+  z-index: 1;
+}
+
+@media (max-width: 1231px) {
+  section.seyirlik-hero-stage {
+    height: auto;
+    aspect-ratio: 16 / 9;
+    min-height: 20rem;
+  }
+}

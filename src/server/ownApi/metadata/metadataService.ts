@@ -230,6 +230,7 @@ export function createMetadataService({
       ),
     ];
 
+    const described = new Set<string>();
     for (const seasonNumber of seasonNumbers) {
       let providerEpisodes;
       try {
@@ -251,6 +252,7 @@ export function createMetadataService({
             episode.indexNumber === providerEpisode.episodeNumber,
         );
         if (!local) continue;
+        described.add(local.id);
 
         await metadata.applyTitleMetadata(local.id, {
           ...(providerEpisode.title ? { title: providerEpisode.title } : {}),
@@ -274,6 +276,19 @@ export function createMetadataService({
             STILL_SIZE,
           );
         }
+      }
+    }
+
+    /*
+     * An episode the provider does not list stays as the scan named it, and is
+     * settled rather than left pending, or its series would be refreshed again
+     * on every scan for an answer the provider does not have.
+     */
+    for (const episode of episodes) {
+      if (episode.metadataState === "pending" && !described.has(episode.id)) {
+        await metadata.applyTitleMetadata(episode.id, {
+          metadataState: "unmatched",
+        });
       }
     }
   }

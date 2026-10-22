@@ -21,22 +21,31 @@ import {
 } from "../api/validation";
 import type { JobQueue } from "../tasks/jobQueue";
 import { ACQUISITION_JOB_TYPES } from "./acquisitionJobs";
+import {
+  createAcquisitionFallback,
+  mediaTargetOf,
+  type AcquisitionFallbackOptions,
+  type MissingEpisodePlan,
+} from "./acquisitionFallback";
+import {
+  countMissing,
+  MISSING_SEARCH_JOB_TYPE,
+  missingSearchDedupeKey,
+} from "./missingEpisodes";
 import type {
   AcquisitionRepository,
   AcquisitionSummary,
 } from "./acquisitionRepository";
 import {
+  AcquisitionControlError,
   BLOCKLISTABLE_STATES,
   type AcquisitionService,
 } from "./acquisitionService";
-import type { AcquisitionTarget } from "./acquisitionRepository";
 import type { IndexerRegistry } from "../indexers/indexerRegistry";
 import type { SabJob, SabnzbdClient } from "./sabnzbd";
 import { SabError } from "./sabnzbd";
 import { IndexerError } from "../indexers/indexerTypes";
 import type { IndexerSearchService } from "../indexers/searchService";
-import { selectRelease, type MediaTarget } from "../releases/decide";
-import { searchFor } from "../releases/releaseRoutes";
 import type { PolicyRepository } from "../releases/policyRepository";
 import type { BlocklistRepository } from "../releases/blocklistRepository";
 
@@ -71,7 +80,15 @@ interface AcquisitionDto {
   readonly id: string;
   readonly state: string;
   readonly origin: string;
-  readonly target: { kind: string; title: string };
+  readonly target: {
+    kind: string;
+    title: string;
+    /** The catalogue item it is for, where there is one: for its artwork. */
+    itemId?: string;
+    year?: number;
+    season?: number;
+    episode?: number;
+  };
   readonly indexerId: string;
   readonly releaseTitle: string;
   readonly attempt: number;
@@ -104,7 +121,20 @@ function toDto(
     id: summary.id,
     state: summary.state,
     origin: summary.origin,
-    target: { kind: summary.targetKind, title: summary.targetTitle },
+    target: {
+      kind: summary.targetKind,
+      title: summary.targetTitle,
+      ...(summary.targetItemId === undefined
+        ? {}
+        : { itemId: summary.targetItemId }),
+      ...(summary.targetYear === undefined ? {} : { year: summary.targetYear }),
+      ...(summary.targetSeason === undefined
+        ? {}
+        : { season: summary.targetSeason }),
+      ...(summary.targetEpisode === undefined
+        ? {}
+        : { episode: summary.targetEpisode }),
+    },
     indexerId: summary.indexerId,
     releaseTitle: summary.releaseTitle,
     attempt: summary.attempt,
@@ -131,15 +161,25 @@ function releaseOf(summary: AcquisitionSummary) {
 /** One running acquisition, as SABnzbd currently sees it. */
 interface ProgressDto {
   readonly acquisitionId: string;
-  readonly stage: "queued" | "paused" | "downloading" | "processing" | "done";
+  readonly stage:
+    | "queued"
+    | "paused"
+    | "downloading"
+    | "processing"
+    | "done"
+    | "failed";
   /** SABnzbd's own word: "Downloading", "Repairing", "Extracting"… */
   readonly statusText?: string;
   readonly percent?: number;
   readonly totalBytes?: number;
   readonly downloadedBytes?: number;
   readonly speedBytesPerSecond?: number;
+  /**
+   * SABnzbd's estimate of when this job is done: for a waiting job, that
+   * includes everything ahead of it. Never while paused.
+   */
   readonly etaSeconds?: number;
-  /** 1 is next. Only while waiting. */
+  /** Place in SABnzbd's queue; 1 is first. Any job still in the queue. */
   readonly queuePosition?: number;
   /** The post-processing step, as SABnzbd words it. */
   readonly detail?: string;
@@ -149,17 +189,27 @@ function progressOf(
   acquisitionId: string,
   job: SabJob,
   speedBytesPerSecond: number | undefined,
+  queuePaused: boolean,
 ): ProgressDto {
+  // A queue-wide pause stops waiting and downloading jobs, while history
+  // post-processing can still run. SABnzbd leaves slot statuses unchanged.
+  const paused =
+    job.state === "paused" ||
+    (queuePaused &&
+      job.source === "queue" &&
+      (job.state === "queued" || job.state === "downloading"));
   const stage: ProgressDto["stage"] =
-    job.state === "completed" || job.state === "failed"
+    job.state === "completed"
       ? "done"
-      : job.state === "paused"
-        ? "paused"
-        : job.state === "queued"
-          ? "queued"
-          : job.state === "processing"
-            ? "processing"
-            : "downloading";
+      : job.state === "failed"
+        ? "failed"
+        : paused
+          ? "paused"
+          : job.state === "queued"
+            ? "queued"
+            : job.state === "processing"
+              ? "processing"
+              : "downloading";
   const total = job.sizeBytes;
   const downloaded =
     total === undefined
@@ -185,10 +235,11 @@ function progressOf(
     ...(stage === "downloading" && speedBytesPerSecond
       ? { speedBytesPerSecond }
       : {}),
-    ...(stage === "downloading" && job.timeLeftSeconds !== undefined
+    ...((stage === "downloading" || stage === "queued") &&
+    job.timeLeftSeconds !== undefined
       ? { etaSeconds: job.timeLeftSeconds }
       : {}),
-    ...(stage === "queued" && job.queuePosition !== undefined
+    ...(job.source === "queue" && job.queuePosition !== undefined
       ? { queuePosition: job.queuePosition + 1 }
       : {}),
     ...(job.actionLine ? { detail: job.actionLine } : {}),
@@ -196,27 +247,6 @@ function progressOf(
 }
 
 /** The decision engine's view of what an acquisition was for. */
-function mediaTargetOf(target: AcquisitionTarget): MediaTarget | null {
-  if (target.kind === "movie") {
-    return {
-      kind: "movie",
-      title: target.title,
-      ...(target.year === undefined ? {} : { year: target.year }),
-    };
-  }
-  if (target.season === undefined) return null;
-  if (target.kind === "season") {
-    return { kind: "season", title: target.title, season: target.season };
-  }
-  if (target.episode === undefined) return null;
-  return {
-    kind: "episode",
-    title: target.title,
-    season: target.season,
-    episode: target.episode,
-  };
-}
-
 export interface CreateAcquisitionRoutesOptions {
   readonly repository: AcquisitionRepository;
   readonly service: AcquisitionService;
@@ -226,6 +256,50 @@ export interface CreateAcquisitionRoutesOptions {
   readonly search: IndexerSearchService;
   readonly policies: PolicyRepository;
   readonly blocklist: BlocklistRepository;
+  /**
+   * The episodes of a series' season, for replacing a season pack episode by
+   * episode. Without it a season with no other pack stays failed.
+   */
+  readonly episodesOf?: AcquisitionFallbackOptions["episodesOf"];
+  /**
+   * A series' missing episodes, as its season strip shows them, or null when
+   * there is no such series. Without it the missing-episode search is absent.
+   */
+  readonly missingEpisodes?: (
+    itemId: string,
+    season?: number,
+  ) => Promise<MissingEpisodePlan | null>;
+  /** The quality profile a title is monitored with, when it names one. */
+  readonly profileOf?: (itemId: string) => Promise<string | undefined>;
+}
+
+/**
+ * Runs a queue control and says, as an HTTP error, why it could not be done.
+ *
+ * SABnzbd's own message is not passed on for transport failures: like every
+ * SabError it never carries the URL, but "unreachable" is all the reader
+ * needs.
+ */
+async function control<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof AcquisitionControlError) {
+      throw error.kind === "not-found"
+        ? new OwnApiError("NOT_FOUND", error.message, 404)
+        : new OwnApiError("ACQUISITION_NOT_QUEUED", error.message, 409);
+    }
+    if (error instanceof SabError) {
+      throw error.kind === "rejected" || error.kind === "bad-request"
+        ? new OwnApiError("DOWNLOAD_CLIENT_REFUSED", error.message, 409)
+        : new OwnApiError(
+            "DOWNLOAD_CLIENT_UNAVAILABLE",
+            "The download client could not be reached.",
+            503,
+          );
+    }
+    throw error;
+  }
 }
 
 export function createAcquisitionRoutes({
@@ -237,8 +311,115 @@ export function createAcquisitionRoutes({
   search,
   policies,
   blocklist,
+  episodesOf = async () => [],
+  missingEpisodes,
+  profileOf,
 }: CreateAcquisitionRoutesOptions): RouteDefinition[] {
+  const fallback = createAcquisitionFallback({
+    repository,
+    search,
+    policies,
+    blocklist,
+    queue,
+    episodesOf,
+    submitJobType: ACQUISITION_JOB_TYPES.submit,
+  });
+  const missingRoutes: RouteDefinition[] = missingEpisodes
+    ? [
+        {
+          /**
+           * Search for a series' missing episodes, and start the best of each.
+           *
+           * Answers with the task and how many episodes it will look for; the
+           * searches themselves run on the worker. Nothing missing is an
+           * answer too, with no task behind it.
+           */
+          method: "POST",
+          path: "/acquisitions/missing",
+          access: "admin",
+          handle: async (context) => {
+            context.requirePrincipal();
+            const body = asObjectBody(await context.readJson(), [
+              "itemId",
+              "season",
+            ]);
+            const itemId = requireUuid(
+              requireBodyString(body, "itemId", { maxLength: 64 }),
+              "itemId",
+            );
+            const season = optionalBodyInteger(body, "season", {
+              min: 1,
+              max: 10_000,
+            });
+            const plan = await missingEpisodes(itemId, season);
+            if (!plan) {
+              throw new OwnApiError("NOT_FOUND", "No such series.", 404);
+            }
+            const episodes = countMissing(plan);
+            if (episodes === 0) {
+              sendData(context.response, context.requestId, {
+                taskId: null,
+                episodes,
+              });
+              return;
+            }
+            // The series' own profile, or the one a search by hand starts on.
+            const profileId =
+              (await profileOf?.(itemId)) ??
+              (await policies.listProfiles())[0]?.id;
+            if (!profileId) {
+              throw new OwnApiError(
+                "PROFILE_NOT_FOUND",
+                "No quality profile to choose releases with.",
+                409,
+              );
+            }
+            const taskId = await queue.enqueue({
+              jobType: MISSING_SEARCH_JOB_TYPE,
+              payload: { plan, profileId },
+              dedupeKey: missingSearchDedupeKey(itemId, season),
+            });
+            sendData(context.response, context.requestId, {
+              taskId,
+              episodes,
+            });
+          },
+        },
+        {
+          /** What a missing-episode search started, and what it found nothing for. */
+          method: "GET",
+          path: "/acquisitions/missing/:taskId",
+          access: "admin",
+          handle: async (context) => {
+            context.requirePrincipal();
+            const taskId = requireUuid(context.params.taskId, "taskId");
+            const job = await queue.get(taskId);
+            if (!job || job.jobType !== MISSING_SEARCH_JOB_TYPE) {
+              throw new OwnApiError(
+                "TASK_NOT_FOUND",
+                "That search could not be found.",
+                404,
+              );
+            }
+            const done = job.status === "succeeded" && job.result;
+            sendData(context.response, context.requestId, {
+              taskId: job.id,
+              status: job.status,
+              message: job.status === "running" ? job.progressMessage : null,
+              result: done
+                ? {
+                    started: job.result!.startedReleases ?? [],
+                    nothing: job.result!.nothingFor ?? [],
+                    covered: job.result!.coveredBy ?? [],
+                  }
+                : null,
+            });
+          },
+        },
+      ]
+    : [];
   return [
+    ...missingRoutes,
     {
       method: "GET",
       path: "/acquisitions",
@@ -329,6 +510,7 @@ export function createAcquisitionRoutes({
               record.id,
               job,
               job === moving ? queue.speedBytesPerSecond : undefined,
+              queue.paused,
             ),
           );
         }
@@ -338,6 +520,12 @@ export function createAcquisitionRoutes({
           ...(queue.paused || queue.speedBytesPerSecond === undefined
             ? {}
             : { speedBytesPerSecond: queue.speedBytesPerSecond }),
+          ...(queue.remainingBytes === undefined
+            ? {}
+            : { remainingBytes: queue.remainingBytes }),
+          ...(queue.freeBytes === undefined
+            ? {}
+            : { freeBytes: queue.freeBytes }),
           progress,
         });
       },
@@ -643,11 +831,10 @@ export function createAcquisitionRoutes({
           return;
         }
 
-        const target = mediaTargetOf(searchContext.target);
         const policy = searchContext.profileId
           ? await policies.load(searchContext.profileId)
           : null;
-        if (!target || !policy) {
+        if (!mediaTargetOf(searchContext.target) || !policy) {
           // Nothing recorded to repeat the decision with. The Releases page
           // can still be used by hand.
           sendData(context.response, context.requestId, {
@@ -662,11 +849,17 @@ export function createAcquisitionRoutes({
         const abort = () => controller.abort();
         context.request.once("aborted", abort);
         context.request.once("close", abort);
-        let found;
+        let choice;
         try {
-          found = await search.search(searchFor(target, undefined), {
-            signal: controller.signal,
-          });
+          // The release is already on the blocklist, so the search cannot
+          // recommend it again; a season with no other pack falls back to its
+          // episodes (see acquisitionFallback.ts).
+          choice = await fallback.choose(
+            searchContext.target,
+            policy,
+            null,
+            controller.signal,
+          );
         } catch (error) {
           if (error instanceof IndexerError) {
             throw new OwnApiError(
@@ -681,14 +874,7 @@ export function createAcquisitionRoutes({
           context.request.off("close", abort);
         }
 
-        const result = selectRelease(target, found.releases, {
-          profile: policy.profile,
-          preferences: policy.preferences,
-          isBlocklisted: await blocklist.matcherFor(found.releases),
-          current: null,
-        });
-        const winner = result.winner;
-        if (!winner) {
+        if (choice.kind === "none") {
           await repository.update(
             id,
             "failed",
@@ -706,60 +892,107 @@ export function createAcquisitionRoutes({
           return;
         }
 
-        /*
-         * Superseding is the claim. Two operators pressing this at once both
-         * search, but only one of them moves the row out of `failed`, and
-         * only that one creates the replacement.
-         */
-        if (
-          !(await repository.update(
-            id,
-            "failed",
-            { state: "superseded" },
-            `Replaced by ${winner.release.title}.`,
-          ))
-        ) {
+        const applied = await fallback.apply(id, choice, policy);
+        if (!applied) {
           throw new OwnApiError(
             "ACQUISITION_CHANGED",
             "The acquisition changed while it was being searched again.",
             409,
           );
         }
-
-        const replacement = await repository.create({
-          target: searchContext.target,
-          indexerId: winner.release.indexerId,
-          releaseGuid: winner.release.guid,
-          releaseTitle: winner.release.title,
-          origin: "fallback",
-          evidence: {
-            profileId: policy.profile.id,
-            profileName: policy.profile.name,
-            policySnapshot: {},
-            releaseFacts: winner.facts,
-            score: winner.score,
-            reasons: winner.reasons,
-            rejected: result.candidates
-              .filter((candidate) => !candidate.accepted)
-              .slice(0, 50)
-              .map((candidate) => ({
-                title: candidate.release.title,
-                reason: candidate.rejection,
-              })),
-          },
-        });
-        await repository.supersedeFailedFor(replacement.id);
-        const taskId = await queue.enqueue({
-          jobType: ACQUISITION_JOB_TYPES.submit,
-          payload: { acquisitionId: replacement.id },
-          dedupeKey: submitDedupeKey(replacement.id),
-        });
         sendData(
           context.response,
           context.requestId,
-          { searched: true, replacement: toDto(replacement), taskId },
+          {
+            searched: true,
+            replacement: toDto(applied.created[0]!),
+            replacements: applied.created.map((created) => toDto(created)),
+            taskId: applied.taskIds[0],
+          },
           202,
         );
+      },
+    },
+    {
+      /**
+       * Holds or releases one download in SABnzbd's queue.
+       *
+       * Only the job this acquisition owns, found by the same ownership rule
+       * cancellation uses; a client never names a SABnzbd identifier.
+       */
+      method: "POST",
+      path: "/acquisitions/:acquisitionId/pause",
+      access: "admin",
+      handle: async (context) => {
+        context.requirePrincipal();
+        const id = requireUuid(context.params.acquisitionId, "acquisitionId");
+        await control(() => service.setPaused(id, true));
+        sendNoContent(context.response);
+      },
+    },
+    {
+      method: "POST",
+      path: "/acquisitions/:acquisitionId/resume",
+      access: "admin",
+      handle: async (context) => {
+        context.requirePrincipal();
+        const id = requireUuid(context.params.acquisitionId, "acquisitionId");
+        await control(() => service.setPaused(id, false));
+        sendNoContent(context.response);
+      },
+    },
+    {
+      /**
+       * Moves one download to a place in SABnzbd's queue; 1 is first.
+       *
+       * The place is the queue's own, as `queuePosition` reports it, so a
+       * download can be put ahead of a job Seyirlik does not own. That job is
+       * not touched; it is only no longer ahead.
+       */
+      method: "POST",
+      path: "/acquisitions/:acquisitionId/move",
+      access: "admin",
+      handle: async (context) => {
+        context.requirePrincipal();
+        const id = requireUuid(context.params.acquisitionId, "acquisitionId");
+        const body = asObjectBody(await context.readJson(), ["position"]);
+        const position = optionalBodyInteger(body, "position", {
+          min: 1,
+          max: 100_000,
+        });
+        if (position === undefined) {
+          throw validationError("A queue position, from 1, is required.");
+        }
+        const placed = await control(() => service.move(id, position - 1));
+        sendData(context.response, context.requestId, {
+          position: placed + 1,
+        });
+      },
+    },
+    {
+      /**
+       * Stops or starts the whole download client, as its own pause button
+       * does. The one control that reaches jobs Seyirlik does not own, and on
+       * purpose: it is the operator's switch for the downloader, not a
+       * decision about any one job, and nothing is removed or reordered.
+       */
+      method: "POST",
+      path: "/acquisitions/client/pause",
+      access: "admin",
+      handle: async (context) => {
+        context.requirePrincipal();
+        await control(() => sab.pauseQueue());
+        sendNoContent(context.response);
+      },
+    },
+    {
+      method: "POST",
+      path: "/acquisitions/client/resume",
+      access: "admin",
+      handle: async (context) => {
+        context.requirePrincipal();
+        await control(() => sab.resumeQueue());
+        sendNoContent(context.response);
       },
     },
     {

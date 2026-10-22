@@ -315,7 +315,8 @@ export function decideSubtitleStreams(
           !track.isHearingImpaired &&
           !track.isCommentary &&
           !track.isForced &&
-          preferred.has(normalizeLanguage(track.language)),
+          (options.keepAllLanguages ||
+            preferred.has(normalizeLanguage(track.language))),
       )
       .map((track) => normalizeLanguage(track.language)),
   );
@@ -323,7 +324,7 @@ export function decideSubtitleStreams(
   return tracks.map((track) => {
     const language = normalizeLanguage(track.language);
     const languageName = languageDisplayName(track.language);
-    const inPreferred = preferred.has(language);
+    const inPreferred = options.keepAllLanguages || preferred.has(language);
     const isOnlyTrackForLanguage = !languagesWithPlainTrack.has(language);
     const base = {
       streamIndex: track.streamIndex,

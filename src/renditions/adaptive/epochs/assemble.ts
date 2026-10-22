@@ -152,6 +152,7 @@ export async function assembleVideoRenditions({
   progressIntervalMs = ASSEMBLY_PROGRESS_INTERVAL_MS,
   now = Date.now,
 }: AssembleVideoInput): Promise<AssembledRendition[]> {
+  if (renditionIds.length === 0) return [];
   if (manifests.length === 0) {
     throw new Error("Assembly needs at least one completed epoch.");
   }

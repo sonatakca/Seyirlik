@@ -1,9 +1,14 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useCallback } from "react";
 import {
   LibrarySkeleton,
   MovieLibrarySkeleton,
   ShowLibrarySkeleton,
 } from "../components/Skeletons";
+import { TitleAdminDockGate } from "../components/admin/titleDock/TitleAdminDockGate";
+import {
+  HeroCentreDockContext,
+  type HeroCentreDockPlace,
+} from "../components/home/heroCentreDock";
 import { useIsMobileView } from "../hooks/useIsMobileView";
 import type { LibraryPageProps } from "./libraryPageTypes";
 
@@ -36,18 +41,34 @@ function LibraryPageLoading({
 
 export function LibraryPage(props: LibraryPageProps) {
   const isMobile = useIsMobileView();
+  const { mode, libraryRouteKind } = props;
+  // The title hero asks for this and decides where it stands.
+  const renderAdminDock = useCallback(
+    (place: HeroCentreDockPlace) => (
+      <TitleAdminDockGate
+        mode={mode}
+        libraryRouteKind={libraryRouteKind}
+        place={place}
+      />
+    ),
+    [mode, libraryRouteKind],
+  );
 
   if (isMobile) {
     return (
-      <Suspense fallback={<LibraryPageLoading {...props} isMobile />}>
-        <MobileLibraryPage {...props} />
-      </Suspense>
+      <HeroCentreDockContext.Provider value={renderAdminDock}>
+        <Suspense fallback={<LibraryPageLoading {...props} isMobile />}>
+          <MobileLibraryPage {...props} />
+        </Suspense>
+      </HeroCentreDockContext.Provider>
     );
   }
 
   return (
-    <Suspense fallback={<LibraryPageLoading {...props} isMobile={false} />}>
-      <DesktopLibraryPage {...props} />
-    </Suspense>
+    <HeroCentreDockContext.Provider value={renderAdminDock}>
+      <Suspense fallback={<LibraryPageLoading {...props} isMobile={false} />}>
+        <DesktopLibraryPage {...props} />
+      </Suspense>
+    </HeroCentreDockContext.Provider>
   );
 }

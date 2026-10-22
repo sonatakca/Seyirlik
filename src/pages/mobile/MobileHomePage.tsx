@@ -1,14 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { move, REST, settle } from "../../lib/compositorMotion";
 import { MotionReveal } from "../../components/MotionReveal";
 import { ErrorMessage } from "../../components/ErrorMessage";
 import { HomeHero } from "../../components/home/HomeHero";
-import { HomeHeroSkeleton } from "../../components/home/HomeHeroSkeleton";
 import { MobileMediaRow } from "../../components/mobile/MobileMediaRow";
-import {
-  PhoneHomeHero,
-  PhoneHomeHeroSkeleton,
-} from "../../components/mobile/PhoneHomeHero";
+import { PhoneHomeHero } from "../../components/mobile/PhoneHomeHero";
+import { MobileHomeSkeleton } from "../../components/Skeletons";
 import { useIsPhoneView } from "../../hooks/useIsPhoneView";
 import { useLanguage } from "../../i18n/LanguageContext";
 import { getFavouriteItems, getLatestMediaItems } from "../../lib/mediaApi";
@@ -41,53 +39,6 @@ interface MobileHomeData {
 interface RowWarning {
   labelKey: HomeRowLabelKey;
   message: string;
-}
-
-/**
- * The page while it has no data: the hero's own skeleton, built from the
- * hero's own frame, so nothing moves when the hero mounts over it, and the
- * rows' placeholders under it.
- */
-function MobileHomeLoading({ isPhone }: { isPhone: boolean }) {
-  return (
-    <div className="layout-no-offset min-h-screen pb-[calc(5.75rem+env(safe-area-inset-bottom))]">
-      {isPhone ? (
-        <PhoneHomeHeroSkeleton />
-      ) : (
-        <div className="full-bleed">
-          <HomeHeroSkeleton fit="mobile" />
-        </div>
-      )}
-
-      <div className="mx-auto w-full px-4 pt-5">
-        <div className="mb-8">
-          <div className="shimmer mb-4 h-5 w-40 rounded-full" />
-          <div className="flex gap-4 overflow-hidden">
-            {Array.from({ length: 3 }, (_, index) => (
-              <div key={index} className="w-56 shrink-0 sm:w-64">
-                <div className="shimmer aspect-video w-full rounded-xl" />
-                <div className="mt-3 space-y-2">
-                  <div className="shimmer h-4 w-3/4 rounded-full" />
-                  <div className="shimmer h-3 w-1/2 rounded-full" />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="mb-8">
-          <div className="shimmer mb-4 h-5 w-32 rounded-full" />
-          <div className="flex gap-4 overflow-hidden">
-            {Array.from({ length: 4 }, (_, index) => (
-              <div key={index} className="w-32 shrink-0 sm:w-40">
-                <div className="shimmer aspect-[2/3] w-full rounded-xl" />
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 export function MobileHomePage() {
@@ -230,7 +181,7 @@ export function MobileHomePage() {
   }, []);
 
   if (forceSkeletons) {
-    return <MobileHomeLoading isPhone={isPhone} />;
+    return <MobileHomeSkeleton isPhone={isPhone} />;
   }
 
   if (error) {
@@ -238,7 +189,7 @@ export function MobileHomePage() {
   }
 
   if (!data) {
-    return <MobileHomeLoading isPhone={isPhone} />;
+    return <MobileHomeSkeleton isPhone={isPhone} />;
   }
 
   const handleClearContinueWatching = (clearedItem: MediaItem) => {
@@ -298,9 +249,13 @@ export function MobileHomePage() {
           {data.continueWatching.length > 0 ? (
             <motion.div
               key="continue-watching"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8, height: 0 }}
+              initial={{ opacity: 0, transform: move({ y: 20 }) }}
+              animate={{ opacity: 1, ...settle }}
+              exit={{
+                opacity: 0,
+                transform: [REST, move({ y: -8 })],
+                height: 0,
+              }}
               transition={{ duration: 0.4, ease: [0.25, 1, 0.5, 1] }}
             >
               <MobileMediaRow

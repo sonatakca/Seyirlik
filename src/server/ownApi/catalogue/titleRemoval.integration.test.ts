@@ -1,6 +1,14 @@
 // @vitest-environment node
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -12,6 +20,8 @@ import {
   createEmptyRenditionRegistry,
 } from "../../../renditions/registry";
 import { createLibraryAdminRepository, loadTitleDetail } from "./libraryAdmin";
+import { createAcquisitionRepository } from "../acquisition/acquisitionRepository";
+import { missingEpisodePlan } from "../acquisition/missingEpisodes";
 import { createTitleRemoval, TitleRemovalError } from "./titleRemoval";
 import type { TmdbClient } from "../metadata/tmdbClient";
 
@@ -250,6 +260,50 @@ const databaseUrl = process.env.SEYIRLIK_TEST_DATABASE_URL;
       // The season's own row, so a season can be asked for as a whole.
       expect(detail!.seasons[0]!.id).toBe(season);
       expect(detail).toMatchObject({ files: 1, trickplayFiles: 0 });
+
+      // Searching for what is missing names the aired episode with no row.
+      expect(missingEpisodePlan(detail!).seasons).toEqual([
+        { season: 1, whole: false, episodes: [{ episode: 2, itemId: show }] },
+      ]);
+      // Once its download, addressed to the series, starts, it is on its way
+      // on the strip and no longer missing.
+      await createAcquisitionRepository(pool).create({
+        target: {
+          kind: "episode",
+          itemId: show,
+          title: "Show",
+          season: 1,
+          episode: 2,
+        },
+        indexerId: "nzbgeek",
+        releaseGuid: "e2",
+        releaseTitle: "Show.S01E02.1080p.WEB-DL",
+        origin: "automatic",
+        evidence: {
+          profileName: "HD-1080p",
+          policySnapshot: {},
+          releaseFacts: {},
+          score: 0,
+          reasons: [],
+          rejected: [],
+        },
+      });
+      const after = await loadTitleDetail(
+        createLibraryAdminRepository(pool),
+        tmdb,
+        show,
+      );
+      expect(
+        after!.seasons[0]!.episodes.map((e) => [
+          e.episodeNumber,
+          e.downloading,
+        ]),
+      ).toEqual([
+        [1, 0],
+        [2, 1],
+        [3, 0],
+      ]);
+      expect(missingEpisodePlan(after!).seasons).toEqual([]);
     });
 
     it("removes a film's folder, its rows, its package record and its legacy package", async () => {
@@ -302,9 +356,18 @@ const databaseUrl = process.env.SEYIRLIK_TEST_DATABASE_URL;
       });
       expect(await exists("Movies/Doomed (2010)")).toBe(true);
 
-      const report = await removal().remove(film, "Doomed");
+      const service = removal();
+      const report = await service.remove(film, "Doomed");
+      // The request is answered once it has been checked; the folder, the rows
+      // and the bytes follow in the background.
       expect(report).toMatchObject({
         folder: "Movies/Doomed (2010)",
+        state: "removing",
+        leftovers: [],
+      });
+      expect(await service.settled(film)).toMatchObject({
+        state: "done",
+        filesRemoved: 1,
         leftovers: [],
       });
       expect(await exists("Movies/Doomed (2010)")).toBe(false);
@@ -344,7 +407,9 @@ const databaseUrl = process.env.SEYIRLIK_TEST_DATABASE_URL;
         });
         await file(episode, `Series/Gone/Season 1/Gone - S01E0${n}.mkv`);
       }
-      const report = await removal().remove(show, "Gone");
+      const service = removal();
+      const report = await service.remove(show, "Gone");
+      await service.settled(show);
       expect(report.folder).toBe("Series/Gone");
       expect(await exists("Series/Gone")).toBe(false);
       expect(
@@ -386,7 +451,9 @@ const databaseUrl = process.env.SEYIRLIK_TEST_DATABASE_URL;
         sourceKey: "movie:movies/shared/other",
       });
       await file(second, "Movies/Shared/other.mkv");
-      const report = await removal().remove(first, "Shared");
+      const service = removal();
+      const report = await service.remove(first, "Shared");
+      await service.settled(first);
       expect(report.folder).toBeNull();
       expect(await exists("Movies/Shared/first.mkv")).toBe(false);
       expect(await exists("Movies/Shared/other.mkv")).toBe(true);
@@ -407,8 +474,75 @@ const databaseUrl = process.env.SEYIRLIK_TEST_DATABASE_URL;
         sourceKey: "movie:movies/next",
         desired: true,
       });
-      await removal().remove(film, "Next");
+      const service = removal();
+      await service.remove(film, "Next");
+      await service.settled(film);
       expect(await exists(path.relative(mediaRoot, staged))).toBe(false);
+    });
+
+    it("finishes a removal a restart interrupted, without being asked", async () => {
+      const staged = path.join(
+        mediaRoot,
+        "Series",
+        `.seyirlik-removing-${randomUUID()}`,
+      );
+      await mkdir(staged, { recursive: true });
+      await writeFile(path.join(staged, "x.mkv"), "x");
+      expect(await removal().sweepInterrupted()).toEqual([]);
+      expect(await exists(path.relative(mediaRoot, staged))).toBe(false);
+    });
+
+    it("reports a refusal found after the answer, and deletes nothing", async () => {
+      const film = await item({
+        kind: "movie",
+        title: "Linked",
+        library: movies,
+        sourceKey: "movie:movies/linked (2014)",
+      });
+      const elsewhere = await mkdtemp(
+        path.join(tmpdir(), "seyirlik-elsewhere-"),
+      );
+      await writeFile(path.join(elsewhere, "Linked.mkv"), "video");
+      await mkdir(path.join(mediaRoot, "Movies"), { recursive: true });
+      await symlink(elsewhere, path.join(mediaRoot, "Movies/Linked (2014)"));
+      await pool.query(
+        `INSERT INTO media_files (id, item_id, relative_path, size_bytes, mtime_ms, fingerprint)
+         VALUES ($1,$2,'Movies/Linked (2014)/Linked.mkv',5,1,'test')`,
+        [randomUUID(), film],
+      );
+      const service = removal();
+      expect((await service.remove(film, "Linked")).state).toBe("removing");
+      expect(await service.settled(film)).toMatchObject({
+        state: "failed",
+        failure: "unsafe",
+      });
+      expect(await exists("Movies/Linked (2014)/Linked.mkv")).toBe(true);
+      expect(
+        (await pool.query("SELECT 1 FROM items WHERE id = $1", [film])).rows,
+      ).toHaveLength(1);
+      await rm(elsewhere, { recursive: true, force: true });
+    });
+
+    it("refuses a second removal of a title already being removed", async () => {
+      const film = await item({
+        kind: "movie",
+        title: "Twice",
+        library: movies,
+        sourceKey: "movie:movies/twice (2013)",
+      });
+      await file(film, "Movies/Twice (2013)/Twice.mkv");
+      const service = removal();
+      const [first, second] = await Promise.allSettled([
+        service.remove(film, "Twice"),
+        service.remove(film, "Twice"),
+      ]);
+      expect(first.status).toBe("fulfilled");
+      expect(second).toMatchObject({
+        status: "rejected",
+        reason: { code: "busy" },
+      });
+      await service.settled(film);
+      expect(await exists("Movies/Twice (2013)")).toBe(false);
     });
 
     afterAll(async () => {

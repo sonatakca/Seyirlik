@@ -11,6 +11,7 @@ import { ADAPTIVE_PROFILE_VERSION } from "../../../renditions/adaptive/profile";
 import type { CatalogueRepository } from "../catalogue/catalogueRepository";
 import type { JobQueue } from "../tasks/jobQueue";
 import type { ProcessingJobStore } from "./jobStore";
+import { createProcessingEnqueuer } from "./processingEnqueue";
 import { createProcessingRoutes } from "./processingRoutes";
 
 /*
@@ -35,7 +36,7 @@ vi.mock("../../../renditions/processing/decide", () => ({
     ladder: [{ qualityHeight: 1080, width: 1920, height: 1080 }],
     renditionsToEncode: [1080],
     estimate: { outputBytes: 0, stagingBytes: 0, sufficient: true },
-    streams: { audio: [], subtitles: [] },
+    streams: { audio: [], subtitles: [], keptSubtitleStreamIndexes: [] },
     warnings: [],
   })),
   freeBytesOn: vi.fn(async () => 1_000_000_000),
@@ -121,14 +122,8 @@ function stubStore(activeJob: { id: string } | null): ProcessingJobStore {
   } as unknown as ProcessingJobStore;
 }
 
-async function callDelete(
-  fixtureData: Fixture,
-  options: {
-    store?: ProcessingJobStore;
-    storageAvailable?: () => boolean;
-  } = {},
-) {
-  const catalogue = {
+function stubCatalogue(): CatalogueRepository {
+  return {
     // A movie: its package sits beside it, which is what this suite exercises.
     getItemKind: async () => "movie" as const,
     listFilesForItem: async () => [
@@ -140,13 +135,23 @@ async function callDelete(
       },
     ],
   } as unknown as CatalogueRepository;
+}
+
+async function callDelete(
+  fixtureData: Fixture,
+  options: {
+    store?: ProcessingJobStore;
+    storageAvailable?: () => boolean;
+  } = {},
+) {
+  const catalogue = stubCatalogue();
 
   const routes = createProcessingRoutes({
     catalogue,
     store: options.store ?? stubStore(null),
     queue: {} as unknown as JobQueue,
     mediaRoot: fixtureData.root,
-    renditionRoot: fixtureData.root,
+    workRoot: fixtureData.root,
     ...(options.storageAvailable
       ? { storageAvailable: options.storageAvailable }
       : {}),
@@ -222,7 +227,7 @@ beforeEach(() => {
     ladder: [{ qualityHeight: 1080, width: 1920, height: 1080 }],
     renditionsToEncode: [1080],
     estimate: { outputBytes: 0, stagingBytes: 0, sufficient: true },
-    streams: { audio: [], subtitles: [] },
+    streams: { audio: [], subtitles: [], keptSubtitleStreamIndexes: [] },
     warnings: [],
   } as unknown as ReturnType<typeof decideProcessing>);
 });
@@ -256,7 +261,7 @@ describe("POST /processing/source/delete", () => {
       ],
       renditionsToEncode: [1440],
       estimate: { outputBytes: 0, stagingBytes: 0, sufficient: true },
-      streams: { audio: [], subtitles: [] },
+      streams: { audio: [], subtitles: [], keptSubtitleStreamIndexes: [] },
       warnings: [],
     } as unknown as ReturnType<typeof decideProcessing>);
 
@@ -336,5 +341,65 @@ describe("POST /processing/source/delete", () => {
       alreadyAbsent: true,
       freedBytes: 0,
     });
+  });
+});
+
+/*
+ * The helper that removes sources after upload asks for one thing more than
+ * the button: that the source is still the bytes *its job* built from, not
+ * merely bytes some package in the folder matches.
+ */
+describe("removing a source for a particular job", () => {
+  function enqueuer(root: string) {
+    return createProcessingEnqueuer({
+      catalogue: stubCatalogue(),
+      store: stubStore(null),
+      queue: {} as unknown as JobQueue,
+      mediaRoot: root,
+      workRoot: root,
+      ffprobePath: "ffprobe",
+      hardware: async () =>
+        ({ platform: "test", adapters: [] }) as unknown as Awaited<
+          ReturnType<Parameters<typeof createProcessingEnqueuer>[0]["hardware"]>
+        >,
+      storageGuard: { mayStartWork: () => true } as unknown as Parameters<
+        typeof createProcessingEnqueuer
+      >[0]["storageGuard"],
+    });
+  }
+
+  it("removes it when the job's fingerprint is the source's", async () => {
+    const data = await fixture();
+    const removal = await enqueuer(data.root).removeSource(ITEM, FILE, {
+      expectedFingerprint: FINGERPRINT,
+    });
+    expect(removal).toMatchObject({
+      deleted: true,
+      freedBytes: SOURCE_BYTES.length,
+    });
+    expect(await exists(data.sourcePath)).toBe(false);
+  });
+
+  it("keeps it when the job built from other bytes", async () => {
+    const data = await fixture();
+    await expect(
+      enqueuer(data.root).removeSource(ITEM, FILE, {
+        expectedFingerprint: "fingerprint-of-an-older-download",
+      }),
+    ).rejects.toMatchObject({ code: "SOURCE_CHANGED" });
+    expect(await exists(data.sourcePath)).toBe(true);
+  });
+
+  it("tells the caller which package was found damaged", async () => {
+    const data = await fixture({ truncateMedia: true });
+    const onDamage = vi.fn();
+    await expect(
+      enqueuer(data.root).removeSource(ITEM, FILE, { onDamage }),
+    ).rejects.toMatchObject({ code: "PROCESSING_PACKAGE_INCOMPLETE" });
+    expect(onDamage).toHaveBeenCalledWith(
+      FILE,
+      expect.objectContaining({ rungs: [1080], elsewhere: false }),
+    );
+    expect(await exists(data.sourcePath)).toBe(true);
   });
 });

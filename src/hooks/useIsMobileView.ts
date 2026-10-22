@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 
-const MOBILE_VIEW_QUERY = "(max-width: 1023px)";
+export const MOBILE_VIEW_QUERY = "(max-width: 1023px)";
 const devMode = import.meta.env.DEV;
 
-function readIsMobileView(): boolean {
+export function readIsMobileView(): boolean {
   if (typeof window === "undefined" || !window.matchMedia) {
     return false;
   }

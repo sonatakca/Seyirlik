@@ -16,6 +16,9 @@ import { fileURLToPath } from "node:url";
  * release — those two disagree, the guard says no, and the process exits zero
  * having started nothing. Silently, and with a success code, which is the worst
  * available way to fail: a supervisor sees a clean exit and simply restarts it.
+ * (Releases hard-link their unchanged files from the release before them; a
+ * hard link is a real path inside its own release, so that changes nothing
+ * here. Only the junction does.)
  *
  * So both sides are canonicalised. Resolution failures fall back to the plain
  * resolve rather than throwing: a missing `argv[1]` means this is not the

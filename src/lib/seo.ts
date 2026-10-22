@@ -1,7 +1,6 @@
 export const SITE_URL = "https://www.seyirlik.org/";
 
-export const DEFAULT_SEO_TITLE =
-  "Seyirlik | Kişisel Film ve Dizi İzleme Deneyimi";
+export const DEFAULT_SEO_TITLE = "Seyirlik";
 
 export const DEFAULT_SEO_DESCRIPTION =
   "Seyirlik, film ve dizileri modern, sinematik ve kişisel bir arayüzle keşfetmek ve izlemek için geliştirilen bir medya deneyimi uygulamasıdır.";

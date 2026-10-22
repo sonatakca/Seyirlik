@@ -70,7 +70,9 @@ describe("logo layout editor", () => {
       />,
     );
 
-    const preview = screen.getByAltText("Dune") as HTMLImageElement;
+    const preview = screen
+      .getByAltText("Dune")
+      .closest('[data-logo-shadow="true"]') as HTMLElement;
     expect(preview.style.filter).toBe("");
     expect(
       view.container.querySelector("[data-logo-shadow-backdrop]"),

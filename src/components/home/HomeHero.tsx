@@ -1,20 +1,12 @@
 import {
   useCallback,
   useEffect,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import {
-  animate,
-  motion,
-  useMotionValue,
-  useReducedMotion,
-  useTransform,
-  type AnimationPlaybackControls,
-} from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import {
   ChevronLeft,
   ChevronRight,
@@ -26,14 +18,15 @@ import {
   VolumeX,
 } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
+import { DwellClock } from "../../lib/dwellClock";
+import { useBake } from "../../lib/timeline/bake";
+import { Curve, derive, type TweenControls } from "../../lib/timeline/curve";
 import { getItemDisplayMetadata } from "../../lib/itemMetadataPreferences";
-import {
-  claimBottomChrome,
-  releaseBottomChrome,
-} from "../../lib/layout/bottomChrome";
 import { getHeroPreviewUrl } from "../../lib/mediaApi";
 import type { MediaItem } from "../../lib/types";
 import { HeroControlButton, HeroCopyBlock } from "./HeroCopy";
+import type { DrawnSize } from "./useReportedSize";
+import { NavbarVeil } from "./NavbarVeil";
 import { useSmartContinueItems } from "./useSmartContinueItems";
 import {
   getHeroImageCandidates,
@@ -50,7 +43,6 @@ import {
   type CompositionMotion,
 } from "./HeroComposition";
 import {
-  HANDOVER_GRADIENT,
   HERO_DWELL_MS,
   HERO_HEIGHT_CLASS,
   HERO_MOTION,
@@ -63,6 +55,7 @@ import {
   liftDurationS,
   previousIndex,
   pushedBackPlacement,
+  queueCount,
   queueIndices,
   queueSlots,
   sharedDurationS,
@@ -105,9 +98,6 @@ const Z: Record<Role, number> = {
 /** The queue's resting shade: none, the miniatures show their artwork clean. */
 const QUEUE_DIM = 0;
 
-/** Space kept above the controls for the notification pile. */
-const CHROME_CLEARANCE_PX = 14;
-
 /**
  * A swipe across the stage: how far a finger must travel, and how much more
  * sideways than up or down, before it changes the title. While it moves the
@@ -149,7 +139,7 @@ function wait(ms: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 }
 
-function run(controls: AnimationPlaybackControls): Promise<void> {
+function run(controls: TweenControls): Promise<void> {
   return controls.finished.then(
     () => undefined,
     () => undefined,
@@ -202,7 +192,7 @@ export function HomeHero({
   const [isDocumentVisible, setIsDocumentVisible] = useState(
     typeof document === "undefined" ? true : !document.hidden,
   );
-  const progress = useMotionValue(0);
+  const [clock] = useState(() => new DwellClock(HERO_DWELL_MS));
 
   const [areTrailersEnabled, setAreTrailersEnabled] = useState(
     readHeroTrailersEnabledPreference,
@@ -217,17 +207,22 @@ export function HomeHero({
   // The overview opens only when asked for: a pointer resting on the title,
   // focus inside its copy, or its button. It closes whenever the title leaves.
   const [isOverviewHovered, setIsOverviewHovered] = useState(false);
+  /** The stage title as drawn, for the copy's hover target. */
+  const [stageTitle, setStageTitle] = useState<
+    (DrawnSize & { id: string }) | null
+  >(null);
   const [isOverviewPinned, setIsOverviewPinned] = useState(false);
   const [isOverviewFocused, setIsOverviewFocused] = useState(false);
   const isOverviewOpen =
     isOverviewHovered || isOverviewPinned || isOverviewFocused;
-  const overview = useMotionValue(0);
+  const [overview] = useState(() => new Curve(0));
   const overviewLiftRef = useRef(0);
   // On a tall stage the overview opens across the queue's row, so the queue
   // steps aside for it on the same value.
   const isTallRef = useRef(false);
-  const queueFade = useTransform(overview, (value) =>
-    isTallRef.current ? 1 - value : 1,
+  const queueFade = useMemo(
+    () => derive([overview], (value) => (isTallRef.current ? 1 - value : 1)),
+    [overview],
   );
   const closeOverview = useCallback(() => {
     setIsOverviewHovered(false);
@@ -300,7 +295,9 @@ export function HomeHero({
         ? items.findIndex((item) => item.Id === currentId)
         : -1;
       const index = kept >= 0 ? kept : 0;
-      const queueIds = queueIndices(index, total).map((i) => items[i]!.Id);
+      const queueIds = queueIndices(index, total, queueCount(size)).map(
+        (i) => items[i]!.Id,
+      );
       const stageId = items[index]!.Id;
       for (const id of [...motions.current.keys()]) {
         if (id !== stageId && !queueIds.includes(id))
@@ -315,12 +312,12 @@ export function HomeHero({
             duration: reduceMotion ? 0 : HERO_MOTION.slideS,
             ease: HERO_MOTION.slideEase,
           };
-          void animate(existing.x, target.x, options);
-          void animate(existing.y, target.y, options);
-          void animate(existing.scale, target.scale, options);
+          void existing.x.tween(target.x, options);
+          void existing.y.tween(target.y, options);
+          void existing.scale.tween(target.scale, options);
         } else {
           const entry = motionFor(id, target, 1);
-          void animate(entry.dim, QUEUE_DIM, {
+          void entry.dim.tween(QUEUE_DIM, {
             duration: reduceMotion ? 0 : 0.4,
             ease: "linear",
           });
@@ -339,7 +336,7 @@ export function HomeHero({
     motions.current.clear();
     stageIndexRef.current = 0;
     setStageIndex(0);
-    const queue = queueIndices(0, total);
+    const queue = queueIndices(0, total, queueCount(size));
     const first = items[0]!;
     motionFor(first.Id, stagePlacement());
     queue.forEach((index, position) => {
@@ -353,7 +350,7 @@ export function HomeHero({
       })),
     ]);
     setCopyItemId(null);
-    progress.set(0);
+    clock.reset();
     // Only a different pool (or the first measurement) re-forms the hero;
     // `layers` is read, not followed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -363,17 +360,29 @@ export function HomeHero({
   useEffect(() => {
     if (!stage || busyRef.current) return;
     const slots = queueSlots(stage);
-    const queue = queueIndices(stageIndexRef.current, total);
+    const queue = queueIndices(stageIndexRef.current, total, queueCount(stage));
     const stageId = items[stageIndexRef.current]?.Id;
     if (stageId) {
       const entry = motions.current.get(stageId);
       if (entry) place(entry, stagePlacement());
     }
     queue.forEach((index, position) => {
-      const entry = motions.current.get(items[index]!.Id);
-      if (entry) place(entry, slotPlacement(stage, slots[position]!));
+      const entry = motionFor(
+        items[index]!.Id,
+        slotPlacement(stage, slots[position]!),
+        QUEUE_DIM,
+      );
+      place(entry, slotPlacement(stage, slots[position]!));
     });
-  }, [hasOpened, items, stage, total]);
+    if (stageId)
+      setLayers([
+        { id: stageId, role: "stage" },
+        ...queue.map((index) => ({
+          id: items[index]!.Id,
+          role: "queue" as Role,
+        })),
+      ]);
+  }, [hasOpened, isTravelling, items, motionFor, stage, total]);
 
   // ------------------------------------------------------------ the opening
   const open = useCallback(async () => {
@@ -381,7 +390,7 @@ export function HomeHero({
     if (!size || hasOpened || busyRef.current) return;
     busyRef.current = true;
     const slots = queueSlots(size);
-    const queue = queueIndices(0, total);
+    const queue = queueIndices(0, total, queueCount(size));
     const first = items[0];
     // No ceremony: the skeleton fades off as the artwork fades in, and the
     // copy and the queue fade up in the places their placeholders held.
@@ -393,7 +402,7 @@ export function HomeHero({
       const entry = motions.current.get(items[index]!.Id);
       if (!entry) return;
       place(entry, slotPlacement(size, slots[position]!));
-      void animate(entry.dim, QUEUE_DIM, {
+      void entry.dim.tween(QUEUE_DIM, {
         duration: reduceMotion ? 0 : 0.5,
         delay: reduceMotion ? 0 : HERO_MOTION.openQueueDelayS + position * 0.06,
         ease: "easeOut",
@@ -424,15 +433,15 @@ export function HomeHero({
       setIsTravelling(true);
       setIsTrailerPlaying(false);
       closeOverview();
-      progress.set(0);
+      clock.reset();
 
       const fromIndex = stageIndexRef.current;
-      const oldQueue = queueIndices(fromIndex, total);
+      const oldQueue = queueIndices(fromIndex, total, queueCount(size));
       const toIndex =
         direction === "forward"
           ? oldQueue[Math.min(queuePosition, oldQueue.length - 1)]!
           : previousIndex(fromIndex, total);
-      const newQueue = queueIndices(toIndex, total);
+      const newQueue = queueIndices(toIndex, total, queueCount(size));
       const slots = queueSlots(size);
       const outgoing = items[fromIndex]!;
       const incoming = items[toIndex]!;
@@ -459,9 +468,9 @@ export function HomeHero({
         to: Placement,
         options: Timing,
       ) => {
-        animations.push(run(animate(entry.x, to.x, options)));
-        void animate(entry.y, to.y, options);
-        void animate(entry.scale, to.scale, options);
+        animations.push(run(entry.x.tween(to.x, options)));
+        void entry.y.tween(to.y, options);
+        void entry.scale.tween(to.scale, options);
       };
       /**
        * The queue slides as one row: every miniature that moves along it,
@@ -488,7 +497,7 @@ export function HomeHero({
         };
         for (const { entry, to } of moves) {
           moveTo(entry, to, options);
-          void animate(entry.dim, QUEUE_DIM, options);
+          void entry.dim.tween(QUEUE_DIM, options);
         }
       };
       /** A title joining the queue, waiting in line beyond the right edge. */
@@ -519,14 +528,14 @@ export function HomeHero({
         // The incoming title grows out of its slot over the stage.
         const rising = motions.current.get(incoming.Id)!;
         moveTo(rising, stagePlacement(), liftOptions);
-        void animate(rising.dim, 0, { duration: lift * 0.5, ease: "linear" });
+        void rising.dim.tween(0, { duration: lift * 0.5, ease: "linear" });
 
         // The outgoing one recedes beneath it.
         const under = motions.current.get(outgoing.Id)!;
-        void animate(under.x, pushedBackPlacement(size).x, liftOptions);
-        void animate(under.y, pushedBackPlacement(size).y, liftOptions);
-        void animate(under.scale, pushedBackPlacement(size).scale, liftOptions);
-        void animate(under.dim, HERO_MOTION.pushBackDim, liftOptions);
+        void under.x.tween(pushedBackPlacement(size).x, liftOptions);
+        void under.y.tween(pushedBackPlacement(size).y, liftOptions);
+        void under.scale.tween(pushedBackPlacement(size).scale, liftOptions);
+        void under.dim.tween(HERO_MOTION.pushBackDim, liftOptions);
 
         // Titles jumped over sink out of the queue.
         for (const id of leaving) {
@@ -537,12 +546,11 @@ export function HomeHero({
             duration: reduceMotion ? 0 : HERO_MOTION.dropS,
             ease: HERO_MOTION.travelEase,
           };
-          void animate(
-            entry.y,
+          void entry.y.tween(
             droppedPlacement(size, slots[position]!).y,
             options,
           );
-          void animate(entry.dim, 1, options);
+          void entry.dim.tween(1, options);
         }
 
         // The rest close up, and newcomers line up behind them.
@@ -598,15 +606,14 @@ export function HomeHero({
         ]);
         const shrinking = motions.current.get(outgoing.Id)!;
         moveTo(shrinking, slotPlacement(size, slots[0]!), liftOptions);
-        void animate(shrinking.dim, QUEUE_DIM, liftOptions);
-        void animate(
-          shrinking.titleScale,
+        void shrinking.dim.tween(QUEUE_DIM, liftOptions);
+        void shrinking.titleScale.tween(
           titleScaleRef.current.rest,
           liftOptions,
         );
-        void animate(shrinking.trailer, 0, liftOptions);
+        void shrinking.trailer.tween(0, liftOptions);
         moveTo(previous, stagePlacement(), liftOptions);
-        void animate(previous.dim, 0, liftOptions);
+        void previous.dim.tween(0, liftOptions);
 
         // The queue makes room at its head; its last title slides out past
         // the edge, on the same clock, so the row stays a row.
@@ -641,31 +648,35 @@ export function HomeHero({
       setIsTravelling(false);
       busyRef.current = false;
     },
-    [closeOverview, hasOpened, items, motionFor, progress, reduceMotion, total],
+    [closeOverview, hasOpened, items, motionFor, clock, reduceMotion, total],
   );
 
-  // The overview opening: one value drives the title's rise and growth, the
-  // facts' rise and the text coming up under them, so none can disagree. It
-  // lifts whichever title holds the stage until the next one settles, so a
-  // closing overview carries the outgoing title's logo back down with it.
-  useEffect(
-    () =>
-      overview.on("change", (value) => {
-        const id = items[stageIndexRef.current]?.Id;
-        const entry = id ? motions.current.get(id) : undefined;
-        if (!entry) return;
-        const scales = titleScaleRef.current;
-        entry.titleY.set(-value * overviewLiftRef.current);
-        entry.titleScale.set(scales.rest + (scales.open - scales.rest) * value);
-      }),
-    [items, overview],
-  );
+  // The overview opening: one course drives the title's rise and growth, the
+  // facts' rise and the text coming up under them, so none can disagree. Each
+  // is linear in the overview, so tweening it on the same duration and curve
+  // from where it stands keeps it exactly in step. It lifts whichever title
+  // holds the stage, so a closing overview carries the outgoing title's logo
+  // back down with it.
   useEffect(() => {
-    const controls = animate(overview, isOverviewOpen ? 1 : 0, {
-      duration: reduceMotion ? 0 : 0.32,
-      ease: isOverviewOpen ? HERO_MOTION.settleEase : HERO_MOTION.travelEase,
-    });
+    const open = isOverviewOpen ? 1 : 0;
+    const options = {
+      duration: reduceMotion ? 0 : HERO_MOTION.overviewS,
+      ease: HERO_MOTION.travelEase,
+    };
+    const controls = overview.tween(open, options);
+    const id = items[stageIndexRef.current]?.Id;
+    const entry = id ? motions.current.get(id) : undefined;
+    if (entry) {
+      const scales = titleScaleRef.current;
+      entry.titleY.tween(-open * overviewLiftRef.current, options);
+      entry.titleScale.tween(
+        scales.rest + (scales.open - scales.rest) * open,
+        options,
+      );
+    }
     return () => controls.stop();
+    // `items` is read for the stage's title at the moment the overview moves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOverviewOpen, overview, reduceMotion]);
 
   // Artwork for the titles about to arrive, fetched before they slide in, so
@@ -692,21 +703,8 @@ export function HomeHero({
 
   useEffect(() => {
     if (!isRunning) return undefined;
-    let frame = 0;
-    let last = performance.now();
-    const tick = (now: number) => {
-      const next = progress.get() + (now - last) / HERO_DWELL_MS;
-      last = now;
-      progress.set(Math.min(1, next));
-      if (next >= 1) {
-        void travel("forward");
-        return;
-      }
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [isRunning, progress, travel]);
+    return clock.start(() => void travel("forward"));
+  }, [isRunning, clock, travel]);
 
   useEffect(() => {
     const section = sectionRef.current;
@@ -751,18 +749,13 @@ export function HomeHero({
   useEffect(() => {
     if (!trailerUrl || !areTrailersEnabled || trailerDoneRef.current)
       return undefined;
-    const unsubscribe = progress.on("change", (value) => {
-      if (
-        value >= HERO_TRAILER_DELAY_MS / HERO_DWELL_MS &&
-        !trailerDoneRef.current
-      ) {
-        trailerDoneRef.current = true;
-        if (stageItem) trailersSeen.current.add(stageItem.Id);
-        setIsTrailerPlaying(true);
-      }
+    return clock.onReach(HERO_TRAILER_DELAY_MS / HERO_DWELL_MS, () => {
+      if (trailerDoneRef.current) return;
+      trailerDoneRef.current = true;
+      if (stageItem) trailersSeen.current.add(stageItem.Id);
+      setIsTrailerPlaying(true);
     });
-    return unsubscribe;
-  }, [areTrailersEnabled, progress, stageItem, trailerUrl]);
+  }, [areTrailersEnabled, clock, stageItem, trailerUrl]);
 
   useEffect(() => {
     if (!stageItem) return;
@@ -772,9 +765,8 @@ export function HomeHero({
       duration: reduceMotion ? 0 : 0.8,
       ease: HERO_MOTION.travelEase,
     };
-    void animate(entry.trailer, isTrailerPlaying ? 1 : 0, options);
-    void animate(
-      entry.titleScale,
+    void entry.trailer.tween(isTrailerPlaying ? 1 : 0, options);
+    void entry.titleScale.tween(
       isTrailerPlaying
         ? titleScaleRef.current.trailer
         : titleScaleRef.current.rest,
@@ -785,46 +777,6 @@ export function HomeHero({
   }, [hasOpened, isTrailerPlaying, reduceMotion, stageItem]);
 
   const endTrailer = useCallback(() => setIsTrailerPlaying(false), []);
-
-  // ------------------------------------------ sharing the bottom-right corner
-  const claimId = useId();
-  const controlsTopRef = useRef(0);
-  const controlsBottomRef = useRef(0);
-  useEffect(() => {
-    /*
-     * The control and the thumbnails under it scroll with the section, so the
-     * band they occupy moves with every scroll. It is published as a band —
-     * where it starts as well as where it ends — so the pile can stand below
-     * it once it has risen far enough, instead of climbing after it towards
-     * the masthead and being squeezed to a sliver there.
-     */
-    const update = () => {
-      const section = sectionRef.current;
-      if (!section || !hasOpened) {
-        releaseBottomChrome(claimId);
-        return;
-      }
-      const sectionTop = section.getBoundingClientRect().top;
-      const top = sectionTop + controlsTopRef.current;
-      const occupied = window.innerHeight - top;
-      const below =
-        window.innerHeight - (sectionTop + controlsBottomRef.current);
-      if (occupied <= 0 || top < 0) releaseBottomChrome(claimId);
-      else
-        claimBottomChrome(claimId, Math.round(occupied + CHROME_CLEARANCE_PX), {
-          bottomPx: Math.round(below - CHROME_CLEARANCE_PX),
-          tracking: true,
-        });
-    };
-    update();
-    window.addEventListener("scroll", update, { passive: true });
-    window.addEventListener("resize", update);
-    return () => {
-      window.removeEventListener("scroll", update);
-      window.removeEventListener("resize", update);
-      releaseBottomChrome(claimId);
-    };
-  }, [claimId, hasOpened, stage]);
 
   // ----------------------------------------------------------- the swipe
   const swipeRef = useRef<{
@@ -857,7 +809,7 @@ export function HomeHero({
     }
     const entry = stageEntry();
     if (entry)
-      void animate(entry.x, 0, {
+      void entry.x.tween(0, {
         duration: reduceMotion ? 0 : 0.32,
         ease: HERO_MOTION.settleEase,
       });
@@ -874,16 +826,23 @@ export function HomeHero({
   const isCompact = layout?.actions === "compact";
   // While the overview spans the queue's row, the queue takes no taps.
   const isQueueAside = isTall && isOverviewOpen;
-  const queueIds = queueIndices(stageIndex, total).map(
-    (index) => items[index]!.Id,
-  );
+  const queueIds = queueIndices(
+    stageIndex,
+    total,
+    stage ? queueCount(stage) : QUEUE_LENGTH,
+  ).map((index) => items[index]!.Id);
   const headSlot = slots[0];
   // A phone's pill holds touch-sized buttons, so it stands taller.
   const controlsTop = headSlot ? headSlot.y - (isCompact ? 62 : 54) : 0;
-  controlsTopRef.current = controlsTop;
-  // The progress bar under the thumbnails is the lowest thing in the band.
-  controlsBottomRef.current = headSlot ? headSlot.y + headSlot.height + 12 : 0;
   const copyItem = copyItemId ? (itemsById.get(copyItemId) ?? null) : null;
+
+  // The queue's furniture steps aside with the queue, on the same course.
+  const furnitureRef = useRef<HTMLDivElement>(null);
+  useBake(
+    [queueFade],
+    (at) => [[furnitureRef.current, { opacity: queueFade.get(at) }]],
+    [isTall, hasOpened],
+  );
 
   const hover = (id: string, active: boolean) => {
     if (busyRef.current) return;
@@ -897,14 +856,14 @@ export function HomeHero({
       duration: reduceMotion ? 0 : 0.3,
       ease: HERO_MOTION.settleEase,
     };
-    void animate(entry.y, slot.y - lift, options);
+    void entry.y.tween(slot.y - lift, options);
   };
 
   if (total === 0) {
     return (
       <section
         ref={sectionRef}
-        className={`relative w-full bg-[#050607] ${HERO_HEIGHT_CLASS[fit]}`}
+        className={`seyirlik-hero-stage relative mx-4 mt-2 mb-4 w-[calc(100%-2rem)] rounded-2xl bg-[#050607] ${HERO_HEIGHT_CLASS[fit]}`}
       />
     );
   }
@@ -912,7 +871,7 @@ export function HomeHero({
   return (
     <section
       ref={sectionRef}
-      className={`seyirlik-home-hero relative w-full touch-pan-y overflow-hidden bg-[#050607] ${HERO_HEIGHT_CLASS[fit]}`}
+      className={`seyirlik-home-hero seyirlik-hero-stage relative mx-4 mt-2 mb-4 w-[calc(100%-2rem)] rounded-2xl touch-pan-y overflow-hidden bg-[#050607] ${HERO_HEIGHT_CLASS[fit]}`}
       aria-roledescription="carousel"
       aria-label={t("hero.featured")}
       onKeyDown={(event) => {
@@ -954,6 +913,7 @@ export function HomeHero({
         }
       }}
     >
+      <NavbarVeil />
       {stage
         ? layers.map((layer) => {
             const item = itemsById.get(layer.id);
@@ -974,6 +934,7 @@ export function HomeHero({
                 }
                 motion={entry}
                 slotScale={slotScale}
+                slotHeight={slots[0]?.height}
                 titleRestScale={layout!.titleScale.rest}
                 opacity={
                   isTall && (layer.role === "queue" || layer.role === "leaving")
@@ -989,6 +950,11 @@ export function HomeHero({
                 isTrailerMuted={isTrailerMuted}
                 onTrailerEnded={endTrailer}
                 onArtworkReady={() => handleArtworkReady(layer.id)}
+                onTitleSize={
+                  isStage
+                    ? (size) => setStageTitle({ id: layer.id, ...size })
+                    : undefined
+                }
               />
             );
           })
@@ -1000,6 +966,9 @@ export function HomeHero({
           stage={stage}
           layout={layout}
           item={copyItem}
+          titleSize={
+            stageTitle && stageTitle.id === copyItem?.Id ? stageTitle : null
+          }
           overview={overview}
           isOverviewOpen={isOverviewOpen}
           onHoverIntent={(open) => {
@@ -1020,9 +989,9 @@ export function HomeHero({
           together while the overview is open across its row. */}
       {/* Stepped aside for the overview, the queue is out of reach
           altogether: no focus, nothing for assistive technology. */}
-      <motion.div
+      <div
+        ref={furnitureRef}
         className="pointer-events-none absolute inset-0 z-[6]"
-        style={{ opacity: queueFade }}
         {...(isQueueAside ? { inert: "" } : {})}
       >
         {stage && hasOpened
@@ -1078,9 +1047,9 @@ export function HomeHero({
             }}
             transition={{ duration: reduceMotion ? 0 : 0.35 }}
           >
-            <motion.div
-              className="h-full origin-left bg-[var(--accent)]"
-              style={{ scaleX: progress }}
+            <div
+              ref={clock.attach}
+              className="h-full origin-left bg-[var(--accent)] [transform:scaleX(0)]"
             />
           </motion.div>
         ) : null}
@@ -1103,6 +1072,47 @@ export function HomeHero({
               ease: "easeOut",
             }}
           >
+            {trailerUrl ? (
+              <>
+                {isTrailerPlaying ? (
+                  <HeroControlButton
+                    label={
+                      isTrailerMuted ? t("player.unmute") : t("player.mute")
+                    }
+                    onClick={() => setIsTrailerMuted((current) => !current)}
+                  >
+                    {isTrailerMuted ? (
+                      <VolumeX size={16} />
+                    ) : (
+                      <Volume2 size={16} />
+                    )}
+                  </HeroControlButton>
+                ) : null}
+                <HeroControlButton
+                  label={
+                    areTrailersEnabled
+                      ? t("hero.disableTrailers")
+                      : t("hero.enableTrailers")
+                  }
+                  onClick={() => {
+                    const next = !areTrailersEnabled;
+                    saveHeroTrailersEnabledPreference(next);
+                    setAreTrailersEnabled(next);
+                    if (!next) setIsTrailerPlaying(false);
+                  }}
+                >
+                  {areTrailersEnabled ? (
+                    <Video size={16} />
+                  ) : (
+                    <VideoOff size={16} />
+                  )}
+                </HeroControlButton>
+                <span
+                  className="mx-0.5 h-5 w-px bg-white/15"
+                  aria-hidden="true"
+                />
+              </>
+            ) : null}
             {/* A phone's pill has room for the clock alone: a swipe or a tap on
               a miniature moves the queue there. Previous and next stay for
               a keyboard and assistive technology, which have neither, and
@@ -1148,50 +1158,9 @@ export function HomeHero({
                 / {String(total).padStart(2, "0")}
               </span>
             </span>
-            {trailerUrl ? (
-              <>
-                <span
-                  className="mx-0.5 h-5 w-px bg-white/15"
-                  aria-hidden="true"
-                />
-                <HeroControlButton
-                  label={
-                    areTrailersEnabled
-                      ? t("hero.disableTrailers")
-                      : t("hero.enableTrailers")
-                  }
-                  onClick={() => {
-                    const next = !areTrailersEnabled;
-                    saveHeroTrailersEnabledPreference(next);
-                    setAreTrailersEnabled(next);
-                    if (!next) setIsTrailerPlaying(false);
-                  }}
-                >
-                  {areTrailersEnabled ? (
-                    <Video size={16} />
-                  ) : (
-                    <VideoOff size={16} />
-                  )}
-                </HeroControlButton>
-                {isTrailerPlaying ? (
-                  <HeroControlButton
-                    label={
-                      isTrailerMuted ? t("player.unmute") : t("player.mute")
-                    }
-                    onClick={() => setIsTrailerMuted((current) => !current)}
-                  >
-                    {isTrailerMuted ? (
-                      <VolumeX size={16} />
-                    ) : (
-                      <Volume2 size={16} />
-                    )}
-                  </HeroControlButton>
-                ) : null}
-              </>
-            ) : null}
           </motion.div>
         ) : null}
-      </motion.div>
+      </div>
 
       {/* Loading: the skeleton, piece for piece where the hero's own pieces
           will be, fading off as the first artwork fades in. */}
@@ -1215,15 +1184,6 @@ export function HomeHero({
           />
         </motion.div>
       ) : null}
-
-      {/* The page continues below; the hero hands over to it in a short
-          band that stays clear until near the edge, so the artwork above it
-          is not dimmed. */}
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 bottom-0 z-[3] h-[12%]"
-        style={{ background: HANDOVER_GRADIENT }}
-      />
     </section>
   );
 }

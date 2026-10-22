@@ -90,19 +90,29 @@ describe("searching a book by meaning", () => {
     expect(await search.search(BOOK, "Maria")).toMatchObject({
       state: "preparing",
     });
-    expect(await settle(search)).toEqual({ state: "ready", hits: [] });
+    expect(await settle(search)).toEqual({
+      state: "ready",
+      hits: [],
+      terms: [],
+      phrase: [],
+      exact: false,
+    });
 
     const outcome = await search.search(BOOK, "Maria nasıl güldü");
     expect(outcome.state).toBe("ready");
-    const hits = outcome.state === "ready" ? outcome.hits : [];
-    expect(hits[0]).toEqual({
+    if (outcome.state !== "ready") return;
+    expect(outcome.hits[0]).toMatchObject({
       section: 3,
       block: 9,
       anchor: "Maria",
       text: "Maria Puder güldü.",
-      score: 1,
     });
-    expect(hits.map((hit) => hit.score)).toEqual([1, 0, 0]);
+    expect(outcome.hits.map((hit) => hit.section)).toEqual([3, 1, 2]);
+    // Each passage is the first of its section here, so it starts at 0.
+    expect(outcome.hits.map((hit) => hit.place)).toEqual([0, 0, 0]);
+    expect(outcome.hits[0]!.score).toBeGreaterThan(outcome.hits[1]!.score);
+    // The words it holds, to be marked; "nasıl" is not in the book.
+    expect(outcome.terms).toEqual(["maria", "güldü"]);
     expect(engine.indexed).toEqual([BOOK.filePath]);
   });
 
@@ -217,7 +227,10 @@ describe("searching a book by meaning", () => {
     await Promise.all([search.search(BOOK, ""), search.search(other, "")]);
     await Promise.all([settle(search), settle(search, other)]);
     expect(most).toBe(1);
-    expect(engine.indexed).toEqual([BOOK.filePath, other.filePath]);
+    // Each search reads the disk before it queues, so either may go first.
+    expect([...engine.indexed].sort()).toEqual(
+      [BOOK.filePath, other.filePath].sort(),
+    );
   });
 
   it("prepares the library ahead of time, once", async () => {

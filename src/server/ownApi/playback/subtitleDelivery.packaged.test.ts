@@ -17,6 +17,7 @@ const packaged = (
   ...(language ? { language } : {}),
   isDefault: false,
   isForced: false,
+  fromSidecar: false,
   path: `/media/Film/subtitle/${streamIndex}.vtt`,
 });
 

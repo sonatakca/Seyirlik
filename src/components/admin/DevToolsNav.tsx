@@ -7,6 +7,7 @@ import {
   visibleGroups,
 } from "../../lib/adminSections";
 import { ADMIN_ICONS } from "./adminIcons";
+import { AdminDockSwitch } from "./titleDock/AdminDockSwitch";
 
 /**
  * Every administrative tool, always in reach.
@@ -52,6 +53,12 @@ export function DevToolsNav({
         <LayoutGrid size={16} className="shrink-0" />
         {t("admin.nav.overview")}
       </Link>
+
+      {/* A setting, not a destination; kept at the top so it is in view
+          from every tool without scrolling the list. */}
+      <div className="rounded-2xl border border-white/10 bg-white/[0.03]">
+        <AdminDockSwitch />
+      </div>
 
       {groups.map(({ group, sections }) => (
         <div key={group.id}>

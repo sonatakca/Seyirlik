@@ -90,6 +90,8 @@ export interface ReaderBookmark {
   excerpt: string;
   progress: number | null;
   createdAt: number;
+  /** When it last changed, as the server orders changes; see readerMarks. */
+  changedAt?: number;
   /**
    * Set on a highlight: `cfi` is then the range it covers and `excerpt` the
    * text it marks. Highlights live in the bookmark list, so the reader finds
@@ -163,6 +165,7 @@ export interface EpubContentView {
 
 export const READER_SETTINGS_KEY = "seyirlik.reader.settings";
 export const READER_PROGRESS_KEY = "seyirlik.reader.progress";
+/** Where bookmarks were kept before the account kept them; see readerMarks. */
 export const READER_BOOKMARKS_KEY = "seyirlik.reader.bookmarks";
 
 export const READER_THEMES: ReaderTheme[] = ["night", "dim", "sepia", "paper"];
@@ -177,9 +180,9 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
   lineHeight: 1.65,
   width: 66,
   spotlight: "soft",
-  lightShape: "paragraph",
+  lightShape: "line",
   paragraphReach: 0.3,
-  lineReach: 0.18,
+  lineReach: 0.85,
   showRuler: true,
   showTimeLeft: true,
 };
@@ -197,9 +200,10 @@ export const WIDTH_PRESETS = [56, 66, 78];
 export const READING_LINE = 0.4;
 /**
  * Seven reaches for each light, narrowest first, each about half as wide
- * again as the one before; the third is the default. The last two run past
- * the screen: at the widest the light is still falling off a screen and a
- * half away, so the page is nearly evenly lit.
+ * again as the one before. The light falls on the line by default, at the
+ * sixth line reach; the paragraph light defaults to its third. The last two
+ * run past the screen: at the widest the light is still falling off a screen
+ * and a half away, so the page is nearly evenly lit.
  */
 export const PARAGRAPH_REACH_PRESETS = [0.1, 0.2, 0.3, 0.45, 0.7, 1, 1.5];
 export const LINE_REACH_PRESETS = [0.05, 0.1, 0.18, 0.3, 0.5, 0.85, 1.5];
@@ -437,39 +441,6 @@ export function writeReaderProgress(
     updatedAt: Date.now(),
   };
   writeJsonStorage(READER_PROGRESS_KEY, progress);
-}
-
-export function readBookmarks(itemId: string): ReaderBookmark[] {
-  const bookmarks = readJsonStorage<ReaderBookmarkMap>(
-    READER_BOOKMARKS_KEY,
-    {},
-  );
-  const list = bookmarks[itemId];
-
-  return Array.isArray(list)
-    ? list.filter(
-        (bookmark) =>
-          typeof bookmark?.cfi === "string" &&
-          typeof bookmark.id === "string" &&
-          (bookmark.color === undefined ||
-            HIGHLIGHT_COLORS.includes(bookmark.color)),
-      )
-    : [];
-}
-
-export function writeBookmarks(itemId: string, list: ReaderBookmark[]): void {
-  const bookmarks = readJsonStorage<ReaderBookmarkMap>(
-    READER_BOOKMARKS_KEY,
-    {},
-  );
-
-  if (list.length > 0) {
-    bookmarks[itemId] = list;
-  } else {
-    delete bookmarks[itemId];
-  }
-
-  writeJsonStorage(READER_BOOKMARKS_KEY, bookmarks);
 }
 
 /** Minutes to read a span of generated epub.js locations. */

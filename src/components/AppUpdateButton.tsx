@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { RefreshCw } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { move, settle } from "../lib/compositorMotion";
 import { useLanguage } from "../i18n/LanguageContext";
 import {
   applyAppUpdate,
@@ -33,9 +34,11 @@ export function AppUpdateButton({ variant = "desktop" }: AppUpdateButtonProps) {
         <motion.div
           key="app-update"
           initial={
-            shouldReduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.9 }
+            shouldReduceMotion
+              ? { opacity: 0 }
+              : { opacity: 0, transform: move({ scale: 0.9 }) }
           }
-          animate={{ opacity: 1, scale: 1 }}
+          animate={{ opacity: 1, ...(shouldReduceMotion ? {} : settle) }}
           exit={{ opacity: 0 }}
           transition={{ type: "spring", bounce: 0, duration: 0.3 }}
         >

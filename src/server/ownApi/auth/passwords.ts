@@ -17,9 +17,15 @@ export const ARGON2ID_OPTIONS = Object.freeze({
   parallelism: number;
 });
 
-const USERNAME_PATTERN = /^[a-z0-9][a-z0-9._-]{2,63}$/;
-const MIN_PASSWORD_LENGTH = 12;
+// No naming or strength rule: the administrator decides what an account is
+// called and whether it has a password at all ("" is a passwordless account,
+// still stored as an argon2id hash of the empty string). What remains are the
+// bounds the schema and the hasher need: a username that exists, fits
+// `normalized_username varchar(64)` and carries no control characters, and a
+// password short enough that hashing it is cheap.
+const MAX_USERNAME_LENGTH = 64;
 const MAX_PASSWORD_BYTES = 128;
+const CONTROL_CHARACTER = /\p{Cc}/u;
 
 export interface PasswordHasher {
   hash(password: string): Promise<string>;
@@ -33,9 +39,13 @@ export function normalizeUsername(value: string): string {
 export function validateUsername(value: string): string {
   const normalized = normalizeUsername(value);
 
-  if (!USERNAME_PATTERN.test(normalized)) {
+  if (
+    normalized.length === 0 ||
+    Array.from(normalized).length > MAX_USERNAME_LENGTH ||
+    CONTROL_CHARACTER.test(normalized)
+  ) {
     throw new Error(
-      "Username must be 3-64 lowercase letters, digits, dots, underscores, or hyphens and start with a letter or digit.",
+      `Username must not be empty, must be at most ${MAX_USERNAME_LENGTH} characters, and must not contain control characters.`,
     );
   }
 
@@ -43,15 +53,9 @@ export function validateUsername(value: string): string {
 }
 
 export function validatePassword(value: string): string {
-  const byteLength = Buffer.byteLength(value, "utf8");
-  const characterLength = Array.from(value).length;
-
-  if (
-    characterLength < MIN_PASSWORD_LENGTH ||
-    byteLength > MAX_PASSWORD_BYTES
-  ) {
+  if (Buffer.byteLength(value, "utf8") > MAX_PASSWORD_BYTES) {
     throw new Error(
-      `Password must be at least ${MIN_PASSWORD_LENGTH} characters and at most ${MAX_PASSWORD_BYTES} UTF-8 bytes.`,
+      `Password must be at most ${MAX_PASSWORD_BYTES} UTF-8 bytes.`,
     );
   }
 

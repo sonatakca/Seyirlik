@@ -1,20 +1,15 @@
-import { Fragment, useLayoutEffect, useRef, useState } from "react";
-import { Info, Play } from "lucide-react";
+import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { useLanguage } from "../../i18n/LanguageContext";
 import { getItemDisplayMetadata } from "../../lib/itemMetadataPreferences";
 import type { MediaItem } from "../../lib/types";
-import {
-  DETAILS_PILL,
-  PLAY_PILL,
-  PLAY_TIME_LEFT,
-  heroPlayState,
-  heroRoundCount,
-  heroRowParts,
-} from "./HeroActions";
+import { heroPlayState, heroRoundCount, heroRowParts } from "./HeroActions";
+import { DOCK_ASIDE_GAP_PX } from "./HeroCopy";
 import {
   COPY_ROWS,
   HERO_HEIGHT_CLASS,
+  TITLE_BACK_TOP_PX,
   heroLayout,
+  heroDock,
   queueSlots,
   type HeroFit,
   type StageSize,
@@ -26,13 +21,6 @@ import {
  * that replaces it — so the hand-over from loading to content moves nothing.
  */
 
-/** Sizes of the hero's own controls, as it renders them. */
-const ACTIONS = {
-  roundPx: 48,
-  gapPx: 10,
-  /** A compact row sits a little closer, to leave play its label. */
-  compactGapPx: 6,
-} as const;
 const CONTROLS = {
   widthPx: 197,
   /** A phone's pill: pause and the position alone, at touch size. */
@@ -70,8 +58,14 @@ export function HomeHeroSkeletonPieces({
   item,
   smartContinueItems = [],
   canDownload = false,
+  titleKind,
 }: {
   stage: StageSize;
+  /**
+   * A title page's: its back button, and its watched button over the dock
+   * (wide) or under the menu at the right (tall).
+   */
+  titleKind?: "movie" | "show";
   /** A title's own page has the same copy and no queue. */
   withQueue?: boolean;
   /** The pill over the queue, which a single featured title does without. */
@@ -91,7 +85,7 @@ export function HomeHeroSkeletonPieces({
   const head = slots[0]!;
   const last = slots[slots.length - 1]!;
   const copyTop = stage.height - layout.copy.bottom - layout.copy.height;
-  const actionsTop = stage.height - layout.copy.bottom - COPY_ROWS.actionsPx;
+  const dock = heroDock(stage, { withQueue });
   const rest = layout.titleScale.rest;
   const logoWidth = layout.title.width * rest;
   const logoHeight = layout.title.height * rest * LOGO_HEIGHT_SHARE;
@@ -108,13 +102,6 @@ export function HomeHeroSkeletonPieces({
       : true,
   });
   const rounds = heroRoundCount(parts);
-  const timeLeft = play?.progress
-    ? t("hero.timeLeft").replace("{time}", play.progress.left)
-    : null;
-  // A compact row is play, stretched, and the round buttons after it.
-  const compactPlayPx =
-    layout.copy.width - rounds * (ACTIONS.roundPx + ACTIONS.compactGapPx);
-
   return (
     <div aria-hidden="true" className="pointer-events-none absolute inset-0">
       <div
@@ -139,48 +126,51 @@ export function HomeHeroSkeletonPieces({
         <div className="shimmer h-5 w-14 rounded-md" />
       </div>
       <div
-        className="absolute flex items-center"
+        className={`absolute hero-dock ${dock.compact ? "hero-dock-compact" : ""}`}
         style={{
-          left: layout.copy.left,
-          top: actionsTop,
-          gap: isCompact ? ACTIONS.compactGapPx : ACTIONS.gapPx,
+          left: dock.left,
+          bottom: dock.bottom,
+          width: dock.width,
         }}
       >
-        {/* A full row's pills are sized by their own, unseen, labels. */}
-        {isCompact ? (
-          <div
-            className="shimmer rounded-full"
-            style={{ width: compactPlayPx, height: COPY_ROWS.actionsPx }}
-          />
-        ) : (
-          <div className={`shimmer ${PLAY_PILL}`}>
-            <span className="invisible inline-flex items-center gap-2">
-              <Play size={19} className="shrink-0" />
-              <span>{play?.playLabel ?? t("common.play")}</span>
-              {timeLeft ? (
-                <span className={PLAY_TIME_LEFT}>{timeLeft}</span>
-              ) : null}
+        <div className="shimmer hero-dock-play" />
+        {parts.startOver ? (
+          <div className="shimmer hero-dock-action hero-dock-restart" />
+        ) : null}
+        <div className="hero-dock-row">
+          {Array.from({ length: rounds }, (_, index) => (
+            <span key={index} className="flex justify-center">
+              <span className="shimmer h-3 w-10 rounded-full" />
             </span>
-          </div>
-        )}
-        {/* In the row's own order: start over comes before "Details". */}
-        {Array.from({ length: rounds }, (_, index) => (
-          <Fragment key={index}>
-            {parts.details === "pill" && index === Number(parts.startOver) ? (
-              <div className={`shimmer ${DETAILS_PILL}`}>
-                <span className="invisible inline-flex items-center gap-2">
-                  <Info size={19} />
-                  {t("common.details")}
-                </span>
-              </div>
-            ) : null}
-            <div
-              className="shimmer rounded-full"
-              style={{ width: ACTIONS.roundPx, height: ACTIONS.roundPx }}
-            />
-          </Fragment>
-        ))}
+          ))}
+        </div>
+        {titleKind && layout.form === "wide" ? (
+          <TitleBarPlaceholder
+            kind={titleKind}
+            // Placed from inside the dock's 1px border.
+            style={{
+              right: -1,
+              bottom: `calc(100% + ${DOCK_ASIDE_GAP_PX + 1}px)`,
+            }}
+          />
+        ) : null}
       </div>
+      {titleKind ? (
+        <>
+          <div
+            className="hero-dock-bar absolute"
+            style={{ left: layout.copy.left, top: TITLE_BACK_TOP_PX }}
+          >
+            <div className="shimmer h-9 w-[74px] rounded-full" />
+          </div>
+          {layout.form === "tall" ? (
+            <TitleBarPlaceholder
+              kind={titleKind}
+              style={{ right: layout.copy.left, top: TITLE_BACK_TOP_PX }}
+            />
+          ) : null}
+        </>
+      ) : null}
 
       {withQueue ? (
         <>
@@ -225,6 +215,24 @@ export function HomeHeroSkeletonPieces({
   );
 }
 
+/** A title page's watched button on the dock's glass, as wide as its label. */
+function TitleBarPlaceholder({
+  kind,
+  style,
+}: {
+  kind: "movie" | "show";
+  style: CSSProperties;
+}) {
+  return (
+    <div className="hero-dock-bar absolute" style={style}>
+      <div
+        className="shimmer h-9 rounded-full"
+        style={{ width: kind === "show" ? 228 : 170 }}
+      />
+    </div>
+  );
+}
+
 /** The hero-sized loading section, used while the page has no data yet. */
 export function HomeHeroSkeleton({ fit = "screen" }: { fit?: HeroFit }) {
   const ref = useRef<HTMLElement>(null);
@@ -244,7 +252,7 @@ export function HomeHeroSkeleton({ fit = "screen" }: { fit?: HeroFit }) {
   return (
     <section
       ref={ref}
-      className={`relative w-full overflow-hidden ${HERO_HEIGHT_CLASS[fit]}`}
+      className={`seyirlik-hero-stage relative mx-4 mt-2 mb-4 w-[calc(100%-2rem)] rounded-2xl overflow-hidden ${HERO_HEIGHT_CLASS[fit]}`}
     >
       <HomeHeroSkeletonBackdrop />
       {stage ? <HomeHeroSkeletonPieces stage={stage} /> : null}
@@ -260,10 +268,13 @@ export function TitleHeroSkeleton({
   fit = "screen",
   item,
   canDownload = false,
+  kind,
 }: {
   fit?: HeroFit;
   /** The title, once the page has it and is waiting on the rest. */
   item?: MediaItem;
+  /** A film's page or a show's, for the back and watched placeholders. */
+  kind: "movie" | "show";
   /** Before the title is known: a film this browser can keep offline. */
   canDownload?: boolean;
 }) {
@@ -284,7 +295,7 @@ export function TitleHeroSkeleton({
   return (
     <section
       ref={ref}
-      className={`relative w-full overflow-hidden ${HERO_HEIGHT_CLASS[fit]}`}
+      className={`seyirlik-hero-stage relative mx-4 mt-2 mb-4 w-[calc(100%-2rem)] rounded-2xl overflow-hidden ${HERO_HEIGHT_CLASS[fit]}`}
     >
       <HomeHeroSkeletonBackdrop />
       {stage ? (
@@ -301,6 +312,7 @@ export function TitleHeroSkeleton({
               : []
           }
           canDownload={canDownload}
+          titleKind={kind}
         />
       ) : null}
     </section>

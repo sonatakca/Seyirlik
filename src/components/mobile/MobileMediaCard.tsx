@@ -1,4 +1,6 @@
+import { forwardRef, type ForwardedRef } from "react";
 import { motion } from "framer-motion";
+import { move, REST } from "../../lib/compositorMotion";
 import { Link } from "react-router-dom";
 import { useLanguage } from "../../i18n/LanguageContext";
 import type { TranslationKey } from "../../i18n/translations";
@@ -13,6 +15,7 @@ import {
   getDisplayTitle,
 } from "../../lib/format";
 import {
+  getCardLogoOverlayImageUrl,
   getLogoImageUrl,
   getPrimaryImageUrl,
   getThumbImageUrl,
@@ -28,7 +31,8 @@ import {
   getLogoLayout,
   getLogoLayoutStyle,
   getLogoShadowBackdropStyle,
-  getLogoShadowFilter,
+  getLogoShadowFrameStyle,
+  getLogoShadowReach,
 } from "../../lib/logoLayout";
 import type { MediaItem } from "../../lib/types";
 import { getItemProgressPercent, isItemCompleted } from "../../lib/watchStatus";
@@ -101,7 +105,15 @@ function getSeriesCount(
   return null;
 }
 
-export function MobileMediaCard({
+// Forwards its ref to the article, so a row's AnimatePresence can pop a
+// leaving card out of the flow (mode="popLayout") while it exits.
+export const MobileMediaCard = forwardRef<HTMLElement, MobileMediaCardProps>(
+  function MobileMediaCard(props, ref) {
+    return <MobileMediaCardBody {...props} articleRef={ref} />;
+  },
+);
+
+function MobileMediaCardBody({
   item,
   to,
   variant = "poster",
@@ -109,7 +121,8 @@ export function MobileMediaCard({
   collectionItems,
   animateRemoval = false,
   showDownload = false,
-}: MobileMediaCardProps) {
+  articleRef,
+}: MobileMediaCardProps & { articleRef: ForwardedRef<HTMLElement> }) {
   const { language, t } = useLanguage();
   const labels = {
     season: t("media.seasonNumber"),
@@ -139,7 +152,8 @@ export function MobileMediaCard({
 
   const runtime = formatRuntime(item.RunTimeTicks, labels);
   const countText = getSeriesCount(item, t);
-  const progressPercent = getItemProgressPercent(item);
+  // A finished title carries its seal instead of a full progress bar.
+  const progressPercent = isWatched ? null : getItemProgressPercent(item);
 
   if (isEpisode) {
     // Top line is the big bold episode number (e.g. "3. Bölüm")
@@ -215,8 +229,12 @@ export function MobileMediaCard({
   );
 
   const logoLayout = getLogoLayout(item);
+  const logoOverlayUrl =
+    logoUrl && logoLayout && logoLayout.shadow > 0 && !isLandscape
+      ? getCardLogoOverlayImageUrl(logoUrl, item.Id, logoLayout, 440)
+      : null;
   const logoShadow = logoLayout
-    ? getLogoShadowFilter(logoLayout.shadow, PHONE_CARD_SHADOW_SCALE)
+    ? getLogoShadowFrameStyle(logoLayout.shadow, PHONE_CARD_SHADOW_SCALE)
     : undefined;
   const logoShadowBackdrop = logoLayout
     ? getLogoShadowBackdropStyle(logoLayout.shadow, PHONE_CARD_SHADOW_SCALE)
@@ -224,11 +242,11 @@ export function MobileMediaCard({
 
   return (
     <motion.article
+      ref={articleRef}
       data-flip-key={item.Id}
-      layout={animateRemoval ? "position" : undefined}
       exit={
         animateRemoval
-          ? { opacity: 0, x: -28, scale: 0.96, filter: "blur(6px)" }
+          ? { opacity: 0, transform: [REST, move({ x: -28, scale: 0.96 })] }
           : undefined
       }
       className={
@@ -239,13 +257,7 @@ export function MobileMediaCard({
           : "flex h-full min-w-0 flex-col"
       }
     >
-      <div
-        className={`flex flex-1 flex-col overflow-hidden rounded-lg border bg-[#141416] shadow-cinematic-card ${
-          isWatched
-            ? "border-emerald-300/70 ring-2 ring-emerald-300/45 shadow-[0_0_0_1px_rgba(52,211,153,0.25),0_18px_48px_rgba(16,185,129,0.18)]"
-            : "border-white/10"
-        }`}
-      >
+      <div className="flex flex-1 flex-col overflow-hidden rounded-lg border border-white/10 bg-[#141416] shadow-cinematic-card">
         <div
           className={`relative shrink-0 overflow-hidden bg-zinc-900 ${
             isLandscape ? "aspect-video" : "aspect-[2/3]"
@@ -279,27 +291,46 @@ export function MobileMediaCard({
 
           {/* A poster whose logo was placed in the artwork tool shows it there,
               at that size and shadow, exactly as the desktop card does. */}
-          {logoUrl && logoLayout && !isLandscape ? (
+          {logoOverlayUrl ? (
+            <img
+              data-logo-overlay="true"
+              src={logoOverlayUrl}
+              alt={mainTitle}
+              loading="lazy"
+              decoding="async"
+              className="pointer-events-none absolute inset-0 z-20 h-full w-full"
+            />
+          ) : logoUrl && logoLayout && !isLandscape ? (
             <div
               data-logo-layout="true"
-              style={getLogoLayoutStyle(logoLayout)}
+              style={getLogoLayoutStyle(
+                logoLayout,
+                getLogoShadowReach(logoLayout.shadow, PHONE_CARD_SHADOW_SCALE),
+              )}
               className="pointer-events-none absolute z-20"
             >
-              {logoShadowBackdrop ? (
-                <span
-                  aria-hidden="true"
-                  style={logoShadowBackdrop}
-                  className="absolute inset-[6%] rounded-[45%]"
-                />
-              ) : null}
-              <img
-                src={logoUrl}
-                alt={mainTitle}
-                loading="lazy"
-                decoding="async"
-                style={logoShadow ? { filter: logoShadow } : undefined}
-                className="relative z-10 block h-auto w-full object-contain"
-              />
+              <div className="relative flow-root">
+                {logoShadowBackdrop ? (
+                  <span
+                    aria-hidden="true"
+                    style={logoShadowBackdrop}
+                    className="absolute inset-[6%] rounded-[45%]"
+                  />
+                ) : null}
+                <div
+                  data-logo-shadow="true"
+                  style={logoShadow}
+                  className="relative z-10"
+                >
+                  <img
+                    src={logoUrl}
+                    alt={mainTitle}
+                    loading="lazy"
+                    decoding="async"
+                    className="block h-auto w-full object-contain"
+                  />
+                </div>
+              </div>
             </div>
           ) : logoUrl ? (
             <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center bg-gradient-to-t from-black/75 via-black/20 to-transparent px-3 pb-3 pt-12 min-[390px]:px-4 min-[390px]:pb-4">
@@ -312,6 +343,18 @@ export function MobileMediaCard({
               />
             </div>
           ) : null}
+
+          {/* The eye sits in the artwork's corner, as on desktop; an episode
+              that offers a download keeps that corner for the button. */}
+          <div
+            className={`pointer-events-none absolute top-2 z-30 ${
+              showDownload && isEpisode && isOfflineSupported()
+                ? "left-2"
+                : "right-2"
+            }`}
+          >
+            <WatchedIndicator isWatched={isWatched} reveal="hover" size="sm" />
+          </div>
 
           {showDownload && isEpisode && isOfflineSupported() ? (
             <div className="absolute right-2 top-2 z-30">
@@ -336,12 +379,6 @@ export function MobileMediaCard({
 
         {!usesArtworkOnlyLayout ? (
           <div className="flex flex-1 flex-col justify-center px-3 py-2.5 min-[390px]:px-3.5 min-[390px]:py-3">
-            <WatchedIndicator
-              item={item}
-              className="mb-1.5 self-start px-2 py-0.5 text-[0.52rem] tracking-[0.12em]"
-              iconSize={11}
-            />
-
             {!logoUrl ? (
               <h3
                 className={`truncate font-black text-white ${

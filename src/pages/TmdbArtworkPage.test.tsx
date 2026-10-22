@@ -124,7 +124,7 @@ it("draws each list thumbnail with its logo where it was placed", async () => {
   const placed = row.querySelector('[data-logo-layout="true"]') as HTMLElement;
   expect(placed.style.left).toBe("50%");
   expect(placed.style.top).toBe("30%");
-  expect(placed.style.width).toBe("60%");
+  expect(placed.style.width).toMatch(/^calc\(60% \+ \d+px\)$/);
 });
 
 it("reads only the chosen title again when it is opened, not the whole library", async () => {
@@ -195,8 +195,11 @@ it("carries a saved placement to the list thumbnail at once", async () => {
   // Shadow 0: the thumbnail's logo has no filter any more.
   await waitFor(() =>
     expect(
-      (row.querySelector('[data-logo-layout="true"] img') as HTMLElement)?.style
-        .filter,
+      (
+        row.querySelector(
+          '[data-logo-layout="true"] [data-logo-shadow="true"]',
+        ) as HTMLElement
+      )?.style.filter,
     ).toBe(""),
   );
 });

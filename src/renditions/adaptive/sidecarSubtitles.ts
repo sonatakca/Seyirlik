@@ -43,6 +43,10 @@ const FORCED_TAGS = new Set(["forced", "foreign"]);
  * that a looser check reads as languages — `mx]` out of `[YTS.MX]`, `4k`, `1`.
  */
 const LANGUAGE_SHAPED_TAG = /^[a-z]{2,3}$/;
+const LANGUAGE_NAMES = new Intl.DisplayNames(["en"], {
+  type: "language",
+  fallback: "none",
+});
 
 export interface SidecarSubtitleTags {
   /** Normalised language, or the unknown marker when the name carries none. */
@@ -54,7 +58,9 @@ export interface SidecarSubtitleTags {
 /**
  * What a sidecar's filename says about the track.
  *
- * Only the part after the source's own name is read. `Dune (2021) [438631]` is
+ * When the names match, only the part after the source's own name is read.
+ * Dots, hyphens, underscores and spaces separate subtitle tags, including
+ * release-style names such as `LAMA-tr-synced.srt`. `Dune (2021) [438631]` is
  * the title, not a description of the subtitle, and it is full of tokens — a
  * year, a bracketed id — that would otherwise be mistaken for tags.
  */
@@ -70,7 +76,7 @@ export function parseSidecarSubtitleTags(
     : withoutExtension;
 
   const tags = remainder
-    .split(".")
+    .split(/[.\s_-]+/)
     .map((tag) => tag.trim().toLowerCase())
     .filter((tag) => tag.length > 0);
 
@@ -89,7 +95,9 @@ export function parseSidecarSubtitleTags(
     }
     /*
      * The *last* language-shaped tag wins, and only a purely alphabetic one is
-     * considered. Both rules exist because a sidecar is often named after the
+     * considered, and it must name a known language: `HDR` and `The` are release
+     * or title words, even though the container normalizer accepts any three
+     * letters. These rules exist because a sidecar is often named after the
      * release rather than the title, so the tags are a whole release string:
      * `...AAC5.1-[YTS.MX].tur.srt` offers `mx]` before it offers `tur`, and
      * the convention everywhere is that the language sits last, just before
@@ -97,7 +105,9 @@ export function parseSidecarSubtitleTags(
      */
     if (!LANGUAGE_SHAPED_TAG.test(tag)) continue;
     const candidate = normalizeLanguage(tag);
-    if (candidate !== UNKNOWN_LANGUAGE) language = candidate;
+    if (candidate !== UNKNOWN_LANGUAGE && LANGUAGE_NAMES.of(candidate)) {
+      language = candidate;
+    }
   }
 
   return { language, isForced, isHearingImpaired };
@@ -109,6 +119,19 @@ export interface SidecarSubtitle extends SidecarSubtitleTags {
   fileName: string;
   /** The synthetic index this sidecar is packaged under. */
   streamIndex: number;
+  /** Hash of the filename and bytes; indexes alone change when files are added. */
+  sidecarFingerprint?: string;
+}
+
+/** Legacy packages have no sidecar identity and are refreshed once. */
+export function sidecarSubtitleIsCurrent(
+  sidecar: SidecarSubtitle,
+  rendition: { sidecarFingerprint?: string } | undefined,
+): boolean {
+  return (
+    sidecar.sidecarFingerprint !== undefined &&
+    sidecar.sidecarFingerprint === rendition?.sidecarFingerprint
+  );
 }
 
 /**
@@ -125,6 +148,13 @@ export interface SidecarSubtitle extends SidecarSubtitleTags {
  * holds, in a folder with a single video, and a shared folder matches subtitles
  * to the source by name instead. That is the only thing that can tell the two
  * apart there, and it is what the naming convention in such a folder is for.
+ *
+ * A source that is no longer there breaks the premise too. Once a processed
+ * title's source is removed only its sidecars stay behind, so a season's `src/`
+ * folder can hold thirteen `.tur.srt` files and no video at all — and counting
+ * videos would call that one film's folder and hand every episode all thirteen.
+ * The folder's video count says nothing about a source missing from it, so an
+ * absent source is matched by name, whatever is left beside it.
  */
 export async function discoverSidecarSubtitles(
   sourcePath: string,
@@ -155,7 +185,11 @@ export async function discoverSidecarSubtitles(
       SUPPORTED_VIDEO_EXTENSIONS.has(path.extname(name).toLowerCase()) &&
       !isDerivativeFileName(name),
   );
-  const directoryIsShared = videoSiblings.length > 1;
+  const sourceName = path.basename(sourcePath).toLowerCase();
+  const sourcePresent = entries.some(
+    (name) => name.toLowerCase() === sourceName,
+  );
+  const directoryIsShared = !sourcePresent || videoSiblings.length > 1;
   const belongsToSource = (name: string): boolean =>
     name.toLowerCase().startsWith(sourceStem.toLowerCase());
 

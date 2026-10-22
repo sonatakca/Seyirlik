@@ -7,7 +7,7 @@
  * at 00:52 of a 02:30 title threw away fifty-two minutes of encoding, because a
  * half-written ladder has no subset anybody can use.
  *
- * The timeline is now cut into nominal five-minute epochs. Each epoch is still
+ * The timeline is now cut into nominal thirty-minute epochs. Each epoch is still
  * one FFmpeg process with one decode feeding every rung, so the shared-decode
  * advantage is kept intact; what changes is that an epoch which finishes is
  * *durable*. Worst-case loss is therefore one epoch rather than the whole
@@ -34,13 +34,17 @@ export const EPOCH_PLAN_SCHEMA_VERSION = 1;
 /**
  * Nominal epoch length.
  *
- * Five minutes is the trade the whole design turns on: long enough that FFmpeg
- * startup, the seek preroll and the checkpoint validation are noise against the
- * encode, and short enough that losing one is an annoyance rather than an
- * evening. Configurable for tests, which use seconds rather than minutes so an
+ * The trade the whole design turns on: long enough that FFmpeg startup, the
+ * seek preroll and the checkpoint validation are noise against the encode, and
+ * short enough that losing one is an annoyance rather than an evening. It was
+ * five minutes while encodes ran against a failing disk that lost one an hour;
+ * on healthy local scratch thirty minutes costs at most one half-hour on a
+ * crash, and saves a sixth of the process starts, seeks, validations and
+ * joins. Plans already on disk keep the length they were made with.
+ * Configurable for tests, which use seconds rather than minutes so an
  * integration test can cross several boundaries in a few seconds of fixture.
  */
-export const DEFAULT_EPOCH_TARGET_SECONDS = 300;
+export const DEFAULT_EPOCH_TARGET_SECONDS = 1800;
 
 /**
  * The smallest tail worth its own epoch.

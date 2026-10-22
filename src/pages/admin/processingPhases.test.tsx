@@ -432,12 +432,207 @@ describe("phase panels render the measurements they are given", () => {
   });
 
   /**
-   * A phase whose sample has not arrived — a page opened mid-job, a worker
-   * restarted — must still describe the build rather than showing an empty box.
+   * A phase that has begun and not reported yet is named and timed. Showing
+   * the video panel here is what made the audio stage read as video.
    */
-  it("falls back to the epoch panel when a phase has no sample yet", async () => {
-    await renderPanel(live({ phase: "assembling" }));
+  it("names a phase that has not reported yet instead of showing video", async () => {
+    await renderPanel(
+      live({ phase: "audio", phaseStartedAtMs: Date.now() - 65_000 }),
+    );
+    expect(screen.getByText("processing.phase.audio")).toBeTruthy();
+    expect(screen.getByText("processing.phase.startedAgo")).toBeTruthy();
+    expect(screen.queryAllByText(/processing\.epoch/)).toHaveLength(0);
+  });
+
+  /**
+   * With no sample at all — a page opened after a worker restart — the row is
+   * all there is, and the epoch panel is the one that can describe a build
+   * from the row alone.
+   */
+  it("falls back to the epoch panel when there is no live sample", async () => {
+    const { PhaseDetailForTest } = await import("./MediaProcessingPage");
+    render(
+      <MemoryRouter>
+        <PhaseDetailForTest
+          job={job()}
+          live={null}
+          nowMs={Date.now()}
+          t={((key: string) => key) as never}
+        />
+      </MemoryRouter>,
+    );
     expect(screen.getAllByText(/processing\.epoch/).length).toBeGreaterThan(0);
+  });
+
+  it("shows the planning steps and the rate probe's finished work", async () => {
+    await renderPanel(
+      live({
+        phase: "planning",
+        planning: {
+          step: "rates",
+          boundaryCount: 4,
+          epochCount: 5,
+          rateProbe: { encodes: 3, measurements: 7, qualityHeight: 1080 },
+        },
+      }),
+    );
+    expect(screen.getByText("processing.planning.timeline")).toBeTruthy();
+    expect(screen.getByText("processing.planning.rates")).toBeTruthy();
+    expect(screen.getByText("processing.planning.epochs")).toBeTruthy();
+    expect(
+      screen.getByText(
+        /processing\.planning\.rateWork · processing\.planning\.rateRung/,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("lists every subtitle track with its own state", async () => {
+    await renderPanel(
+      live({
+        phase: "subtitles",
+        subtitles: {
+          tracks: [
+            {
+              id: "subtitle-3",
+              origin: "embedded",
+              language: "tur",
+              state: "complete",
+              bytes: 81_920,
+            },
+            {
+              id: "subtitle-4",
+              origin: "embedded",
+              language: "eng",
+              state: "running",
+            },
+            {
+              id: "subtitle-900",
+              origin: "sidecar",
+              language: "eng",
+              isForced: true,
+              state: "waiting",
+            },
+          ],
+          completedTracks: 1,
+          fraction: 1 / 3,
+          currentId: "subtitle-4",
+          currentStartedAtMs: Date.now() - 42_000,
+          writtenBytes: 81_920,
+        },
+      }),
+    );
+    expect(screen.getByText("1 / 3")).toBeTruthy();
+    expect(screen.getByText("processing.language.tur")).toBeTruthy();
+    expect(screen.getByText("processing.subtitles.running")).toBeTruthy();
+    expect(screen.getByText(/processing\.subtitles\.forced/)).toBeTruthy();
+    expect(screen.getByText("processing.subtitles.sidecar")).toBeTruthy();
+  });
+
+  /**
+   * A finished build keeps its history on the row. The card used to show the
+   * video panel's last state — "video encoding complete" — and nothing else.
+   */
+  it("describes a finished build phase by phase from the row", async () => {
+    const { PhaseDetailForTest } = await import("./MediaProcessingPage");
+    render(
+      <MemoryRouter>
+        <PhaseDetailForTest
+          job={job({
+            state: "succeeded",
+            stage: "complete",
+            phaseHistory: [
+              { phase: "planning", elapsedSeconds: 95, count: 5 },
+              { phase: "encoding", elapsedSeconds: 5400, count: 5, bytes: 9e9 },
+              { phase: "audio", elapsedSeconds: 240, count: 2 },
+              { phase: "publishing", elapsedSeconds: 300 },
+            ],
+          })}
+          live={null}
+          nowMs={Date.now()}
+          t={((key: string) => key) as never}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("processing.phase.planning")).toBeTruthy();
+    expect(screen.getByText("processing.phase.audio")).toBeTruthy();
+    expect(screen.getByText("processing.history.total")).toBeTruthy();
+    expect(screen.queryAllByText(/processing\.epoch/)).toHaveLength(0);
+  });
+});
+
+describe("the upload to Google Drive after publication", () => {
+  const t = ((key: string) => key) as never;
+
+  it("shows bytes, files, rate and retries while uploading", async () => {
+    const { DriveUploadPanelForTest } = await import("./MediaProcessingPage");
+    const now = Date.now();
+    render(
+      <DriveUploadPanelForTest
+        upload={{
+          state: "uploading",
+          totalBytes: 33.2e9,
+          uploadedBytes: 16.6e9,
+          filesPending: 2,
+          filesUploading: 2,
+          bytesPerSecond: 19.5e6,
+          etaSeconds: 426,
+          retries: 1,
+          startedAtMs: now - 600_000,
+          updatedAtMs: now - 1_000,
+        }}
+        nowMs={now}
+        t={t}
+      />,
+    );
+    expect(screen.getByText("50.0%")).toBeTruthy();
+    expect(screen.getByText("processing.upload.files")).toBeTruthy();
+    expect(screen.getByText("18.6 MiB/s")).toBeTruthy();
+    expect(screen.getByText("processing.upload.retries")).toBeTruthy();
+  });
+
+  it("withdraws the rate and says so once nobody is reading the queue", async () => {
+    const { DriveUploadPanelForTest } = await import("./MediaProcessingPage");
+    const now = Date.now();
+    render(
+      <DriveUploadPanelForTest
+        upload={{
+          state: "uploading",
+          totalBytes: 10e9,
+          uploadedBytes: 4e9,
+          filesPending: 1,
+          filesUploading: 1,
+          bytesPerSecond: 9e6,
+          startedAtMs: now - 900_000,
+          updatedAtMs: now - 300_000,
+        }}
+        nowMs={now}
+        t={t}
+      />,
+    );
+    expect(screen.getByText("processing.upload.notWatched")).toBeTruthy();
+    expect(screen.queryByText(/MiB\/s/)).toBeNull();
+  });
+
+  it("says the title is on Drive once the queue is empty", async () => {
+    const { DriveUploadPanelForTest } = await import("./MediaProcessingPage");
+    const now = Date.now();
+    render(
+      <DriveUploadPanelForTest
+        upload={{
+          state: "uploaded",
+          totalBytes: 10e9,
+          uploadedBytes: 10e9,
+          filesPending: 0,
+          filesUploading: 0,
+          startedAtMs: now - 900_000,
+          updatedAtMs: now,
+          finishedAtMs: now,
+        }}
+        nowMs={now}
+        t={t}
+      />,
+    );
+    expect(screen.getByText("processing.upload.done")).toBeTruthy();
   });
 });
 

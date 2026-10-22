@@ -14,18 +14,35 @@ describe("native password handling", () => {
     expect(normalizeUsername("ＳＥＹＩＲＬＩＫ")).toBe("seyirlik");
   });
 
-  it("enforces bounded username and password requirements", () => {
-    expect(() => validateUsername("ab")).toThrow();
-    expect(() => validateUsername("not allowed")).toThrow();
-    expect(validateUsername("person.name-1")).toBe("person.name-1");
+  it("accepts any username the administrator chooses, within the schema's bounds", () => {
+    expect(validateUsername("ab")).toBe("ab");
+    expect(validateUsername("Ali Veli")).toBe("ali veli");
+    expect(validateUsername("Ayşe")).toBe("ayşe");
+    expect(validateUsername("Çağla")).toBe("çağla");
+    expect(validateUsername("q")).toBe("q");
 
-    expect(() => validatePassword("short")).toThrow();
-    expect(() => validatePassword("🔐".repeat(6))).toThrow();
+    expect(() => validateUsername("")).toThrow();
+    expect(() => validateUsername("   ")).toThrow();
+    expect(() => validateUsername("a\nb")).toThrow();
+    expect(validateUsername("ş".repeat(64))).toBe("ş".repeat(64));
+    expect(() => validateUsername("ş".repeat(65))).toThrow();
+  });
+
+  it("accepts any password, including none, up to the hashing bound", () => {
+    expect(validatePassword("")).toBe("");
+    expect(validatePassword("qa-motion")).toBe("qa-motion");
+    expect(validatePassword("🔐".repeat(32))).toBe("🔐".repeat(32));
+    expect(() => validatePassword("🔐".repeat(33))).toThrow();
     expect(() => validatePassword("x".repeat(129))).toThrow();
-    expect(validatePassword("🔐".repeat(12))).toBe("🔐".repeat(12));
-    expect(validatePassword("correct horse battery staple")).toBe(
-      "correct horse battery staple",
-    );
+  });
+
+  it("verifies a passwordless account only with the empty password", async () => {
+    const hasher = createArgon2PasswordHasher();
+    const hash = await hasher.hash("");
+
+    expect(hash).toMatch(/^\$argon2id\$/);
+    await expect(hasher.verify(hash, "")).resolves.toBe(true);
+    await expect(hasher.verify(hash, "anything")).resolves.toBe(false);
   });
 
   it("stores and verifies intentional Argon2id hashes", async () => {

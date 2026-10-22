@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
+import { move, settle } from "../../lib/compositorMotion";
 import { Search, SlidersHorizontal } from "lucide-react";
 import { useLocation, useParams } from "react-router-dom";
 import {
@@ -10,7 +11,9 @@ import { BackButton } from "../../components/BackButton";
 import { ErrorMessage } from "../../components/ErrorMessage";
 import { useIsPhoneView } from "../../hooks/useIsPhoneView";
 import { TitleHero } from "../../components/home/TitleHero";
+import { useHeroCentreDock } from "../../components/home/heroCentreDock";
 import { PhoneTitleHero } from "../../components/mobile/PhoneTitleHero";
+import { HeroBackButton } from "../../components/mobile/HeroBackButton";
 import { MobileMediaCard } from "../../components/mobile/MobileMediaCard";
 import { SeriesLibraryDetails } from "../../components/SeriesLibraryDetails";
 import { WatchedIndicator } from "../../components/WatchedIndicator";
@@ -197,7 +200,7 @@ function MobileLibraryLoading() {
         <div className="shimmer h-12 min-w-0 flex-1 rounded-full" />
         <div className="shimmer h-12 w-[7.4rem] shrink-0 rounded-full" />
       </div>
-      <div className="grid grid-cols-2 gap-x-3 gap-y-4 px-[clamp(0.5rem,4vw,1.75rem)]">
+      <div className="grid grid-cols-2 gap-x-3 gap-y-4 px-[clamp(0.5rem,4vw,1.75rem)] min-[600px]:grid-cols-3">
         {Array.from({ length: 4 }, (_, index) => (
           <div key={index} className="shimmer aspect-[2/3] rounded-xl" />
         ))}
@@ -238,6 +241,7 @@ export function MobileLibraryPage({
   );
   const [data, setData] = useState<LibraryData | null>(null);
   const isPhone = useIsPhoneView();
+  const renderCentreDock = useHeroCentreDock();
   const [loadingItemType, setLoadingItemType] = useState<string>();
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -370,7 +374,7 @@ export function MobileLibraryPage({
   // Sorting and filtering move cards rather than reshuffling them in place.
   const gridRef = useRef<HTMLDivElement | null>(null);
   const titleDetailsRef = useRef<HTMLDivElement | null>(null);
-  // Where a phone's title hero takes the details' watched button.
+  // Where the title hero takes the details' watched button.
   const [watchedSlot, setWatchedSlot] = useState<HTMLSpanElement | null>(null);
   useFlipLayout(gridRef, filteredItems.map((item) => item.Id).join("|"));
 
@@ -527,14 +531,19 @@ export function MobileLibraryPage({
           }
         >
           <div className="layout-no-offset flex min-w-0 flex-col">
-            <BackButton
-              fallbackTo={data.library.Type === "Movie" ? "/movies" : "/shows"}
-              label=""
-              className="fixed left-4 top-[calc(4.5rem+env(safe-area-inset-top))] z-[80]"
-            />
+            {isPhone ? (
+              isInitialDetailsReady ? (
+                <HeroBackButton
+                  fallbackTo={
+                    data.library.Type === "Movie" ? "/movies" : "/shows"
+                  }
+                />
+              ) : null
+            ) : null}
 
-            {/* A phone keeps its own title hero. A tablet gets the desktop's,
-                on a stage its own shape: the same poster-or-backdrop
+            {/* A phone, and a tablet held upright, have the phone's title
+                hero: the whole backdrop, the copy beneath it. A tablet on its
+                side gets the desktop's, on a stage its own shape: the same
                 composition, copy and actions as the home hero, with nothing
                 queued. */}
             <div className="full-bleed relative">
@@ -544,11 +553,14 @@ export function MobileLibraryPage({
                   item={data.library}
                   isRevealed={isInitialDetailsReady}
                   onWatchedSlot={setWatchedSlot}
+                  onShowDetails={showTitleDetails}
                 />
               ) : (
                 <TitleHero
                   key={data.library.Id}
                   item={data.library}
+                  backTo={data.library.Type === "Movie" ? "/movies" : "/shows"}
+                  onWatchedSlot={setWatchedSlot}
                   fit="mobile"
                   trailers={false}
                   isRevealed={isInitialDetailsReady}
@@ -557,6 +569,10 @@ export function MobileLibraryPage({
               )}
             </div>
 
+            {/* A phone's hero has no stage for a centre dock; it stands
+                under the hero instead. */}
+            {isPhone ? renderCentreDock?.(null) : null}
+
             <div
               ref={titleDetailsRef}
               className="scroll-mt-[calc(4rem+env(safe-area-inset-top))]"
@@ -564,7 +580,8 @@ export function MobileLibraryPage({
               <SeriesLibraryDetails
                 initialItem={data.library}
                 variant="mobile"
-                watchedSlot={isPhone ? watchedSlot : undefined}
+                watchedSlot={watchedSlot}
+                watchedSlotLook={isPhone ? "phone" : "dock"}
                 canonicalPath={canonicalPath}
                 onInitialReady={() => setReadyDetailsId(activeId ?? null)}
               />
@@ -697,8 +714,8 @@ export function MobileLibraryPage({
         ) : (
           <motion.h1
             className="mx-auto max-w-[84vw] text-center text-3xl font-black tracking-tight text-white drop-shadow-[0_16px_38px_rgba(0,0,0,0.9)]"
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
+            initial={{ opacity: 0, transform: move({ y: 6 }) }}
+            animate={{ opacity: 1, ...settle }}
             transition={{
               duration: 0.5,
               ease: [0.16, 1, 0.3, 1],
@@ -711,11 +728,7 @@ export function MobileLibraryPage({
 
       {isLibraryScopeWatched ? (
         <div className="mb-5 flex justify-center">
-          <WatchedIndicator
-            isWatched
-            className="px-4 py-1.5 text-xs tracking-[0.14em]"
-            iconSize={15}
-          />
+          <WatchedIndicator isWatched size="md" />
         </div>
       ) : null}
 
@@ -818,7 +831,7 @@ export function MobileLibraryPage({
           className={
             usesLandscapeCards
               ? "relative mx-auto grid max-w-sm grid-cols-1 gap-3"
-              : "relative grid grid-cols-2 gap-x-3 gap-y-4 px-[clamp(0.5rem,4vw,1.75rem)]"
+              : "relative grid grid-cols-2 gap-x-3 gap-y-4 px-[clamp(0.5rem,4vw,1.75rem)] min-[600px]:grid-cols-3"
           }
         >
           {filteredItems.map((item) => (

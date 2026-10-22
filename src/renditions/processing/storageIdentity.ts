@@ -199,6 +199,26 @@ export function satisfiesRecovery(
   }
 
   /*
+   * A network share — the Google Drive mount the library moved to when the
+   * Expansion drive died — has no local identity to match, by nature rather
+   * than by fault: there is no disk under it to have been swapped. Requiring
+   * one made a quarantine on such a mount impossible to clear (verify could
+   * not match, adopt had no UUID to record). The medium is certain here (the
+   * probe reads it from the UNC path itself, and a guard's root never
+   * changes), so this cannot be a USB disk passing itself off as the share.
+   * The operator's separate resume press is still what lifts the hold.
+   *
+   * It does not extend to a quarantine recorded against anything other than a
+   * network volume: physical media keeps every check below.
+   */
+  if (
+    current.medium === "network" &&
+    (!recorded || recorded.medium === "network")
+  ) {
+    return { ok: true };
+  }
+
+  /*
    * A quarantine recorded before identity was captured — an incident carried
    * across the upgrade that added this file, or one written while the probe was
    * unavailable. There is nothing to compare against, so this cannot be

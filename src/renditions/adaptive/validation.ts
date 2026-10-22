@@ -94,6 +94,8 @@ export interface AdaptiveValidationOptions {
    * package, which must always carry audio.
    */
   allowMissingAudio?: boolean;
+  /** Only for incremental scratch, never for a published package. */
+  allowMissingVideo?: boolean;
   signal?: AbortSignal;
   /**
    * Called as each planned check finishes.
@@ -685,6 +687,7 @@ export async function validateAdaptivePackage({
     "ffmpeg",
   deep = false,
   allowMissingAudio = false,
+  allowMissingVideo = false,
   signal,
   onProgress,
 }: AdaptiveValidationOptions): Promise<AdaptiveValidationResult> {
@@ -720,7 +723,8 @@ export async function validateAdaptivePackage({
       ...(sourceFingerprint ? { sourceFingerprint } : {}),
       ...(profileVersion ? { profileVersion } : {}),
       ...(published ? { enforceCanonicalPaths: false } : {}),
-      ...(allowMissingAudio ? { allowMissingAudio: true } : {}),
+      ...(!published && allowMissingAudio ? { allowMissingAudio: true } : {}),
+      ...(!published && allowMissingVideo ? { allowMissingVideo: true } : {}),
     });
   } catch (error) {
     collector.add(
@@ -821,7 +825,9 @@ export async function validateAdaptivePackage({
   }
 
   try {
-    const master = parseMasterPlaylist(masterText);
+    const master = parseMasterPlaylist(masterText, {
+      allowMissingVideo: !published && allowMissingVideo,
+    });
     if (!master.independentSegments) {
       collector.add(
         "package",
@@ -1042,7 +1048,10 @@ export async function validateAdaptivePackage({
     progress.complete("video-structure", rendition.id);
   }
 
-  if (loadedVideo.length === 0) {
+  if (
+    loadedVideo.length === 0 &&
+    !(allowMissingVideo && !published && metadata.videoRenditions.length === 0)
+  ) {
     collector.add(
       "package",
       "media-playlist",
@@ -1325,13 +1334,15 @@ export async function validateAdaptivePackage({
         );
       }
       const coverageDrift = Math.abs(
-        probe.durationSeconds - reference.playlist.totalDurationSeconds,
+        probe.durationSeconds -
+          (reference?.playlist.totalDurationSeconds ??
+            metadata.switchingSetDurationSeconds),
       );
       if (coverageDrift > AUDIO_DURATION_TOLERANCE_SECONDS) {
         collector.add(
           rendition.id,
           "audio-video-coverage",
-          `covers ${round(probe.durationSeconds)}s but the video switching set covers ${round(reference.playlist.totalDurationSeconds)}s, a difference of ${round(coverageDrift)}s.`,
+          `covers ${round(probe.durationSeconds)}s but the switching set covers ${round(reference?.playlist.totalDurationSeconds ?? metadata.switchingSetDurationSeconds)}s, a difference of ${round(coverageDrift)}s.`,
         );
       }
     } catch (error) {
@@ -1431,7 +1442,7 @@ export async function validateAdaptivePackage({
     collector.pass("subtitle-metadata");
   }
 
-  if (!deep) {
+  if (!deep || !reference) {
     progress.finish(collector.ok);
     return {
       ok: collector.ok,

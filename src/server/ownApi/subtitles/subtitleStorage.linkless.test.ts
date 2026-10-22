@@ -90,6 +90,14 @@ describe("installing where the filesystem has no hardlinks", () => {
     ).toBe(SRT);
   });
 
+  it("installs on the Google Drive mount, which answers ENOTSUP", async () => {
+    failLinkWith = fsError("ENOTSUP", "link");
+    expect(await install()).toMatchObject({ outcome: "installed" });
+    expect(
+      await readFile(path.join(directory(), "Dune (2021).tur.srt"), "utf8"),
+    ).toBe(SRT);
+  });
+
   it("leaves no temporary or lock behind", async () => {
     failLinkWith = fsError("EISDIR", "link");
     await install();

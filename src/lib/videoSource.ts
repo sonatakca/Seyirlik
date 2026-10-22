@@ -195,6 +195,19 @@ const STALL_UPSWITCH_BLOCK_MS = 6000;
  */
 const SEEK_STALL_GRACE_MS = 5000;
 
+/**
+ * Below this much media ahead of the play head, loading is never left paused.
+ *
+ * Under ManagedMediaSource hls.js stops fetching on `endstreaming` and starts
+ * again only on `startstreaming`. WebKit does not send that second event for a
+ * seek out of the buffer: measured in WebKit 26.5, seven of eleven such seeks
+ * left `streaming` false and the element `seeking` indefinitely, with nothing
+ * requested — the picture froze until a reload built a new MediaSource. Two
+ * seconds is under one fragment, so a play head this close to the edge of
+ * what it has is one the browser should already have asked to feed.
+ */
+const MMS_RESUME_BUFFER_SECONDS = 2;
+
 /** Decisions kept for `window.__seyirlikAbr()`. */
 const ABR_LOG_SIZE = 200;
 
@@ -732,6 +745,30 @@ export function attachSourceToVideo(
       return 0;
     };
 
+    /**
+     * Restarts loading the browser paused and forgot to restart.
+     *
+     * See MMS_RESUME_BUFFER_SECONDS. hls.js obeys `endstreaming` by pausing
+     * every loader; a play head with nothing under it is the one state in
+     * which that pause can only be wrong, whatever `streaming` still says.
+     * If the browser later decides the buffer is ample, its next
+     * `endstreaming` pauses loading again exactly as before.
+     */
+    const resumeStarvedLoading = (reason: string) => {
+      if (hls.bufferingEnabled) return;
+      if (bufferedAhead() >= MMS_RESUME_BUFFER_SECONDS) return;
+      abrRecord("resume-loading", {
+        reason,
+        currentTimeS: Number(videoElement.currentTime.toFixed(1)),
+        bufferedAheadS: Number(bufferedAhead().toFixed(1)),
+      });
+      hls.resumeBuffering();
+    };
+    const onSeekingResume = () => resumeStarvedLoading("seeking");
+    const onWaitingResume = () => resumeStarvedLoading("waiting");
+    videoElement.addEventListener("seeking", onSeekingResume);
+    videoElement.addEventListener("waiting", onWaitingResume);
+
     const evaluateAdaptiveTarget = (force = false) => {
       if (hls.levels.length === 0) return;
       const now = Date.now();
@@ -1061,10 +1098,11 @@ export function attachSourceToVideo(
 
     // See RUNG_TICK_INTERVAL_MS: the engine's own events arrive in bursts, so
     // the policy keeps its own clock rather than inheriting that shape.
-    const rungTicker = setInterval(
-      () => evaluateAdaptiveTarget(),
-      RUNG_TICK_INTERVAL_MS,
-    );
+    const rungTicker = setInterval(() => {
+      // Also the backstop for a starved play head that raised no event.
+      resumeStarvedLoading("tick");
+      evaluateAdaptiveTarget();
+    }, RUNG_TICK_INTERVAL_MS);
 
     return {
       usingHlsJs: true,
@@ -1105,6 +1143,8 @@ export function attachSourceToVideo(
         clearInterval(rungTicker);
         observer?.disconnect();
         videoElement.removeEventListener("seeking", onSeeking);
+        videoElement.removeEventListener("seeking", onSeekingResume);
+        videoElement.removeEventListener("waiting", onWaitingResume);
         if (abrSnapshot === snapshot) abrSnapshot = null;
         hls.destroy();
         videoElement.removeAttribute("src");

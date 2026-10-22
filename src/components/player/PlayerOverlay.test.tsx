@@ -5,7 +5,7 @@ import { LanguageProvider } from "../../i18n/LanguageContext";
 import { PlayerOverlay } from "./PlayerOverlay";
 
 describe("PlayerOverlay", () => {
-  it("cross-fades from the branded loader back to the play/pause control", async () => {
+  it("cross-fades from the loading ring back to the play/pause control", async () => {
     const view = render(
       <MemoryRouter>
         <LanguageProvider>
@@ -27,15 +27,9 @@ describe("PlayerOverlay", () => {
 
     expect(centerControl).toHaveClass("bg-transparent");
     expect(
-      centerControl?.querySelector(
-        'img[src="/artwork/seyirlik/animations/seyirlik-loading.webp"]',
-      ),
+      centerControl?.querySelector("md-circular-progress[indeterminate]"),
     ).toBeInTheDocument();
-    expect(
-      centerControl?.querySelector(
-        'img[src="/artwork/seyirlik/animations/seyirlik-loading-still.webp"]',
-      ),
-    ).toBeInTheDocument();
+    expect(centerControl?.querySelector("img")).not.toBeInTheDocument();
     expect(
       centerControl?.querySelector("svg.lucide-loader-circle"),
     ).not.toBeInTheDocument();

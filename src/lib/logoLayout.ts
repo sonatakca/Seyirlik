@@ -34,6 +34,12 @@ export const MAX_LOGO_SHADOW = 2;
 export const DEFAULT_LOGO_SHADOW = 1;
 
 /**
+ * A transparent, full-card logo layer rendered by the API. Poster cards use
+ * this instead of asking iOS WebKit to apply a live CSS filter to the logo.
+ */
+export const CARD_LOGO_OVERLAY_VARIANT = "card-logo-overlay-v1";
+
+/**
  * The layout an editor opens on when a title has never been adjusted.
  *
  * Deliberately close to where the untouched card already draws its logo, so
@@ -86,18 +92,40 @@ export function getLogoLayout(item?: MediaItem | null): LogoLayout | null {
   return clampLogoLayout(layout);
 }
 
-/** Inline style placing the logo on a card, given a stored layout. */
-export function getLogoLayoutStyle(layout: LogoLayout): {
+/**
+ * Inline style placing the logo on a card, given a stored layout.
+ *
+ * `reach` pads the box by the shadow's reach (`getLogoShadowReach`) and widens
+ * it by as much, so the logo's own box, inside the padding, stays exactly
+ * where the layout puts it. This box is positioned and stacked above the
+ * artwork, so WebKit may give it a layer as large as the box and no larger;
+ * the padding keeps normal filter output inside that layer. Production poster
+ * cards rasterize placed shadows on the server because iOS can also lose the
+ * transparent bitmap's alpha while applying a live filter, which geometry
+ * cannot repair. Children placed against the logo's box belong inside an inner
+ * box, since the padding moves the edges `absolute` children measure from.
+ */
+export function getLogoLayoutStyle(
+  layout: LogoLayout,
+  reach = 0,
+): {
   left: string;
   top: string;
   width: string;
   transform: string;
+  padding?: string;
 } {
-  return {
+  const style = {
     left: `${layout.x * 100}%`,
     top: `${layout.y * 100}%`,
     width: `${layout.width * 100}%`,
     transform: "translate(-50%, -50%)",
+  };
+  if (!(reach > 0)) return style;
+  return {
+    ...style,
+    width: `calc(${layout.width * 100}% + ${2 * reach}px)`,
+    padding: `${reach}px`,
   };
 }
 
@@ -210,6 +238,54 @@ export function getLogoShadowFilter(
   const tight = Math.max(1, Math.round(2 * size));
   const wide = Math.max(1, Math.round(6 * size));
   return `drop-shadow(0 0 ${tight}px rgba(0, 0, 0, ${edge})) drop-shadow(0 0 ${wide}px rgba(0, 0, 0, ${edge})) ${soft}`;
+}
+
+/**
+ * The logo's drop-shadows, on a frame wide enough to hold all of them.
+ *
+ * The filter goes on an element around the logo, padded out by the shadow's
+ * full reach and pulled back by the same negative margin, so its content box
+ * is exactly where the logo was and nothing moves. This contains ordinary
+ * filter overflow for the artwork editor, heroes and non-own-API fallbacks.
+ * Placed own-API poster logos use `CARD_LOGO_OVERLAY_VARIANT` instead: real
+ * iPad WebKit can shadow the transparent bitmap's whole rectangle even when
+ * every compositing box already contains the filter output.
+ */
+export function getLogoShadowFrameStyle(
+  shadow: number,
+  sizeScale = 1,
+): { filter: string; padding: string; margin: string } | undefined {
+  const filter = getLogoShadowFilter(shadow, sizeScale);
+  if (!filter) return undefined;
+  const reach = getLogoShadowReach(shadow, sizeScale);
+  return { filter, padding: `${reach}px`, margin: `-${reach}px` };
+}
+
+/**
+ * How far past the logo its shadow can paint, in whole px; 0 with no shadow.
+ * The soft field behind a placed logo (`getLogoShadowBackdropStyle`) spills
+ * less far than the drop-shadows at every strength, so this holds it too.
+ */
+export function getLogoShadowReach(shadow: number, sizeScale = 1): number {
+  const filter = getLogoShadowFilter(shadow, sizeScale);
+  return filter ? Math.ceil(getDropShadowReach(filter)) : 0;
+}
+
+/**
+ * How far a chain of `drop-shadow()`s can paint past the shape casting it.
+ * Each one casts from the output of the one before, so their reaches add up.
+ * A blur of radius r fades out by about 1.4r in WebKit and Chromium; 1.5r
+ * leaves a margin.
+ */
+export function getDropShadowReach(filter: string): number {
+  let reach = 0;
+  for (const [, x, y, blur] of filter.matchAll(
+    /drop-shadow\(\s*(-?[\d.]+)(?:px)?\s+(-?[\d.]+)(?:px)?\s+([\d.]+)px/g,
+  )) {
+    reach += Math.max(Math.abs(Number(x)), Math.abs(Number(y)));
+    reach += 1.5 * Number(blur);
+  }
+  return reach;
 }
 
 /**

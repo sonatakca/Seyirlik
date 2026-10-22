@@ -103,4 +103,25 @@ describe("BackButton route history", () => {
     await user.click(screen.getByRole("button", { name: "common.back" }));
     expect(screen.getByTestId("path")).toHaveTextContent("/home");
   });
+
+  it("goes to a fixed page when there is no in-app history to go back to", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={["/alerts"]}>
+        <NonPlayerHistoryTracker />
+        <LocationOutput />
+        <Routes>
+          <Route
+            path="/alerts"
+            element={<BackButton to="/home" label="Home" />}
+          />
+          <Route path="/home" element={<p>Home page</p>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Home" }));
+    expect(screen.getByTestId("path")).toHaveTextContent("/home");
+  });
 });

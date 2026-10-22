@@ -37,6 +37,7 @@ export const TASK_FAMILIES: Record<TaskType, TaskFamily> = {
   "import.run": "export",
   "import.reconcile": "export",
   "import.handoff": "export",
+  "import.process": "export",
   "storage.collect": "discovery",
   "subtitle.run": "description",
   "subtitle.reconcile": "description",

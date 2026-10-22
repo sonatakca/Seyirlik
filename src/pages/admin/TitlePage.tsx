@@ -11,6 +11,7 @@ import {
   FileVideo,
   Images,
   RefreshCcw,
+  Search,
   Trash2,
 } from "lucide-react";
 import { setPageTitle } from "../../lib/pageTitle";
@@ -18,12 +19,14 @@ import { useLanguage } from "../../i18n/LanguageContext";
 import type { TranslationKey } from "../../i18n/translations";
 import {
   getLibraryTitle,
+  isMissingEpisode,
   toneOf,
   type LibraryTitleDetail,
 } from "../../lib/libraryAdminApi";
 import { refreshItemMetadata } from "../../lib/mediaApi";
 import { releaseSearchUrl } from "../../lib/wantedApi";
 import { RemoveTitleDialog } from "../../components/admin/RemoveTitleDialog";
+import { onTitleRemoved } from "../../components/admin/titleRemovalProgress";
 import { TitleSeasons } from "../../components/admin/TitleSeasons";
 import { TitlePoster } from "../../components/admin/TitlePoster";
 import {
@@ -55,6 +58,9 @@ type Tab = "overview" | "episodes" | "artwork" | "monitoring";
  * library list, and every one of those errands is a tab or a button on it —
  * for the film, and for a show's seasons and episodes individually.
  */
+/** How often an open title page asks again what it holds. */
+const LIVE_REFRESH_MS = 5_000;
+
 export function TitlePage() {
   const { t } = useLanguage();
   const { itemId = "" } = useParams();
@@ -92,6 +98,55 @@ export function TitlePage() {
     };
   }, [itemId]);
 
+  // Live while it is looked at: a subtitle found, an encode or trickplay
+  // finished, a download landed. Unchanged answers keep the same object, so
+  // nothing re-renders for a poll that found nothing new.
+  useEffect(() => {
+    let stopped = false;
+    let running = false;
+    let timer: number | undefined;
+    const tick = async () => {
+      window.clearTimeout(timer);
+      if (running || stopped) return;
+      running = true;
+      try {
+        if (document.visibilityState === "visible") {
+          const next = await getLibraryTitle(itemId, { background: true });
+          if (!stopped)
+            setDetail((previous) =>
+              previous && JSON.stringify(previous) === JSON.stringify(next)
+                ? previous
+                : next,
+            );
+        }
+      } catch {
+        // A missed refresh is retried by the next one.
+      } finally {
+        running = false;
+        if (!stopped) timer = window.setTimeout(tick, LIVE_REFRESH_MS);
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void tick();
+    };
+    timer = window.setTimeout(tick, LIVE_REFRESH_MS);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [itemId]);
+
+  // Leaves for the list once this title is gone, but only while it is open.
+  useEffect(
+    () =>
+      onTitleRemoved((removed) => {
+        if (removed === itemId) navigate("/admin/library", { replace: true });
+      }),
+    [itemId, navigate],
+  );
+
   useEffect(() => {
     setPageTitle(`${detail?.title ?? t("library.title")} · Seyirlik`, {
       canonicalPath: `/admin/library/${itemId}`,
@@ -126,6 +181,11 @@ export function TitlePage() {
 
   const tone = toneOf(detail, detail.desired);
   const busy = actions.busy !== null;
+  const searchingMissing = actions.searchingMissing(detail.id);
+  const missingEpisodes = detail.seasons.reduce(
+    (sum, season) => sum + season.episodes.filter(isMissingEpisode).length,
+    0,
+  );
 
   return (
     <div className="w-full space-y-6">
@@ -182,6 +242,19 @@ export function TitlePage() {
                 >
                   {t("wanted.releases")}
                 </Link>
+                {missingEpisodes > 0 ? (
+                  <button
+                    type="button"
+                    className={actionButton}
+                    disabled={busy || searchingMissing}
+                    onClick={() => void actions.searchMissing(detail.id)}
+                  >
+                    <Search size={13} aria-hidden="true" />
+                    {searchingMissing
+                      ? t("library.searchingMissing")
+                      : `${t("library.searchMissing")} · ${missingEpisodes}`}
+                  </button>
+                ) : null}
               </>
             ) : null}
             <button
@@ -408,6 +481,9 @@ export function TitlePage() {
               onTrickplay: (id) => void actions.trickplay(id),
               onUploadSubtitle: (id, file) =>
                 void actions.uploadSubtitle(id, file, uploadPolicy),
+              onSearchMissing: (season) =>
+                void actions.searchMissing(detail.id, season),
+              searchingMissing,
             }}
           />
         </>
@@ -430,11 +506,7 @@ export function TitlePage() {
       ) : null}
 
       {removing ? (
-        <RemoveTitleDialog
-          title={detail}
-          onClose={() => setRemoving(false)}
-          onRemoved={() => navigate("/admin/library", { replace: true })}
-        />
+        <RemoveTitleDialog title={detail} onClose={() => setRemoving(false)} />
       ) : null}
     </div>
   );

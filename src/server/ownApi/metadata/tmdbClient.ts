@@ -124,8 +124,17 @@ export interface TmdbClient {
     query: string,
     page: number,
   ): Promise<TmdbCataloguePage>;
-  searchMovies(title: string, year?: number): Promise<MatchCandidate[]>;
-  searchSeries(title: string, year?: number): Promise<MatchCandidate[]>;
+  /** `language` names the titles come back in; the client's own by default. */
+  searchMovies(
+    title: string,
+    year?: number,
+    language?: string,
+  ): Promise<MatchCandidate[]>;
+  searchSeries(
+    title: string,
+    year?: number,
+    language?: string,
+  ): Promise<MatchCandidate[]>;
   getMovie(providerId: string, language?: string): Promise<TmdbTitleDetails>;
   getSeries(providerId: string, language?: string): Promise<TmdbTitleDetails>;
   /**
@@ -623,21 +632,31 @@ export function createTmdbClient({
         })),
       };
     },
-    searchMovies: async (title, year) =>
+    searchMovies: async (title, year, searchLanguage) =>
       toCandidates(
-        await request<TmdbSearchResponse>("/search/movie", {
-          query: title,
-          ...(year === undefined ? {} : { year: String(year) }),
-        }),
+        await request<TmdbSearchResponse>(
+          "/search/movie",
+          {
+            query: title,
+            ...(year === undefined ? {} : { year: String(year) }),
+          },
+          searchLanguage,
+        ),
         "movie",
       ),
 
-    searchSeries: async (title, year) =>
+    searchSeries: async (title, year, searchLanguage) =>
       toCandidates(
-        await request<TmdbSearchResponse>("/search/tv", {
-          query: title,
-          ...(year === undefined ? {} : { first_air_date_year: String(year) }),
-        }),
+        await request<TmdbSearchResponse>(
+          "/search/tv",
+          {
+            query: title,
+            ...(year === undefined
+              ? {}
+              : { first_air_date_year: String(year) }),
+          },
+          searchLanguage,
+        ),
         "tv",
       ),
 

@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type RefObject,
+} from "react";
 import { useReducedMotion } from "framer-motion";
 import warmRed from "../assets/navbar-wordmark/warm-red.webp";
 import amber from "../assets/navbar-wordmark/amber.webp";
@@ -6,20 +12,45 @@ import gold from "../assets/navbar-wordmark/gold.webp";
 import olive from "../assets/navbar-wordmark/olive.webp";
 import green from "../assets/navbar-wordmark/green.webp";
 import teal from "../assets/navbar-wordmark/teal.webp";
+import warmRedShadow from "../assets/navbar-wordmark/shadow/warm-red.webp";
+import amberShadow from "../assets/navbar-wordmark/shadow/amber.webp";
+import goldShadow from "../assets/navbar-wordmark/shadow/gold.webp";
+import oliveShadow from "../assets/navbar-wordmark/shadow/olive.webp";
+import greenShadow from "../assets/navbar-wordmark/shadow/green.webp";
+import tealShadow from "../assets/navbar-wordmark/shadow/teal.webp";
+import { ACCENT_THEMES } from "../lib/accentTheme";
 import {
   isLoadingActivityPending,
   subscribeLoadingActivity,
 } from "../lib/loadingActivity";
+import { relativeLuminance } from "../lib/logoShadow";
+import {
+  measureBackdropUnder,
+  useNavbarBackdrop,
+  type NavbarBackdrop,
+} from "../lib/navbarBackdrop";
+import {
+  getWordmarkShadowFrameStyle,
+  wordmarkShadowStrength,
+} from "./navbarWordmarkShadow";
 
 // Palette order, which is also the cycle order. Names match ACCENT_THEMES.
 const FRAMES = [
-  { accent: "Warm Red", src: warmRed },
-  { accent: "Amber", src: amber },
-  { accent: "Gold", src: gold },
-  { accent: "Olive", src: olive },
-  { accent: "Green", src: green },
-  { accent: "Teal", src: teal },
-];
+  { accent: "Warm Red", src: warmRed, shadow: warmRedShadow },
+  { accent: "Amber", src: amber, shadow: amberShadow },
+  { accent: "Gold", src: gold, shadow: goldShadow },
+  { accent: "Olive", src: olive, shadow: oliveShadow },
+  { accent: "Green", src: green, shadow: greenShadow },
+  { accent: "Teal", src: teal, shadow: tealShadow },
+].map((frame) => ({ ...frame, luminance: accentLuminance(frame.accent) }));
+
+/** The letters' luminance: each frame is drawn in its accent's colour. */
+function accentLuminance(name: string): number {
+  const hex = ACCENT_THEMES.find((theme) => theme.name === name)?.accent;
+  if (!hex) return 0;
+  const value = Number.parseInt(hex.slice(1), 16);
+  return relativeLuminance(value >> 16, (value >> 8) & 255, value & 255);
+}
 
 // One full lap in half a second, the pace of the brand loading animation.
 export const WORDMARK_FRAME_MS = 500 / FRAMES.length;
@@ -41,11 +72,13 @@ function getAccentThemeName(): string | undefined {
 }
 
 /**
- * A soft dark shadow, wherever the wordmark stands: over a hero the room
- * behind it is lit by the artwork's colours, which can be the accent's own.
+ * A soft dark shadow under the letters, as much of it as the backdrop needs:
+ * all of it off artwork and over anything as dark as the letters, none where
+ * the letters are already well darker than the artwork behind them. Baked
+ * into images that overhang the box by its reach, never a CSS filter: see
+ * `navbarWordmarkShadow.ts`.
  */
-const WORDMARK_SHADOW =
-  "drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6)) drop-shadow(0 3px 14px rgba(0, 0, 0, 0.5))";
+const SHADOW_FRAME_STYLE = getWordmarkShadowFrameStyle();
 
 /**
  * The wordmark in the current accent colour. While anything is loading it
@@ -53,7 +86,14 @@ const WORDMARK_SHADOW =
  * once loading ends. Then it carries on until it comes round to the accent
  * colour again, so it never stops on a stranger's colour and never jumps.
  */
-export function NavbarWordmark({ className = "" }: { className?: string }) {
+export function NavbarWordmark({
+  className = "",
+  overArtwork = false,
+}: {
+  className?: string;
+  /** True while the bar is clear over a hero's artwork. */
+  overArtwork?: boolean;
+}) {
   const accentName = useSyncExternalStore(
     subscribeAccentTheme,
     getAccentThemeName,
@@ -65,6 +105,7 @@ export function NavbarWordmark({ className = "" }: { className?: string }) {
     () => false,
   );
   const reduceMotion = useReducedMotion() ?? false;
+  const rootRef = useRef<HTMLSpanElement>(null);
   const accentIndex = Math.max(
     0,
     FRAMES.findIndex((frame) => frame.accent === accentName),
@@ -117,15 +158,42 @@ export function NavbarWordmark({ className = "" }: { className?: string }) {
   );
 
   const shownIndex = cycleIndex ?? accentIndex;
+  const backdropLuminances = useBackdropUnder(rootRef, overArtwork);
+  const shadowStrength = backdropLuminances
+    ? wordmarkShadowStrength(FRAMES[shownIndex].luminance, backdropLuminances)
+    : 1;
 
   return (
     <span
+      ref={rootRef}
       data-wordmark-accent={FRAMES[shownIndex].accent}
+      data-shadow-strength={shadowStrength.toFixed(2)}
       className={`relative block aspect-[430/176] ${className}`}
-      style={{ filter: WORDMARK_SHADOW }}
     >
+      {/* Every frame and shadow stays mounted so a colour change never
+          waits on a decode. The shadows fade together, by strength; within
+          them, as among the letters, a colour change is a plain swap. */}
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 transition-opacity duration-500 ease-out"
+        style={{ opacity: shadowStrength }}
+      >
+        {FRAMES.map((frame, index) => (
+          <img
+            key={frame.accent}
+            src={frame.shadow}
+            alt=""
+            draggable={false}
+            decoding="async"
+            className="absolute max-w-none"
+            style={{
+              ...SHADOW_FRAME_STYLE,
+              opacity: index === shownIndex ? 1 : 0,
+            }}
+          />
+        ))}
+      </span>
       {FRAMES.map((frame, index) => (
-        // Every frame stays mounted so a colour change never waits on a decode.
         <img
           key={frame.accent}
           src={frame.src}
@@ -133,10 +201,46 @@ export function NavbarWordmark({ className = "" }: { className?: string }) {
           aria-hidden="true"
           draggable={false}
           decoding="async"
-          className="absolute inset-0 h-full w-full object-contain"
+          className="pointer-events-none absolute inset-0 h-full w-full max-w-none"
           style={{ opacity: index === shownIndex ? 1 : 0 }}
         />
       ))}
     </span>
   );
+}
+
+/**
+ * The artwork behind the wordmark, as luminances on a small grid, while the
+ * bar is clear over a hero that registered its stage; null otherwise.
+ */
+function useBackdropUnder(
+  rootRef: RefObject<HTMLElement | null>,
+  overArtwork: boolean,
+): number[] | null {
+  const backdrop = useNavbarBackdrop();
+  const [measured, setMeasured] = useState<{
+    backdrop: NavbarBackdrop;
+    values: number[] | null;
+  } | null>(null);
+  useEffect(() => {
+    if (!overArtwork || !backdrop) return;
+    let cancelled = false;
+    const measure = () => {
+      const root = rootRef.current;
+      if (!root) return;
+      void measureBackdropUnder(backdrop, root.getBoundingClientRect()).then(
+        (values) => {
+          if (!cancelled) setMeasured({ backdrop, values });
+        },
+      );
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("resize", measure);
+    };
+  }, [backdrop, overArtwork, rootRef]);
+  if (!overArtwork || !backdrop || measured?.backdrop !== backdrop) return null;
+  return measured.values;
 }

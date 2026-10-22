@@ -207,7 +207,12 @@ export function createSegmentService({
       });
       if (packaged && packaged.durationSeconds > 0) {
         return {
-          input: { path: packaged.path, map: "0:a:0" },
+          /*
+           * The playlist rather than the M4A behind it: the same samples,
+           * without a seek per fragment before the first one decodes. See
+           * `PackagedVideo.playlistPath`.
+           */
+          input: { path: packaged.playlistPath, map: "0:a:0" },
           durationSeconds: packaged.durationSeconds,
         };
       }

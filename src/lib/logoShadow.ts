@@ -1,19 +1,19 @@
 /**
- * A shadow in the shape of a logo, chosen against what is behind it.
+ * A shadow in the shape of a logo, as strong as the artwork behind it needs.
  *
- * A logo lighter than the artwork behind it gets a dark shadow; a darker one
- * gets a light glow; the closer the two are in brightness, the stronger it is.
- * A logo that already stands out still gets a trace of one, so it reads as
- * lying over the picture rather than printed into it.
+ * It is always dark: Seyirlik never draws a white or bright shadow, a glow
+ * behind a dark logo included. The closer the logo and the artwork are in
+ * brightness, the stronger it is. A logo that already stands out still gets
+ * a trace of one, so it reads as lying over the picture rather than printed
+ * into it.
  */
 
 export interface LogoShadow {
-  tone: "dark" | "light";
   /** 0–1. */
   strength: number;
 }
 
-export const DEFAULT_LOGO_SHADOW: LogoShadow = { tone: "dark", strength: 0.7 };
+export const DEFAULT_LOGO_SHADOW: LogoShadow = { strength: 0.7 };
 
 /** Relative luminance (WCAG) of an sRGB colour given as 0–255 channels. */
 export function relativeLuminance(r: number, g: number, b: number): number {
@@ -36,10 +36,7 @@ export function logoShadowFor(
   const ratio = contrastRatio(logoLuminance, backdropLuminance);
   // Full strength at a ratio of 1.5 or less, a trace from about 7.
   const strength = Math.min(1, Math.max(0.25, (7 - ratio) / 5.5));
-  return {
-    tone: logoLuminance >= backdropLuminance ? "dark" : "light",
-    strength,
-  };
+  return { strength };
 }
 
 /** Where, as shares of the artwork, a miniature's logo lies over it. */

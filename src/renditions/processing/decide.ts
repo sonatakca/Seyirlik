@@ -1,4 +1,5 @@
 import { statfs } from "node:fs/promises";
+import { DEFAULT_STORAGE_SAFETY_MARGIN } from "../planning";
 import { estimateAdaptivePackageBytes } from "../adaptive/packager";
 import { codecFamilyForEncoder, type RenditionVideoEncoder } from "../encoding";
 import { buildRenditionRequirements, classifyQualityHeight } from "../policy";
@@ -94,9 +95,11 @@ export interface DecideProcessingInput {
   sizeBytes: number;
   hardware: HardwareReport;
   policy?: StreamPolicyOptions;
-  /** Free bytes on the output volume, when known. */
+  /** Free bytes on the scratch volume, when known. */
   freeBytes?: number;
-  /** Bytes to leave unused on the output volume. */
+  /** Existing bytes in this job/source scratch root, already excluded from freeBytes. */
+  inheritedBytes?: number;
+  /** Bytes to leave unused on the scratch volume. */
   reserveBytes?: number;
   /** True when a current package for this exact source already exists. */
   alreadyCurrent?: boolean;
@@ -112,18 +115,18 @@ export interface DecideProcessingInput {
   audioTracksToEncode?: number;
 }
 
-/** Headroom kept free on the output volume so a full disk cannot be reached. */
+/** Headroom kept free on the scratch volume so a full disk cannot be reached. */
 export const DEFAULT_RESERVE_BYTES = 2 * 1024 * 1024 * 1024;
 
 /**
- * Staging holds the package being built before it is published.
- *
- * Sized at the full output plus a quarter: segments are written once and the
- * validator reads them in place, so the peak is the package itself with room
- * for the playlists and metadata written alongside it.
+ * Checkpoints and the assembled package coexist on the scratch volume.
+ * Keep the same safety margin as the packager's fresh-job peak check.
  */
 function stagingBytesFor(outputBytes: number): number {
-  return Math.ceil(outputBytes * 1.25);
+  return (
+    Math.ceil(outputBytes * (1 + DEFAULT_STORAGE_SAFETY_MARGIN) * 2) -
+    outputBytes
+  );
 }
 
 export async function freeBytesOn(
@@ -192,7 +195,13 @@ export function decideProcessing(
   });
   const reserveBytes = input.reserveBytes ?? DEFAULT_RESERVE_BYTES;
   const stagingBytes = stagingBytesFor(estimateBytes.totalBytes);
-  const required = estimateBytes.totalBytes + stagingBytes + reserveBytes;
+  const inheritedBytes =
+    Number.isFinite(input.inheritedBytes) && (input.inheritedBytes ?? 0) >= 0
+      ? (input.inheritedBytes ?? 0)
+      : 0;
+  const required =
+    Math.max(0, estimateBytes.totalBytes + stagingBytes - inheritedBytes) +
+    reserveBytes;
   const estimate: DiskEstimate = {
     outputBytes: estimateBytes.totalBytes,
     stagingBytes,
@@ -203,7 +212,7 @@ export function decideProcessing(
   };
   if (!estimate.sufficient) {
     warnings.push(
-      "The output volume does not have room for this package plus its staging copy.",
+      "The scratch volume does not have room for this package plus its staging copy.",
     );
   }
 

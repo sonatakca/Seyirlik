@@ -1,4 +1,6 @@
 import path from "node:path";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import type { RenditionAnalysisReport, RenditionPaths } from "../analysis";
 import {
   parseEncoderPreference,
@@ -140,7 +142,24 @@ export async function planRetainedSidecarSubtitles(
       .filter((decision) => decision.keep)
       .map((decision) => decision.streamIndex),
   );
-  return found.filter((sidecar) => keptIndexes.has(sidecar.streamIndex));
+  const retained = found.filter((sidecar) =>
+    keptIndexes.has(sidecar.streamIndex),
+  );
+  for (const sidecar of retained) {
+    try {
+      const fingerprint = createHash("sha256")
+        .update(sidecar.fileName)
+        .update("\0");
+      for await (const chunk of createReadStream(sidecar.filePath)) {
+        fingerprint.update(chunk);
+      }
+      sidecar.sidecarFingerprint = fingerprint.digest("hex");
+    } catch {
+      // An unreadable sidecar must not abort library analysis or reuse stale
+      // output. Extraction reports the individual file failure during the job.
+    }
+  }
+  return retained;
 }
 
 function registryStatus(
@@ -309,13 +328,15 @@ export async function processAdaptiveReport(
           paths.mediaRoot,
           ...item.relativePath.split("/"),
         );
-        const sidecarSubtitles = options.allAudioTracks
-          ? []
-          : await planRetainedSidecarSubtitles(sourcePath, {
-              ...(options.preferredLanguages
-                ? { preferredLanguages: options.preferredLanguages }
-                : {}),
-            });
+        const sidecarSubtitles = await planRetainedSidecarSubtitles(
+          sourcePath,
+          {
+            keepAllLanguages: options.allAudioTracks,
+            ...(options.preferredLanguages
+              ? { preferredLanguages: options.preferredLanguages }
+              : {}),
+          },
+        );
 
         let result: AdaptivePackageResult | undefined;
         for (let attempt = 0; attempt <= maxRetries; attempt += 1) {

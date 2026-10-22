@@ -1,0 +1,52 @@
+/* The navbar's ceiling (NavbarSurface.tsx). The layer spans the header and
+   reaches --reach below it. Each layer animates to its open/closed opacity. */
+
+.navbar-surface {
+  --reach: 3rem;
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: calc(100% + var(--reach));
+  pointer-events: none;
+  z-index: 0;
+}
+
+.navbar-surface[data-variant="mobile"] {
+  --reach: 2.25rem;
+}
+
+.navbar-surface > span {
+  position: absolute;
+  inset: 0;
+}
+
+/* A light blur behind the links only, gone before the bar's foot, so the
+   picture under them is quiet and nothing below them is ever smeared. */
+.navbar-surface > .navbar-surface__veil {
+  bottom: var(--reach);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    #000 0%,
+    #000 45%,
+    transparent 92%
+  );
+  mask-image: linear-gradient(to bottom, #000 0%, #000 45%, transparent 92%);
+}
+
+/* The page's own black, thinning on an eased curve: a straight ramp shows a
+   band where it ends. */
+.navbar-surface__shade {
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.94) 0%,
+    rgba(0, 0, 0, 0.9) 30%,
+    rgba(0, 0, 0, 0.8) 45%,
+    rgba(0, 0, 0, 0.64) 56%,
+    rgba(0, 0, 0, 0.46) 66%,
+    rgba(0, 0, 0, 0.29) 75%,
+    rgba(0, 0, 0, 0.15) 84%,
+    rgba(0, 0, 0, 0.055) 92%,
+    rgba(0, 0, 0, 0) 100%
+  );
+}

@@ -7,6 +7,7 @@ import { visibleGroups } from "../lib/adminSections";
 const api = vi.hoisted(() => ({
   getHealth: vi.fn(),
   listAcquisitions: vi.fn(),
+  getVolumeSpace: vi.fn(),
 }));
 
 vi.mock("../i18n/LanguageContext", () => ({
@@ -18,6 +19,9 @@ vi.mock("../api/ownApi/client", () => ({
 }));
 vi.mock("../lib/acquisitionsApi", () => ({
   listAcquisitions: api.listAcquisitions,
+}));
+vi.mock("../lib/processingApi", () => ({
+  getVolumeSpace: api.getVolumeSpace,
 }));
 
 const SHIPPED = visibleGroups({ includeDevOnly: false });
@@ -49,6 +53,12 @@ function renderPage() {
 beforeEach(() => {
   api.getHealth.mockReset().mockResolvedValue(healthy());
   api.listAcquisitions.mockReset().mockResolvedValue([]);
+  api.getVolumeSpace.mockReset().mockResolvedValue({
+    volumes: [
+      { role: "media", freeBytes: 1_200_000_000_000, totalBytes: 4e12 },
+      { role: "scratch", freeBytes: 30_000_000_000, totalBytes: 500e9 },
+    ],
+  });
 });
 
 describe("the administration index", () => {
@@ -156,5 +166,33 @@ describe("the administration index", () => {
       "/admin/acquisitions",
       "/admin/imports",
     ]);
+  });
+
+  it("shows free space on each volume, amber when it runs low", async () => {
+    renderPage();
+
+    const media = await screen.findByText("1.20 TB");
+    const scratch = screen.getByText("30.00 GB");
+    expect(media.className).toContain("text-white/80");
+    expect(scratch.className).toContain("text-amber-300");
+    expect(screen.getByText("4.00 TB")).toBeTruthy();
+    expect(screen.getByText("500.00 GB")).toBeTruthy();
+    expect(media.closest("a")?.getAttribute("href")).toBe(
+      "/dev/media-processing",
+    );
+  });
+
+  it("calls a volume the server could not ask unknown, not empty", async () => {
+    api.getVolumeSpace.mockResolvedValue({
+      volumes: [
+        { role: "media", freeBytes: null, totalBytes: null },
+        { role: "scratch", freeBytes: 30_000_000_000, totalBytes: 60e9 },
+      ],
+    });
+    renderPage();
+
+    expect(await screen.findByText("30.00 GB")).toBeTruthy();
+    expect(screen.getByText("admin.overview.status.unavailable")).toBeTruthy();
+    expect(screen.queryByText("0 MB")).toBeNull();
   });
 });

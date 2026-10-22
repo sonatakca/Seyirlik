@@ -287,6 +287,8 @@ export interface MasterPlaylistInput {
   videoRenditions: AdaptiveVideoRenditionMetadata[];
   audioRenditions: AdaptiveAudioRenditionMetadata[];
   subtitleRenditions?: AdaptiveSubtitleRenditionMetadata[];
+  /** Subtitle/audio-only scratch for an incremental update, never publication. */
+  allowMissingVideo?: boolean;
   /** RFC 6381 video codec string per rendition id, from the real bitstream. */
   videoCodecStrings: Map<string, string>;
   audioCodecStrings: Map<string, string>;
@@ -306,10 +308,11 @@ export function buildMasterPlaylist({
   videoRenditions,
   audioRenditions,
   subtitleRenditions = [],
+  allowMissingVideo = false,
   videoCodecStrings,
   audioCodecStrings,
 }: MasterPlaylistInput): string {
-  if (videoRenditions.length === 0) {
+  if (!allowMissingVideo && videoRenditions.length === 0) {
     throw new Error("A master playlist needs at least one video rendition.");
   }
   /*
@@ -322,7 +325,12 @@ export function buildMasterPlaylist({
    * this guard cannot publish a silent package — and the packager already
    * refuses a source with no audio outright.
    */
-  if (videoRenditions.length === 0 && audioRenditions.length === 0) {
+  if (
+    videoRenditions.length +
+      audioRenditions.length +
+      subtitleRenditions.length ===
+    0
+  ) {
     throw new Error("A master playlist needs at least one rendition.");
   }
 
@@ -415,7 +423,9 @@ export function buildMasterPlaylist({
     [...ascending]
       .reverse()
       .find((video) => video.height <= OPENING_RUNG_CEILING) ?? ascending[0];
-  const ordered = [opener, ...ascending.filter((video) => video !== opener)];
+  const ordered = opener
+    ? [opener, ...ascending.filter((video) => video !== opener)]
+    : [];
 
   for (const video of ordered) {
     const videoCodec = videoCodecStrings.get(video.id);
@@ -489,7 +499,10 @@ function attributeValue(attributes: string, key: string): string | undefined {
   return bare?.[1];
 }
 
-export function parseMasterPlaylist(text: string): ParsedMasterPlaylist {
+export function parseMasterPlaylist(
+  text: string,
+  { allowMissingVideo = false }: { allowMissingVideo?: boolean } = {},
+): ParsedMasterPlaylist {
   const lines = text.split(/\r?\n/);
   if (lines[0]?.trim() !== "#EXTM3U") {
     throw new Error("Master playlist does not start with #EXTM3U.");
@@ -588,7 +601,11 @@ export function parseMasterPlaylist(text: string): ParsedMasterPlaylist {
     }
   }
 
-  if (variants.length === 0) {
+  if (
+    variants.length === 0 &&
+    (!allowMissingVideo ||
+      audioRenditions.length + subtitleRenditions.length === 0)
+  ) {
     throw new Error("Master playlist contains no variants.");
   }
 

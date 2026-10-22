@@ -201,8 +201,8 @@ function parseLoginBody(value: unknown): LoginBody {
     typeof candidate.username !== "string" ||
     candidate.username.length < 1 ||
     candidate.username.length > MAX_USERNAME_INPUT_LENGTH ||
+    // An empty password signs in to a passwordless account.
     typeof candidate.password !== "string" ||
-    candidate.password.length < 1 ||
     Buffer.byteLength(candidate.password, "utf8") > MAX_PASSWORD_INPUT_BYTES ||
     (candidate.deviceDescription !== undefined &&
       (typeof candidate.deviceDescription !== "string" ||

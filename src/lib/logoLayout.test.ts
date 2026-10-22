@@ -9,6 +9,9 @@ import {
   getLogoLayout,
   getLogoShadowBackdropStyle,
   getLogoShadowFilter,
+  getLogoShadowFrameStyle,
+  getLogoShadowReach,
+  getDropShadowReach,
   getLogoLayoutStyle,
   moveLogoLayout,
   resizeLogoLayout,
@@ -61,6 +64,20 @@ describe("layout geometry", () => {
     });
   });
 
+  it("pads the placed box by the shadow's reach, keeping the logo where it was", () => {
+    expect(
+      getLogoLayoutStyle({ x: 0.25, y: 0.4, width: 0.6, shadow: 1 }, 92),
+    ).toEqual({
+      left: "25%",
+      top: "40%",
+      width: "calc(60% + 184px)",
+      padding: "92px",
+      transform: "translate(-50%, -50%)",
+    });
+    expect(getLogoShadowReach(1)).toBe(92);
+    expect(getLogoShadowReach(0)).toBe(0);
+  });
+
   it("keeps a logo legible and smaller than the card", () => {
     expect(
       clampLogoLayout({ x: 0.5, y: 0.5, width: 0.01, shadow: 1 }).width,
@@ -109,6 +126,23 @@ describe("shadow", () => {
     expect(strongBackdrop?.background).toContain("rgba(0, 0, 0, 0.76) 0%");
     // iOS Safari clips a blurred element to its box and drew a hard rectangle.
     expect(strongBackdrop).not.toHaveProperty("filter");
+  });
+
+  it("puts the shadow on a frame that already holds all of it", () => {
+    // The live editor and fallback paths still keep ordinary filter overflow
+    // inside the element that a browser may composite.
+    expect(getLogoShadowFrameStyle(0)).toBeUndefined();
+    expect(getDropShadowReach(getLogoShadowFilter(1)!)).toBe(
+      14 + 1.5 * 34 + 1.5 * 18,
+    );
+    // The strongest setting adds two tight shadows to the chain.
+    expect(getDropShadowReach(getLogoShadowFilter(2)!)).toBe(
+      1.5 * 2 + 1.5 * 6 + 14 + 1.5 * 34 + 1.5 * 18,
+    );
+    const frame = getLogoShadowFrameStyle(1, 0.75);
+    expect(frame?.filter).toBe(getLogoShadowFilter(1, 0.75));
+    expect(frame?.padding).toBe("71px");
+    expect(frame?.margin).toBe("-71px");
   });
 
   it("falls back to the default when the strength is not a number", () => {

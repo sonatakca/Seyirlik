@@ -23,7 +23,8 @@ export type SubtitleEvent =
   | "authentication-resumed"
   | "failed"
   | "operator-attention"
-  | "playback-refresh";
+  | "playback-refresh"
+  | "catalogue-attached";
 export interface SubtitleWork {
   attempt: SubtitleAttemptRow;
   want: SubtitleWantRow;

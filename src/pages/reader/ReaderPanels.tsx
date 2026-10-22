@@ -19,7 +19,7 @@ import type { MediaItem } from "../../lib/types";
 import { BOOK_SANS, BOOK_SERIF } from "./epubTypography";
 import { formatDuration, formatPercent, splitNumber } from "./readerText";
 import { ReaderSearch } from "./ReaderSearch";
-import type { BookSearchHit } from "../../lib/bookSearchApi";
+import type { BookSearchFound, BookSearchHit } from "../../lib/bookSearchApi";
 import {
   FONT_SCALE_STEPS,
   HIGHLIGHT_COLORS,
@@ -700,7 +700,7 @@ export function ReaderContentsDrawer({
   scheme: "dark" | "light";
   spineIndexOf: (href: string) => number | null;
   onNavigate: (target: string) => void;
-  onShowPassage: (hit: BookSearchHit) => void;
+  onShowPassage: (hit: BookSearchHit, found: BookSearchFound) => void;
   onRemoveBookmark: (id: string) => void;
   onClose: () => void;
 }) {
@@ -711,17 +711,32 @@ export function ReaderContentsDrawer({
     [map, spineIndexOf, toc],
   );
   // The contents list is in reading order: a section belongs to the last
-  // entry that starts at or before it.
+  // chapter that starts at or before it. Chapters are the top level, as the
+  // margin counts them (buildBookMap), so a part numbered "1" inside a
+  // chapter is never named on its own.
   const chapterOf = useCallback(
     (section: number) => {
+      const topLevel = toc.filter((entry) => entry.depth === 0);
       let label: string | null = null;
-      for (const entry of toc) {
+      for (const entry of topLevel.length >= 2 ? topLevel : toc) {
         const at = spineIndexOf(entry.href);
         if (at !== null && at <= section) label = entry.label.trim();
       }
       return label;
     },
     [spineIndexOf, toc],
+  );
+  // A search hit's place in the whole book, in the reader's own measure: its
+  // section's share of the book's locations, and its place in that section.
+  const bookPlaceOf = useCallback(
+    (section: number, place: number) => {
+      if (!map) return null;
+      const start = map.sectionStarts[section];
+      if (start === undefined) return null;
+      const end = map.sectionStarts[section + 1] ?? map.total;
+      return Math.min(1, (start + (end - start) * place) / map.total);
+    },
+    [map],
   );
   const longest = Math.max(
     1,
@@ -762,8 +777,12 @@ export function ReaderContentsDrawer({
     }
 
     const drawer = drawerRef.current;
+    // Not the field of a tab kept out of sight.
+    const autofocus = Array.from(
+      drawer?.querySelectorAll<HTMLElement>("[data-autofocus]") ?? [],
+    ).find((element) => !element.closest("[hidden]"));
     const focusTarget =
-      drawer?.querySelector<HTMLElement>("[data-autofocus]") ??
+      autofocus ??
       drawer?.querySelector<HTMLElement>('[aria-current="true"]') ??
       drawer?.querySelector<HTMLElement>("button");
     focusTarget?.focus({ preventScroll: true });
@@ -866,14 +885,17 @@ export function ReaderContentsDrawer({
           </button>
         </div>
 
-        {tab === "search" ? (
-          <ReaderSearch
-            itemId={item.Id}
-            active={open}
-            chapterOf={chapterOf}
-            onShow={onShowPassage}
-          />
-        ) : tab === "contents" ? (
+        {/* Kept while another tab is shown, so a search and its results
+            are still there on the way back. */}
+        <ReaderSearch
+          itemId={item.Id}
+          active={open && tab === "search"}
+          hidden={tab !== "search"}
+          chapterOf={chapterOf}
+          bookPlaceOf={bookPlaceOf}
+          onShow={onShowPassage}
+        />
+        {tab === "search" ? null : tab === "contents" ? (
           rows.length > 0 ? (
             <ol className="rd-list" role="tabpanel">
               {rows.map((row, index) => {

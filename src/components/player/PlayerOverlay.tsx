@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { move, REST } from "../../lib/compositorMotion";
 import {
   ChevronLeft,
   LoaderCircle,
@@ -10,7 +11,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useLanguage } from "../../i18n/LanguageContext";
-import { BrandLoadingMark } from "../LoadingSpinner";
+import { LoadingRing } from "../LoadingRing";
 import { Tooltip } from "../ui/Tooltip";
 
 interface SeekFeedbackItem {
@@ -259,9 +260,12 @@ export function PlayerOverlay({
               <motion.span
                 key={backwardFeedback.spinPulse}
                 className="flex"
-                initial={{ rotate: 0 }}
+                initial={{ transform: "rotate(0deg)" }}
                 animate={{
-                  rotate: backwardFeedback.spinPulse > 0 ? -360 : 0,
+                  transform:
+                    backwardFeedback.spinPulse > 0
+                      ? "rotate(-360deg)"
+                      : "rotate(0deg)",
                 }}
                 transition={{
                   duration: SEEK_FEEDBACK_SPIN_MS / 1000,
@@ -276,9 +280,9 @@ export function PlayerOverlay({
                 <motion.span
                   key={backwardFeedback.amount}
                   className="absolute inset-0 flex origin-center items-center justify-center leading-none"
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                  exit={{ scale: 0 }}
+                  initial={{ transform: "scale(0)" }}
+                  animate={{ transform: "scale(1)" }}
+                  exit={{ transform: ["scale(1)", "scale(0)"] }}
                   transition={{
                     duration: SEEK_FEEDBACK_NUMBER_SWAP_MS / 1000,
                     ease: SEEK_FEEDBACK_NUMBER_EASE,
@@ -304,9 +308,12 @@ export function PlayerOverlay({
               <motion.span
                 key={forwardFeedback.spinPulse}
                 className="flex"
-                initial={{ rotate: 0 }}
+                initial={{ transform: "rotate(0deg)" }}
                 animate={{
-                  rotate: forwardFeedback.spinPulse > 0 ? 360 : 0,
+                  transform:
+                    forwardFeedback.spinPulse > 0
+                      ? "rotate(360deg)"
+                      : "rotate(0deg)",
                 }}
                 transition={{
                   duration: SEEK_FEEDBACK_SPIN_MS / 1000,
@@ -321,9 +328,9 @@ export function PlayerOverlay({
                 <motion.span
                   key={forwardFeedback.amount}
                   className="absolute inset-0 flex origin-center items-center justify-center leading-none"
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                  exit={{ scale: 0 }}
+                  initial={{ transform: "scale(0)" }}
+                  animate={{ transform: "scale(1)" }}
+                  exit={{ transform: ["scale(1)", "scale(0)"] }}
                   transition={{
                     duration: SEEK_FEEDBACK_NUMBER_SWAP_MS / 1000,
                     ease: SEEK_FEEDBACK_NUMBER_EASE,
@@ -367,24 +374,42 @@ export function PlayerOverlay({
               key="loading"
               data-testid="player-loading-state"
               className="pointer-events-none absolute flex items-center justify-center"
-              initial={{ opacity: 0, scale: shouldReduceMotion ? 1 : 0.94 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: shouldReduceMotion ? 1 : 0.96 }}
+              initial={{
+                opacity: 0,
+                transform: move({ scale: shouldReduceMotion ? 1 : 0.94 }),
+              }}
+              animate={{ opacity: 1, transform: REST }}
+              exit={{
+                opacity: 0,
+                transform: [
+                  REST,
+                  move({ scale: shouldReduceMotion ? 1 : 0.96 }),
+                ],
+              }}
               transition={{
                 duration: shouldReduceMotion ? 0.12 : 0.22,
                 ease: CENTER_STATE_EASE,
               }}
             >
-              <BrandLoadingMark className="w-24 sm:w-32" />
+              <LoadingRing size={80} stroke={2.5} />
             </motion.span>
           ) : (
             <motion.span
               key="play-pause"
               data-testid="player-play-pause-state"
               className="absolute flex h-16 w-16 items-center justify-center rounded-full bg-white/[0.15] backdrop-blur-2xl sm:h-20 sm:w-20"
-              initial={{ opacity: 0, scale: shouldReduceMotion ? 1 : 0.94 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: shouldReduceMotion ? 1 : 0.96 }}
+              initial={{
+                opacity: 0,
+                transform: move({ scale: shouldReduceMotion ? 1 : 0.94 }),
+              }}
+              animate={{ opacity: 1, transform: REST }}
+              exit={{
+                opacity: 0,
+                transform: [
+                  REST,
+                  move({ scale: shouldReduceMotion ? 1 : 0.96 }),
+                ],
+              }}
               transition={{
                 duration: shouldReduceMotion ? 0.12 : 0.18,
                 ease: CENTER_STATE_EASE,
@@ -413,13 +438,13 @@ export function PlayerOverlay({
                 >
                   {displayedIsPlaying ? (
                     <Pause
-                      className="h-7 w-7 [filter:drop-shadow(0_2px_4px_rgba(0,0,0,0.45))_drop-shadow(0_0_7px_rgba(255,255,255,0.16))] sm:h-[42px] sm:w-[42px]"
+                      className="h-7 w-7 [filter:drop-shadow(0_2px_4px_rgba(0,0,0,0.45))] sm:h-[42px] sm:w-[42px]"
                       fill="currentColor"
                       strokeWidth={2.2}
                     />
                   ) : (
                     <Play
-                      className="ml-0.5 h-7 w-7 [filter:drop-shadow(0_2px_4px_rgba(0,0,0,0.45))_drop-shadow(0_0_7px_rgba(255,255,255,0.16))] sm:ml-1 sm:h-[44px] sm:w-[44px]"
+                      className="ml-0.5 h-7 w-7 [filter:drop-shadow(0_2px_4px_rgba(0,0,0,0.45))] sm:ml-1 sm:h-[44px] sm:w-[44px]"
                       fill="currentColor"
                       strokeWidth={2.2}
                     />

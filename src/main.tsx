@@ -10,6 +10,7 @@ import App from "./App";
 import { LanguageProvider } from "./i18n/LanguageContext";
 import { applyStoredAccentTheme } from "./lib/accentTheme";
 import { startAppUpdateWatch } from "./lib/appVersion/appUpdate";
+import { syncShimmerSweeps } from "./lib/shimmerSync";
 import "./index.css";
 // These styles remain eager, and ordered after Tailwind/global rules, to match
 // the original single-stylesheet first paint and cascade.
@@ -33,6 +34,7 @@ if (
 
 applyStoredAccentTheme();
 startAppUpdateWatch();
+syncShimmerSweeps();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

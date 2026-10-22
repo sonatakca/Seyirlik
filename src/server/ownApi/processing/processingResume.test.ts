@@ -415,7 +415,7 @@ async function build(
     store,
     queue,
     mediaRoot: fixture.root,
-    renditionRoot: fixture.root,
+    workRoot: fixture.root,
     storageGuard: guard,
   });
   return { routes, store, queue, fixture, guard };

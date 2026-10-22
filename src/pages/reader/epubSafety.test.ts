@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { BOOK_CONTENT_SECURITY_POLICY, neutraliseBookScripts } from "./epubSafety";
+import {
+  BOOK_CONTENT_SECURITY_POLICY,
+  neutraliseBookScripts,
+} from "./epubSafety";
 
 const hostile = `<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
@@ -32,27 +35,38 @@ describe("neutraliseBookScripts", () => {
 
   it("removes scripts, handlers, script URLs, frames and plugins", () => {
     const document = parse(neutraliseBookScripts(hostile));
-    expect(document.querySelectorAll("script, iframe, object, embed")).toHaveLength(0);
+    expect(
+      document.querySelectorAll("script, iframe, object, embed"),
+    ).toHaveLength(0);
     const withHandlers = [...document.querySelectorAll("*")].filter((element) =>
-      [...element.attributes].some((attribute) => attribute.name.startsWith("on")),
+      [...element.attributes].some((attribute) =>
+        attribute.name.startsWith("on"),
+      ),
     );
     expect(withHandlers).toHaveLength(0);
-    const hrefs = [...document.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+    const hrefs = [...document.querySelectorAll("a")].map((a) =>
+      a.getAttribute("href"),
+    );
     expect(hrefs).toEqual([null, null, "chapter2.xhtml#note"]);
   });
 
   it("keeps the book's text and ordinary links", () => {
     const document = parse(neutraliseBookScripts(hostile));
     expect(document.body.textContent).toContain("Text");
-    expect(document.querySelector('a[href="chapter2.xhtml#note"]')?.textContent).toBe("note");
-    expect(document.querySelector("img")?.getAttribute("src")).toBe("missing.png");
+    expect(
+      document.querySelector('a[href="chapter2.xhtml#note"]')?.textContent,
+    ).toBe("note");
+    expect(document.querySelector("img")?.getAttribute("src")).toBe(
+      "missing.png",
+    );
   });
 
   it("still carries the policy, ahead of everything, when the markup will not parse", () => {
-    const broken = "<html><head><title>x</title></head><body><p>unclosed <b>text</body>";
+    const broken =
+      "<html><head><title>x</title></head><body><p>unclosed <b>text</body>";
     const output = neutraliseBookScripts(broken);
-    expect(parse(output).head.firstElementChild?.getAttribute("http-equiv")).toBe(
-      "Content-Security-Policy",
-    );
+    expect(
+      parse(output).head.firstElementChild?.getAttribute("http-equiv"),
+    ).toBe("Content-Security-Policy");
   });
 });

@@ -8,12 +8,9 @@ describe("logo shadow", () => {
     expect(contrastRatio(1, 0)).toBeCloseTo(21, 5);
   });
 
-  it("puts a dark shadow behind a logo lighter than its artwork", () => {
-    expect(logoShadowFor(0.8, 0.3).tone).toBe("dark");
-  });
-
-  it("puts a light glow behind a logo darker than its artwork", () => {
-    expect(logoShadowFor(0.05, 0.6).tone).toBe("light");
+  it("never chooses a light glow, even behind a logo darker than its artwork", () => {
+    expect(logoShadowFor(0.05, 0.6)).not.toHaveProperty("tone");
+    expect(logoShadowFor(0.8, 0.3)).not.toHaveProperty("tone");
   });
 
   it("is strongest where the logo and the artwork are closest", () => {

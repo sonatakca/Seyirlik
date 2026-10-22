@@ -3,13 +3,16 @@ import { describe, expect, it, vi } from "vitest";
 import { createAcquisitionRoutes } from "./acquisitionRoutes";
 import { ACQUISITION_JOB_TYPES } from "./acquisitionJobs";
 import { SabError } from "./sabnzbd";
-import type { SabnzbdClient } from "./sabnzbd";
+import type { SabJob, SabnzbdClient } from "./sabnzbd";
 import type {
   AcquisitionRepository,
   AcquisitionSummary,
   CreateAcquisitionInput,
 } from "./acquisitionRepository";
-import type { AcquisitionService } from "./acquisitionService";
+import {
+  AcquisitionControlError,
+  type AcquisitionService,
+} from "./acquisitionService";
 import type { IndexerRegistry } from "../indexers/indexerRegistry";
 import type { IndexerSearchService } from "../indexers/searchService";
 import type { IndexerRelease } from "../indexers/indexerTypes";
@@ -20,7 +23,9 @@ import type {
   BlocklistRepository,
 } from "../releases/blocklistRepository";
 import { profileFromIds } from "../releases/qualityProfile";
-import type { JobQueue } from "../tasks/jobQueue";
+import type { JobQueue, JobRecord } from "../tasks/jobQueue";
+import type { MissingEpisodePlan } from "./acquisitionFallback";
+import { MISSING_SEARCH_JOB_TYPE } from "./missingEpisodes";
 import type { RouteContext, RouteDefinition } from "../api/router";
 import { OwnApiError } from "../ownApiHandler";
 
@@ -81,6 +86,13 @@ function harness(
     profileId?: string | null;
     updateSucceeds?: (patch: Record<string, unknown>) => boolean;
     preBlocklisted?: AddBlocklistEntry[];
+    profiles?: Array<{ id: string; name: string }>;
+    missingEpisodes?: (
+      itemId: string,
+      season?: number,
+    ) => Promise<MissingEpisodePlan | null>;
+    profileOf?: (itemId: string) => Promise<string | undefined>;
+    jobs?: Record<string, Partial<JobRecord>>;
   } = {},
 ): Harness {
   const created: CreateAcquisitionInput[] = [];
@@ -164,6 +176,8 @@ function harness(
     reconcile: vi.fn(async () => ({ examined: 0, changed: 0 })),
     cancel: vi.fn(async () => undefined),
     blocklist: vi.fn(async () => true),
+    setPaused: vi.fn(async () => undefined),
+    move: vi.fn(async () => 0),
     ...over.service,
   };
 
@@ -177,7 +191,8 @@ function harness(
   };
 
   const policies = {
-    listProfiles: async () => [],
+    listProfiles: async () =>
+      (over.profiles ?? []).map((p) => ({ ...p, maxSizeBytes: null })),
     setMaxSize: async () => true,
     load: async (id: string) =>
       id === "p1"
@@ -215,6 +230,7 @@ function harness(
       enqueued.push(options);
       return "job-1";
     }),
+    get: async (id: string) => over.jobs?.[id] ?? null,
   } as unknown as JobQueue;
 
   const sab = {
@@ -232,6 +248,10 @@ function harness(
       search,
       policies,
       blocklist,
+      ...(over.missingEpisodes
+        ? { missingEpisodes: over.missingEpisodes }
+        : {}),
+      ...(over.profileOf ? { profileOf: over.profileOf } : {}),
     }),
     created,
     enqueued,
@@ -849,17 +869,19 @@ describe("live progress", () => {
           },
         ],
       })),
-      listHistory: vi.fn(async () => [
-        {
-          nzoId: "nzo-3",
-          name: unpacking.idempotencyKey,
-          state: "processing" as const,
-          statusText: "Extracting",
-          actionLine: "Unpacking: 3/7",
-          sizeBytes: 20 * GB,
-          source: "history" as const,
-        },
-      ]),
+      listHistory: vi.fn(
+        async (): Promise<SabJob[]> => [
+          {
+            nzoId: "nzo-3",
+            name: unpacking.idempotencyKey,
+            state: "processing" as const,
+            statusText: "Extracting",
+            actionLine: "Unpacking: 3/7",
+            sizeBytes: 20 * GB,
+            source: "history" as const,
+          },
+        ],
+      ),
     };
   }
 
@@ -882,6 +904,7 @@ describe("live progress", () => {
         downloadedBytes: 12 * GB,
         speedBytesPerSecond: 31_000_000,
         etaSeconds: 425,
+        queuePosition: 1,
       },
       {
         // Found by name, before its identifier was known.
@@ -910,6 +933,53 @@ describe("live progress", () => {
     expect(payload?.data?.speedBytesPerSecond).toBeUndefined();
     const [entry] = payload?.data?.progress as Array<Record<string, unknown>>;
     expect(entry!.speedBytesPerSecond).toBeUndefined();
+    expect(entry!.etaSeconds).toBeUndefined();
+    expect(entry!.stage).toBe("paused");
+  });
+
+  it("reports a failed zero-byte history job as failed, never successfully done", async () => {
+    const sab = live();
+    sab.listHistory.mockResolvedValue([
+      {
+        nzoId: "nzo-1",
+        name: downloading.idempotencyKey,
+        state: "failed",
+        statusText: "Failed",
+        sizeBytes: 0,
+        source: "history",
+      },
+    ]);
+    sab.queueSnapshot.mockResolvedValue({
+      paused: false,
+      speedBytesPerSecond: 0,
+      jobs: [],
+    });
+    const h = harness([downloading], { sab });
+    const { payload } = await invoke(route(h, "GET", path));
+    expect(payload?.data?.progress).toEqual([
+      {
+        acquisitionId: downloading.id,
+        stage: "failed",
+        statusText: "Failed",
+        totalBytes: 0,
+      },
+    ]);
+  });
+
+  it("reports queued downloads as paused without pausing history post-processing", async () => {
+    const h = harness([waiting, unpacking], { sab: live(true) });
+    const { payload } = await invoke(route(h, "GET", path));
+    const entries = payload?.data?.progress as Array<Record<string, unknown>>;
+    expect(entries[0]).toMatchObject({
+      acquisitionId: waiting.id,
+      stage: "paused",
+      downloadedBytes: 0,
+    });
+    expect(entries[1]).toMatchObject({
+      acquisitionId: unpacking.id,
+      stage: "processing",
+      detail: "Unpacking: 3/7",
+    });
   });
 
   it("reports an unreachable SABnzbd as a fact, not an error", async () => {
@@ -974,5 +1044,218 @@ describe("a newer download retires older failures", () => {
     const h = harness();
     await invoke(route(h, "POST", "/acquisitions"), { body: VALID_BODY });
     expect(h.repository.supersedeFailedFor).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("steering the download queue", () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+
+  it("holds and releases one download through the service", async () => {
+    const h = harness();
+    const paused = await invoke(
+      route(h, "POST", "/acquisitions/:acquisitionId/pause"),
+      {
+        params: { acquisitionId: id },
+      },
+    );
+    const resumed = await invoke(
+      route(h, "POST", "/acquisitions/:acquisitionId/resume"),
+      {
+        params: { acquisitionId: id },
+      },
+    );
+    expect([paused.status, resumed.status]).toEqual([204, 204]);
+    expect(h.service.setPaused).toHaveBeenNthCalledWith(1, id, true);
+    expect(h.service.setPaused).toHaveBeenNthCalledWith(2, id, false);
+  });
+
+  it("moves a download to a place counted from 1", async () => {
+    const h = harness([summary()], {
+      service: { move: vi.fn(async (_id: string, index: number) => index) },
+    });
+    const { status, payload } = await invoke(
+      route(h, "POST", "/acquisitions/:acquisitionId/move"),
+      { params: { acquisitionId: id }, body: { position: 3 } },
+    );
+    expect(status).toBe(200);
+    expect(h.service.move).toHaveBeenCalledWith(id, 2);
+    expect(payload?.data).toEqual({ position: 3 });
+  });
+
+  it("refuses a move without a place", async () => {
+    const h = harness();
+    await expect(
+      invoke(route(h, "POST", "/acquisitions/:acquisitionId/move"), {
+        params: { acquisitionId: id },
+        body: { position: 0 },
+      }),
+    ).rejects.toMatchObject({ statusCode: 422 });
+  });
+
+  it("says when the download is no longer in the queue", async () => {
+    const h = harness([summary()], {
+      service: {
+        setPaused: vi.fn(async () => {
+          throw new AcquisitionControlError("not-in-queue", "Not queued.");
+        }),
+      },
+    });
+    await expect(
+      invoke(route(h, "POST", "/acquisitions/:acquisitionId/pause"), {
+        params: { acquisitionId: id },
+      }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("reports an unreachable client without its message", async () => {
+    const h = harness([summary()], {
+      sab: {
+        pauseQueue: vi.fn(async () => {
+          throw new SabError("unavailable", "http://host/api?apikey=secret");
+        }),
+      },
+    });
+    const error = await invoke(
+      route(h, "POST", "/acquisitions/client/pause"),
+    ).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ statusCode: 503 });
+    expect(String((error as Error).message)).not.toContain("secret");
+  });
+
+  it("pauses and resumes the whole client", async () => {
+    const pauseQueue = vi.fn(async () => undefined);
+    const resumeQueue = vi.fn(async () => undefined);
+    const h = harness([summary()], { sab: { pauseQueue, resumeQueue } });
+    await invoke(route(h, "POST", "/acquisitions/client/pause"));
+    await invoke(route(h, "POST", "/acquisitions/client/resume"));
+    expect(pauseQueue).toHaveBeenCalledOnce();
+    expect(resumeQueue).toHaveBeenCalledOnce();
+  });
+});
+
+describe("searching for missing episodes", () => {
+  const SERIES = "22222222-2222-4222-8222-222222222222";
+  const TASK = "33333333-3333-4333-8333-333333333333";
+  const plan: MissingEpisodePlan = {
+    seriesItemId: SERIES,
+    title: "The Sopranos",
+    year: 1999,
+    seasons: [
+      {
+        season: 6,
+        whole: false,
+        episodes: [
+          { episode: 2, itemId: SERIES },
+          { episode: 3, itemId: SERIES },
+        ],
+      },
+    ],
+  };
+
+  it("is not offered without a way to read what is missing", () => {
+    expect(() => route(harness(), "POST", "/acquisitions/missing")).toThrow();
+  });
+
+  it("queues one search for the missing episodes, under the series' profile", async () => {
+    const missingEpisodes = vi.fn(async () => plan);
+    const h = harness([], {
+      missingEpisodes,
+      profileOf: async () => "p1",
+      profiles: [{ id: "p0", name: "Any" }],
+    });
+    const answer = await invoke(route(h, "POST", "/acquisitions/missing"), {
+      body: { itemId: SERIES, season: 6 },
+    });
+    expect(missingEpisodes).toHaveBeenCalledWith(SERIES, 6);
+    expect(answer.payload?.data).toEqual({ taskId: "job-1", episodes: 2 });
+    expect(h.enqueued).toEqual([
+      {
+        jobType: MISSING_SEARCH_JOB_TYPE,
+        payload: { plan, profileId: "p1" },
+        dedupeKey: `${MISSING_SEARCH_JOB_TYPE}:${SERIES}:6`,
+      },
+    ]);
+  });
+
+  it("falls back to the profile a search by hand starts on", async () => {
+    const h = harness([], {
+      missingEpisodes: async () => plan,
+      profiles: [{ id: "p0", name: "Any" }],
+    });
+    await invoke(route(h, "POST", "/acquisitions/missing"), {
+      body: { itemId: SERIES },
+    });
+    expect(h.enqueued[0]).toMatchObject({
+      payload: { profileId: "p0" },
+      dedupeKey: `${MISSING_SEARCH_JOB_TYPE}:${SERIES}:all`,
+    });
+  });
+
+  it("queues nothing when nothing is missing", async () => {
+    const h = harness([], {
+      missingEpisodes: async () => ({ ...plan, seasons: [] }),
+    });
+    const answer = await invoke(route(h, "POST", "/acquisitions/missing"), {
+      body: { itemId: SERIES },
+    });
+    expect(answer.payload?.data).toEqual({ taskId: null, episodes: 0 });
+    expect(h.enqueued).toHaveLength(0);
+  });
+
+  it("refuses a title that is not a series", async () => {
+    const h = harness([], { missingEpisodes: async () => null });
+    await expect(
+      invoke(route(h, "POST", "/acquisitions/missing"), {
+        body: { itemId: SERIES },
+      }),
+    ).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("reports what a finished search started and found nothing for", async () => {
+    const h = harness([], {
+      missingEpisodes: async () => plan,
+      jobs: {
+        [TASK]: {
+          id: TASK,
+          jobType: MISSING_SEARCH_JOB_TYPE,
+          status: "succeeded",
+          result: {
+            started: 1,
+            nothingAcceptable: 1,
+            startedReleases: [
+              { season: 6, episode: 2, release: "Sopranos.S06E02.1080p" },
+            ],
+            nothingFor: [{ season: 6, episode: 3 }],
+            coveredBy: [{ season: 5, episode: null }],
+          },
+        },
+      },
+    });
+    const answer = await invoke(
+      route(h, "GET", "/acquisitions/missing/:taskId"),
+      { params: { taskId: TASK } },
+    );
+    expect(answer.payload?.data).toEqual({
+      taskId: TASK,
+      status: "succeeded",
+      message: null,
+      result: {
+        started: [{ season: 6, episode: 2, release: "Sopranos.S06E02.1080p" }],
+        nothing: [{ season: 6, episode: 3 }],
+        covered: [{ season: 5, episode: null }],
+      },
+    });
+  });
+
+  it("does not read another kind of task through this route", async () => {
+    const h = harness([], {
+      missingEpisodes: async () => plan,
+      jobs: { [TASK]: { id: TASK, jobType: "library.scan" } },
+    });
+    await expect(
+      invoke(route(h, "GET", "/acquisitions/missing/:taskId"), {
+        params: { taskId: TASK },
+      }),
+    ).rejects.toBeInstanceOf(OwnApiError);
   });
 });

@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WORKSPACE_CLAIMING_STATES } from "../processing/jobStore";
 import { collectGarbage, createGarbageJobHandler } from "./garbageCollector";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -61,6 +62,24 @@ async function workspace(jobsRoot: string, jobId: string, ageMs: number) {
 const names = async (dir: string) => (await readdir(dir)).sort();
 
 describe("encode workspaces", () => {
+  it("keeps failed and cancelled workspaces available for retry", async () => {
+    const jobsRoot = path.join(root, "jobs");
+    await workspace(jobsRoot, "failed-job", 30 * DAY);
+    await workspace(jobsRoot, "cancelled-job", 30 * DAY);
+    await workspace(jobsRoot, "succeeded-job", 30 * DAY);
+    const states: Record<string, string> = {
+      "failed-job": "failed",
+      "cancelled-job": "cancelled",
+      "succeeded-job": "succeeded",
+    };
+    const claimed = new Set<string>(WORKSPACE_CLAIMING_STATES);
+    await collectGarbage({
+      jobsRoot,
+      isWorkspaceClaimed: async (id) => claimed.has(states[id]!),
+    });
+    expect(await names(jobsRoot)).toEqual(["cancelled-job", "failed-job"]);
+  });
+
   it("removes the workspaces no live job answers to, and only those", async () => {
     const jobsRoot = path.join(root, "jobs");
     await workspace(jobsRoot, "finished-job", 2 * DAY);
