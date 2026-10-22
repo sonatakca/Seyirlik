@@ -66,7 +66,7 @@ import {
   parseLibraryDefinitions,
 } from "./libraries/libraryRepository";
 import { createJobQueue } from "./tasks/jobQueue";
-import { createWorker } from "./tasks/worker";
+import { createWorker, type WorkerControl } from "./tasks/worker";
 import { createJobHandlers, JOB_TYPES } from "./tasks/jobHandlers";
 import {
   ownsLibrary,
@@ -280,6 +280,11 @@ export interface NativeRuntime {
   resolveRouteTemplate(pathname: string): string | undefined;
   databaseCheck(): Promise<"available" | "unavailable">;
   jobsCheck(): Promise<"available" | "unavailable">;
+  /**
+   * The job loop, for a dedicated worker process that hands itself over to a
+   * newer release between jobs. Absent when this process runs no worker.
+   */
+  worker?: WorkerControl;
   close(): Promise<void>;
 }
 
@@ -2274,6 +2279,8 @@ export async function createNativeRuntime({
       (await router.handler(request, response, context)),
 
     resolveRouteTemplate: router.resolveTemplate,
+
+    ...(runWorker ? { worker } : {}),
 
     databaseCheck: () => checkDatabaseReadiness(pool),
 

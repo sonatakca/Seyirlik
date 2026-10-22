@@ -127,6 +127,12 @@ export class DeferredJobError extends Error {
   }
 }
 
+/** What a release hand-off needs from a running worker. */
+export type WorkerControl = Pick<
+  ReturnType<typeof createWorker>,
+  "pause" | "resume" | "whenIdle" | "activeJobs"
+>;
+
 export function createWorker({
   queue,
   handlers,
@@ -138,6 +144,53 @@ export function createWorker({
   const leaseOwner = `${process.pid}-${randomUUID().slice(0, 8)}`;
   let running = false;
   let stopping = false;
+  /*
+   * Paused: take nothing new, finish what is held. What a release hand-off
+   * waits on (`releaseHandoff.ts`), and unlike `stop` it is undone by
+   * `resume` — the lane loops keep their timers and simply come back empty.
+   */
+  let paused = false;
+  /*
+   * Everything this process holds, counted from the moment a claim is asked
+   * for. A claim in flight is counted too: its row can come back after the
+   * pause, and "idle" announced in that gap would let the process exit with a
+   * job it had just taken.
+   */
+  const active = new Map<string, JobRecord>();
+  let claiming = 0;
+  let idleWaiters: Array<() => void> = [];
+
+  function isIdle(): boolean {
+    return claiming === 0 && active.size === 0;
+  }
+
+  function settle(): void {
+    if (!isIdle()) return;
+    const waiters = idleWaiters;
+    idleWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
+
+  /*
+   * Only the types this process has a handler for.
+   *
+   * A lane used to claim "everything except" its neighbours' types, which
+   * made any type added after this release this release's to fail: "No
+   * handler is registered", permanently, while a newer worker that could run
+   * it sat beside it. Releases now overlap — an older worker finishes its job
+   * after a newer server is already enqueueing — so an unknown type is left
+   * queued for a worker that knows it.
+   */
+  function claimFilter(lane: WorkerLane): ClaimFilter {
+    const excluded = new Set(lane.excludeJobTypes ?? []);
+    return {
+      jobTypes: (lane.jobTypes ?? Object.keys(handlers)).filter(
+        (type) =>
+          Object.prototype.hasOwnProperty.call(handlers, type) &&
+          !excluded.has(type),
+      ),
+    };
+  }
   /*
    * One timer per lane slot, plus one for lease reclamation.
    *
@@ -250,18 +303,26 @@ export function createWorker({
    * from taking work that belongs to another lane's resource.
    */
   async function drainLane(lane: WorkerLane): Promise<void> {
-    const filter: ClaimFilter = {
-      ...(lane.jobTypes ? { jobTypes: lane.jobTypes } : {}),
-      ...(lane.excludeJobTypes
-        ? { excludeJobTypes: lane.excludeJobTypes }
-        : {}),
-    };
+    const filter = claimFilter(lane);
 
     for (;;) {
-      if (stopping) return;
-      const job = await queue.claim(leaseOwner, leaseMs, filter);
+      if (stopping || paused) return;
+      let job: JobRecord | null = null;
+      claiming += 1;
+      try {
+        job = await queue.claim(leaseOwner, leaseMs, filter);
+        if (job) active.set(job.id, job);
+      } finally {
+        claiming -= 1;
+        if (!job) settle();
+      }
       if (!job) return;
-      await runOne(job);
+      try {
+        await runOne(job);
+      } finally {
+        active.delete(job.id);
+        settle();
+      }
     }
   }
 
@@ -367,6 +428,26 @@ export function createWorker({
       running = false;
       for (const timer of timers) clearTimeout(timer);
       timers.clear();
+    },
+
+    /** Take no new job; the ones held run to their end. */
+    pause(): void {
+      paused = true;
+    },
+
+    resume(): void {
+      paused = false;
+    },
+
+    /** Resolves once nothing is held and no claim is in flight. */
+    whenIdle(): Promise<void> {
+      if (isIdle()) return Promise.resolve();
+      return new Promise((resolve) => idleWaiters.push(resolve));
+    },
+
+    /** What this process holds now, for saying what a hand-off waits on. */
+    activeJobs(): Array<Pick<JobRecord, "id" | "jobType">> {
+      return [...active.values()].map(({ id, jobType }) => ({ id, jobType }));
     },
 
     /** Runs a single drain pass; used by tests and the one-shot CLI. */

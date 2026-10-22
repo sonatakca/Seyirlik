@@ -16,6 +16,9 @@ import {
 } from "./workerStartup";
 import { createDatabasePool } from "./ownApi/database/databasePool";
 import { parseDatabaseConfig } from "./ownApi/database/databaseConfig";
+import { validateMigrationsApplied } from "./ownApi/database/migrationRunner";
+import { parseWorkerRole } from "./ownApi/tasks/workerRole";
+import { watchReleaseHandoff } from "./releaseHandoff";
 
 /**
  * Optional dedicated worker process.
@@ -131,8 +134,12 @@ export async function startMediaWorkerFromEnv(): Promise<() => Promise<void>> {
     `Seyirlik worker running against media root: ${resolvedMediaRoot}`,
   );
 
-  const shutdown = async (signal: NodeJS.Signals) => {
-    console.info(`[Seyirlik Worker] ${signal} received; shutting down.`);
+  const shutdown = async (reason: NodeJS.Signals | "release-handoff") => {
+    console.info(
+      reason === "release-handoff"
+        ? "[Seyirlik Worker] Handing over to the new release; shutting down."
+        : `[Seyirlik Worker] ${reason} received; shutting down.`,
+    );
 
     // An encoder that is slow to take its signal must not hold the process open
     // indefinitely; the supervisor is waiting to start the replacement.
@@ -160,10 +167,64 @@ export async function startMediaWorkerFromEnv(): Promise<() => Promise<void>> {
   process.once("SIGINT", () => void shutdown("SIGINT"));
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
 
+  /*
+   * Deploying is switching the junction this process was started from; the
+   * worker notices and moves over between jobs (`releaseHandoff.ts`). Off with
+   * SEYIRLIK_RELEASE_HANDOFF=false, for a deployment that restarts it itself.
+   *
+   * Windows keeps the working directory as it was given, junction and all, so
+   * the default is right on both hosts. POSIX `getcwd` answers with the
+   * resolved path, which never moves; a POSIX deployment that switches a
+   * symlink names it in SEYIRLIK_RELEASE_POINTER.
+   */
+  if (runtime.worker && process.env.SEYIRLIK_RELEASE_HANDOFF !== "false") {
+    const handoff = await watchReleaseHandoff({
+      pointer: process.env.SEYIRLIK_RELEASE_POINTER?.trim() || process.cwd(),
+      worker: runtime.worker,
+      exit: () => shutdown("release-handoff"),
+    });
+    if (handoff.release) {
+      console.info(`[Seyirlik Worker] release: ${handoff.release}`);
+    }
+  }
+
   return runtime.close;
 }
 
-if (isMainEntrypoint(import.meta.url)) {
+/**
+ * Whether this release's worker would start here, without starting it.
+ *
+ * Run by activation from the staged release, before the junction moves: the
+ * running worker only leaves its release once the new one is current, so a
+ * release whose worker cannot start must be refused while the old one is
+ * still what `current` names. Importing this module has already loaded the
+ * worker's whole module graph; what is left is the configuration it reads
+ * first and the schema it requires.
+ */
+export async function checkWorkerRelease(): Promise<void> {
+  parseWorkerRole(process.env.SEYIRLIK_WORKER_ROLE);
+  const pool = createDatabasePool(parseDatabaseConfig(process.env));
+  try {
+    await validateMigrationsApplied(pool);
+  } finally {
+    await pool.end().catch(() => undefined);
+  }
+}
+
+if (isMainEntrypoint(import.meta.url) && process.argv.includes("--check")) {
+  checkWorkerRelease()
+    .then(() => {
+      console.info("WORKER_CHECK=ok");
+      process.exit(0);
+    })
+    .catch((error: unknown) => {
+      console.error(
+        "WORKER_CHECK=failed: " +
+          (error instanceof Error ? error.message : String(error)),
+      );
+      process.exit(1);
+    });
+} else if (isMainEntrypoint(import.meta.url)) {
   let started = false;
   installProcessSafetyNet(() => started);
 
