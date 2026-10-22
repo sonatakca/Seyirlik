@@ -13,19 +13,21 @@ interface MotionRevealProps {
 
 const easeOut: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
-function getOffset(direction: RevealDirection): { x?: number; y?: number } {
+// A whole transform string, which framer-motion hands to the compositor; its
+// x/y shorthands are written by script every frame.
+function getOffset(direction: RevealDirection): string {
   switch (direction) {
     case "down":
-      return { y: -18 };
+      return "translate(0px, -18px)";
     case "left":
-      return { x: 18 };
+      return "translate(18px, 0px)";
     case "right":
-      return { x: -18 };
+      return "translate(-18px, 0px)";
     case "none":
-      return {};
+      return "translate(0px, 0px)";
     case "up":
     default:
-      return { y: 18 };
+      return "translate(0px, 18px)";
   }
 }
 
@@ -55,8 +57,12 @@ export function MotionReveal({
   return (
     <motion.div
       className={className}
-      initial={{ opacity: 0, ...getOffset(direction) }}
-      whileInView={{ opacity: 1, x: 0, y: 0 }}
+      initial={{ opacity: 0, transform: getOffset(direction) }}
+      whileInView={{
+        opacity: 1,
+        transform: "translate(0px, 0px)",
+        transitionEnd: { transform: "none" },
+      }}
       viewport={{ once, margin: "0px 0px -8% 0px" }}
       transition={{ duration: 0.35, delay, ease: easeOut }}
     >

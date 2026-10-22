@@ -98,9 +98,18 @@ export function subscribeToBottomChrome(
 function flush(change: BottomChromeChange) {
   const root = document.documentElement;
 
+  /*
+   * A property written on the document element restyles the whole document,
+   * and a tracking change comes on every frame of a scroll: that alone was
+   * most of the main thread's work while the home page scrolled. The pile,
+   * the one reader, writes the lane it stands on to itself (see
+   * NotificationHost), so the document's value only has to be right for a
+   * pile that has not placed itself yet — which a handover or a release
+   * always rewrites.
+   */
   if (claims.size === 0) {
     root.style.removeProperty(PROPERTY);
-  } else {
+  } else if (!change.tracking || !root.style.getPropertyValue(PROPERTY)) {
     root.style.setProperty(PROPERTY, `${getBottomChrome()}px`);
   }
 

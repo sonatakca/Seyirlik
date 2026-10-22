@@ -40,11 +40,28 @@ export function PageTransition({
     );
   }
 
+  // Whole-string transforms and opacity are what framer-motion hands to the
+  // compositor (WAAPI); its y/scale shorthands are written by script every
+  // frame, and a blur over the whole page repaints it every frame. The settled
+  // page goes back to no transform, so it never becomes the containing block
+  // of a fixed child.
   return (
     <motion.div
-      initial={{ opacity: 0, y: 14, scale: 0.985, filter: "blur(6px)" }}
-      animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
-      exit={{ opacity: 0, y: -8, scale: 0.995, filter: "blur(4px)" }}
+      initial={{ opacity: 0, transform: "translateY(14px) scale(0.985)" }}
+      animate={{
+        opacity: 1,
+        transform: "translateY(0px) scale(1)",
+        transitionEnd: { transform: "none" },
+      }}
+      // From an explicit start: read back from "none", framer-motion would
+      // zero every number in the target and start the exit at scale(0).
+      exit={{
+        opacity: 0,
+        transform: [
+          "translateY(0px) scale(1)",
+          "translateY(-8px) scale(0.995)",
+        ],
+      }}
       transition={{ duration: 0.22, ease: easeOut }}
     >
       {children}

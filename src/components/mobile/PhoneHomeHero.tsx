@@ -26,6 +26,7 @@ import {
   VolumeX,
 } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
+import { DwellClock } from "../../lib/dwellClock";
 import { formatRuntime } from "../../lib/format";
 import {
   getItemDisplayMetadata,
@@ -309,7 +310,7 @@ export function PhoneHomeHero({
   const [isDragging, setIsDragging] = useState(false);
   const [isInView, setIsInView] = useState(true);
   const [isPageVisible, setIsPageVisible] = useState(true);
-  const progress = useMotionValue(0);
+  const [clock] = useState(() => new DwellClock(HERO_DWELL_MS));
   const dragRef = useRef<{
     id: number;
     startX: number;
@@ -349,8 +350,8 @@ export function PhoneHomeHero({
     position.set(0);
     frontRef.current = 0;
     setFront(0);
-    progress.set(0);
-  }, [itemsKey, position, progress]);
+    clock.reset();
+  }, [itemsKey, position, clock]);
 
   // Out of view, or behind another tab, the deck and its preview wait.
   useEffect(() => {
@@ -374,7 +375,7 @@ export function PhoneHomeHero({
     (target: number, velocity = 0) => {
       frontRef.current = target;
       setFront(target);
-      progress.set(0);
+      clock.reset();
       setIsTrailerPlaying(false);
       void animate(
         position,
@@ -382,7 +383,7 @@ export function PhoneHomeHero({
         reduceMotion ? { duration: 0 } : { ...DECK_SPRING, velocity },
       );
     },
-    [position, progress, reduceMotion],
+    [position, clock, reduceMotion],
   );
 
   // The front card's time: it runs while the deck rests in view, holds
@@ -396,14 +397,8 @@ export function PhoneHomeHero({
     isPageVisible;
   useEffect(() => {
     if (!isRunning) return undefined;
-    const remaining = (1 - progress.get()) * HERO_DWELL_MS;
-    const controls = animate(progress, 1, {
-      duration: remaining / 1000,
-      ease: "linear",
-      onComplete: () => goTo(frontRef.current + 1),
-    });
-    return () => controls.stop();
-  }, [isRunning, front, progress, goTo]);
+    return clock.start(() => goTo(frontRef.current + 1));
+  }, [isRunning, front, clock, goTo]);
 
   // The preview: asked for once the card is in front, played once per visit,
   // after the poster has had its moment.
@@ -424,14 +419,11 @@ export function PhoneHomeHero({
   useEffect(() => {
     if (!trailerUrl || !frontItem || reduceMotion) return undefined;
     if (trailersSeen.current.has(frontItem.Id)) return undefined;
-    const unsubscribe = progress.on("change", (value) => {
-      if (value >= HERO_TRAILER_DELAY_MS / HERO_DWELL_MS) {
-        trailersSeen.current.add(frontItem.Id);
-        setIsTrailerPlaying(true);
-      }
+    return clock.onReach(HERO_TRAILER_DELAY_MS / HERO_DWELL_MS, () => {
+      trailersSeen.current.add(frontItem.Id);
+      setIsTrailerPlaying(true);
     });
-    return unsubscribe;
-  }, [frontItem, progress, reduceMotion, trailerUrl]);
+  }, [frontItem, clock, reduceMotion, trailerUrl]);
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -645,9 +637,9 @@ export function PhoneHomeHero({
 
         {/* How long the front card has left. */}
         <div className={PROGRESS} aria-hidden="true">
-          <motion.div
-            className="h-full origin-left rounded-full bg-[var(--accent)]"
-            style={{ scaleX: progress }}
+          <div
+            ref={clock.attach}
+            className="h-full origin-left rounded-full bg-[var(--accent)] [transform:scaleX(0)]"
           />
         </div>
 

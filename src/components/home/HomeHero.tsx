@@ -26,6 +26,7 @@ import {
   VolumeX,
 } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
+import { DwellClock } from "../../lib/dwellClock";
 import { getItemDisplayMetadata } from "../../lib/itemMetadataPreferences";
 import {
   claimBottomChrome,
@@ -204,7 +205,7 @@ export function HomeHero({
   const [isDocumentVisible, setIsDocumentVisible] = useState(
     typeof document === "undefined" ? true : !document.hidden,
   );
-  const progress = useMotionValue(0);
+  const [clock] = useState(() => new DwellClock(HERO_DWELL_MS));
 
   const [areTrailersEnabled, setAreTrailersEnabled] = useState(
     readHeroTrailersEnabledPreference,
@@ -361,7 +362,7 @@ export function HomeHero({
       })),
     ]);
     setCopyItemId(null);
-    progress.set(0);
+    clock.reset();
     // Only a different pool (or the first measurement) re-forms the hero;
     // `layers` is read, not followed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -444,7 +445,7 @@ export function HomeHero({
       setIsTravelling(true);
       setIsTrailerPlaying(false);
       closeOverview();
-      progress.set(0);
+      clock.reset();
 
       const fromIndex = stageIndexRef.current;
       const oldQueue = queueIndices(fromIndex, total, queueCount(size));
@@ -661,7 +662,7 @@ export function HomeHero({
       setIsTravelling(false);
       busyRef.current = false;
     },
-    [closeOverview, hasOpened, items, motionFor, progress, reduceMotion, total],
+    [closeOverview, hasOpened, items, motionFor, clock, reduceMotion, total],
   );
 
   // The overview opening: one value drives the title's rise and growth, the
@@ -712,21 +713,8 @@ export function HomeHero({
 
   useEffect(() => {
     if (!isRunning) return undefined;
-    let frame = 0;
-    let last = performance.now();
-    const tick = (now: number) => {
-      const next = progress.get() + (now - last) / HERO_DWELL_MS;
-      last = now;
-      progress.set(Math.min(1, next));
-      if (next >= 1) {
-        void travel("forward");
-        return;
-      }
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [isRunning, progress, travel]);
+    return clock.start(() => void travel("forward"));
+  }, [isRunning, clock, travel]);
 
   useEffect(() => {
     const section = sectionRef.current;
@@ -771,18 +759,13 @@ export function HomeHero({
   useEffect(() => {
     if (!trailerUrl || !areTrailersEnabled || trailerDoneRef.current)
       return undefined;
-    const unsubscribe = progress.on("change", (value) => {
-      if (
-        value >= HERO_TRAILER_DELAY_MS / HERO_DWELL_MS &&
-        !trailerDoneRef.current
-      ) {
-        trailerDoneRef.current = true;
-        if (stageItem) trailersSeen.current.add(stageItem.Id);
-        setIsTrailerPlaying(true);
-      }
+    return clock.onReach(HERO_TRAILER_DELAY_MS / HERO_DWELL_MS, () => {
+      if (trailerDoneRef.current) return;
+      trailerDoneRef.current = true;
+      if (stageItem) trailersSeen.current.add(stageItem.Id);
+      setIsTrailerPlaying(true);
     });
-    return unsubscribe;
-  }, [areTrailersEnabled, progress, stageItem, trailerUrl]);
+  }, [areTrailersEnabled, clock, stageItem, trailerUrl]);
 
   useEffect(() => {
     if (!stageItem) return;
@@ -1110,9 +1093,9 @@ export function HomeHero({
             }}
             transition={{ duration: reduceMotion ? 0 : 0.35 }}
           >
-            <motion.div
-              className="h-full origin-left bg-[var(--accent)]"
-              style={{ scaleX: progress }}
+            <div
+              ref={clock.attach}
+              className="h-full origin-left bg-[var(--accent)] [transform:scaleX(0)]"
             />
           </motion.div>
         ) : null}

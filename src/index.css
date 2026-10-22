@@ -504,7 +504,7 @@ img {
     transition-duration: 0.01ms !important;
   }
 
-  .shimmer {
+  .shimmer::after {
     animation: none;
   }
 }

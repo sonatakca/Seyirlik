@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
+import { move, REST, settle } from "../lib/compositorMotion";
 import { Link } from "react-router-dom";
 import {
   getCardLogoOverlayImageUrl,
@@ -38,6 +39,9 @@ import { RestartWatchingButton } from "./RestartWatchingButton";
 import { DownloadButton } from "./offline/DownloadButton";
 import { isOfflineSupported } from "../lib/offline/offlineLibrary";
 import { WatchedIndicator } from "./WatchedIndicator";
+
+// A press starts at rest, so it names its start (see compositorMotion).
+const CARD_PRESS = { transform: [REST, move({ scale: 0.985 })] };
 
 interface MediaCardProps {
   item: MediaItem;
@@ -358,8 +362,8 @@ export function MediaCard({
           transition: { duration: 0.01 },
         }
       : {
-          initial: { opacity: 0, y: 14, scale: 0.985 },
-          whileInView: { opacity: 1, y: 0, scale: 1 },
+          initial: { opacity: 0, transform: move({ y: 14, scale: 0.985 }) },
+          whileInView: { opacity: 1, ...settle },
           viewport: { once: true, margin: "80px" },
           transition: {
             duration: 0.3,
@@ -406,7 +410,7 @@ export function MediaCard({
       <motion.div
         data-flip-key={item.Id}
         className={`h-full min-w-0 shrink-0 ${sizeClass}`}
-        whileTap={shouldReduceMotion ? undefined : { scale: 0.985 }}
+        whileTap={shouldReduceMotion ? undefined : CARD_PRESS}
         {...motionProps}
       >
         <div className="media-card-cinematic group relative grid aspect-[4/3] h-full min-w-0 grid-cols-2 scroll-ml-4 transform-gpu overflow-hidden rounded-xl border border-white/10 bg-[var(--surface)] shadow-cinematic-card transition-[border-color,box-shadow,transform] duration-300 will-change-transform hover:-translate-y-1.5 hover:scale-[1.012] hover:border-white/20 motion-reduce:hover:translate-y-0 motion-reduce:hover:scale-100">
@@ -653,7 +657,7 @@ export function MediaCard({
     <motion.div
       data-flip-key={item.Id}
       className={`h-full min-w-0 shrink-0 ${sizeClass}`}
-      whileTap={shouldReduceMotion ? undefined : { scale: 0.985 }}
+      whileTap={shouldReduceMotion ? undefined : CARD_PRESS}
       {...motionProps}
     >
       <div
