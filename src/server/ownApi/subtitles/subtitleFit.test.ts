@@ -1,10 +1,15 @@
 // @vitest-environment node
+import { rm } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   createSubtitleFitter,
   fitNeedsRetiming,
   retimeToFit,
 } from "./subtitleFit";
+import {
+  ffmpegAvailable,
+  writeSpacedAudioPackage,
+} from "./packagedAudioTestFixture";
 
 /** Dialogue with a rhythm, like the aligner's own tests use. */
 function srt(count: number, offsetSeconds = 0): string {
@@ -78,3 +83,28 @@ describe("measuring a download against the title", () => {
     await expect(fitter.measure(bytes(srt(10)))).rejects.toThrow();
   });
 });
+
+describe.skipIf(!ffmpegAvailable)(
+  "measuring against a packaged track whose name has a space in it",
+  { timeout: 120_000 },
+  () => {
+    it("listens through the package playlist and finds the offset", async () => {
+      const pkg = await writeSpacedAudioPackage(srt(120));
+      try {
+        const fitter = createSubtitleFitter({
+          ffmpegPath: "ffmpeg",
+          audio: {
+            path: pkg.playlistPath,
+            streamIndex: 0,
+            isPackagePlaylist: true,
+          },
+        });
+        const fit = await fitter.measure(bytes(srt(120, 4)));
+        expect(fit?.trusted).toBe(true);
+        expect(fit!.proposal.offsetSeconds).toBeCloseTo(-4, 0);
+      } finally {
+        await rm(pkg.root, { recursive: true, force: true });
+      }
+    });
+  },
+);

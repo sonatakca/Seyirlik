@@ -32,6 +32,8 @@ import { MINIMUM_SYNC_CONFIDENCE } from "./subtitleSync";
 export interface AudioReference {
   readonly path: string;
   readonly streamIndex: number;
+  /** `path` is a package's HLS playlist; see `readAudioEnvelope`. */
+  readonly isPackagePlaylist?: boolean;
 }
 
 export interface SubtitleFit {
@@ -87,6 +89,9 @@ export function createSubtitleFitter(options: {
             ffmpegPath: options.ffmpegPath,
             inputPath: options.audio.path,
             streamIndex: options.audio.streamIndex,
+            ...(options.audio.isPackagePlaylist
+              ? { isPackagePlaylist: true }
+              : {}),
             ...(options.signal ? { signal: options.signal } : {}),
           });
           for (const dutyCycle of SPEECH_DUTY_CYCLES) {
