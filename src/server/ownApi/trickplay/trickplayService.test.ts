@@ -23,6 +23,9 @@ import {
   createTrickplayService,
   frameIndexFromAnnouncement,
   isGeneratedMediaPath,
+  localPackagePlaylist,
+  TRICKPLAY_NOTHING_TO_SAMPLE,
+  trickplayFailureMessage,
   TrickplayUnsupportedError,
 } from "./trickplayService";
 import { TrickplayValidationError } from "./trickplayValidation";
@@ -228,10 +231,70 @@ describe("reading the frame FFmpeg has reached out of its own log", () => {
   });
 });
 
+describe("a package playlist FFmpeg can open", () => {
+  const directory = path.resolve("/media/Show/.seyirlik/video");
+
+  it("decodes each URI and resolves it against the playlist's own folder", () => {
+    const copy = localPackagePlaylist(
+      [
+        "#EXTM3U",
+        '#EXT-X-MAP:URI="../../video/2160p%20HDR.mp4",BYTERANGE="900@0"',
+        "#EXTINF:6.0,",
+        "#EXT-X-BYTERANGE:100@900",
+        "../../video/2160p%20HDR.mp4",
+        "",
+      ].join("\n"),
+      directory,
+    );
+    const media = path.resolve("/media/Show/video/2160p HDR.mp4");
+
+    expect(copy).toBe(
+      [
+        "#EXTM3U",
+        `#EXT-X-MAP:URI="${media}",BYTERANGE="900@0"`,
+        "#EXTINF:6.0,",
+        "#EXT-X-BYTERANGE:100@900",
+        media,
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("leaves a name that is not an escape exactly as written", () => {
+    expect(localPackagePlaylist("100%.mp4", directory)).toBe(
+      path.resolve(directory, "100%.mp4"),
+    );
+  });
+});
+
+describe("saying why FFmpeg failed", () => {
+  const tail =
+    "[hls @ 0x1] Error when loading first segment '/media/House of the Dragon/video/2160p%20HDR.mp4'\n" +
+    "Error opening input file /media/House of the Dragon/.seyirlik/video/2160p HDR.m3u8.\n" +
+    "Error opening input: No such file or directory\n";
+
+  it("gives a missing file its own sentence, naming no path", () => {
+    const message = trickplayFailureMessage(tail);
+
+    expect(message).toBe(
+      "Trickplay generation failed: FFmpeg could not find a file it needed.",
+    );
+    expect(message).not.toMatch(/[\\/]|House|%20/);
+  });
+
+  it("falls back to the plain sentence for anything it does not recognise", () => {
+    expect(trickplayFailureMessage("something else entirely")).toBe(
+      "Trickplay generation failed.",
+    );
+  });
+});
+
 describe("generating a set into the title's own folder", () => {
   let mediaRoot: string;
   let generatedStorage: string;
   let calls: string[][];
+  /** Each playlist FFmpeg was handed, read while the call was running. */
+  let playlistsRead: string[];
   let file: MediaFileRow | null;
   let streams: MediaStreamRow[];
   let itemKind: string;
@@ -372,6 +435,10 @@ describe("generating a set into the title's own folder", () => {
       generatedStoragePath: generatedStorage,
       runFfmpeg: async (args, onFrame) => {
         calls.push(args);
+        const input = args[args.indexOf("-i") + 1] as string;
+        if (input.endsWith(".m3u8")) {
+          playlistsRead.push(await readFile(input, "utf8"));
+        }
         if (options.announce) {
           // Which segment this call is, found by the sheet it starts numbering
           // at rather than by call order.
@@ -414,8 +481,14 @@ describe("generating a set into the title's own folder", () => {
     await mkdir(path.join(mediaRoot, "Series", "Andor", "Season 1", "src"), {
       recursive: true,
     });
+    // The sources are on disk unless a test removes them: a probed title
+    // whose source is gone is sampled from its package or not at all.
+    for (const source of [MOVIE_SOURCE, EPISODE_SOURCE]) {
+      await writeFile(path.resolve(mediaRoot, source.relativePath), "source");
+    }
     await mkdir(generatedStorage, { recursive: true });
     calls = [];
+    playlistsRead = [];
     rows = [];
     deleted = [];
     file = MOVIE_SOURCE;
@@ -442,10 +515,22 @@ describe("generating a set into the title's own folder", () => {
       probeState: "packaged",
       durationMs: null,
     };
+    // An HDR rung, whose name has a space the playlist percent-encodes.
     const rendition = () =>
-      path.join(movieTitleRoot(), "video", "2160p", "media.mp4");
+      path.join(movieTitleRoot(), "video", "2160p HDR.mp4");
     const renditionPlaylist = () =>
-      path.join(movieTitleRoot(), ".seyirlik", "video", "2160p.m3u8");
+      path.join(movieTitleRoot(), ".seyirlik", "video", "2160p HDR.m3u8");
+    const PLAYLIST = [
+      "#EXTM3U",
+      "#EXT-X-VERSION:7",
+      "#EXT-X-TARGETDURATION:6",
+      '#EXT-X-MAP:URI="../../video/2160p%20HDR.mp4",BYTERANGE="1024@0"',
+      "#EXTINF:6.000000,",
+      "#EXT-X-BYTERANGE:2048@1024",
+      "../../video/2160p%20HDR.mp4",
+      "#EXT-X-ENDLIST",
+      "",
+    ].join("\n");
     const packagedVideo = async () => ({
       path: rendition(),
       playlistPath: renditionPlaylist(),
@@ -454,6 +539,12 @@ describe("generating a set into the title's own folder", () => {
       durationSeconds: 3_600,
       colorTransfer: "smpte2084",
       colorPrimaries: "bt2020",
+    });
+
+    beforeEach(async () => {
+      await rm(path.resolve(mediaRoot, MOVIE_SOURCE.relativePath));
+      await mkdir(path.dirname(renditionPlaylist()), { recursive: true });
+      await writeFile(renditionPlaylist(), PLAYLIST);
     });
 
     it("samples the package's best rendition through its playlist, colour-corrected by its own transfer", async () => {
@@ -467,10 +558,59 @@ describe("generating a set into the title's own folder", () => {
       const args = calls[0] as string[];
       // The playlist, not the MP4: its byte ranges are the fragment index
       // the MP4 demuxer would otherwise rebuild with a seek per fragment.
-      expect(args[args.indexOf("-i") + 1]).toBe(renditionPlaylist());
+      expect(path.basename(args[args.indexOf("-i") + 1] as string)).toBe(
+        "2160p HDR.m3u8",
+      );
       expect(args[args.indexOf("-map") + 1]).toBe("0:v:0");
       expect(args[args.indexOf("-vf") + 1]).toContain("tonemap");
       expect(rows).toHaveLength(1);
+    });
+
+    /*
+     * House of the Dragon S01E09. FFmpeg opens a local playlist's URIs as
+     * literal names, so the package's own playlist sent it looking for
+     * `2160p%20HDR.mp4` — a file that does not exist.
+     */
+    it("hands FFmpeg a local copy of the playlist that names every file by its decoded path", async () => {
+      file = PACKAGED;
+      streams = [];
+      await service({ findPackagedVideo: packagedVideo }).generateForItem(
+        PACKAGED.itemId,
+      );
+
+      const input = (calls[0] as string[])[
+        (calls[0] as string[]).indexOf("-i") + 1
+      ] as string;
+      expect(input.startsWith(mediaRoot)).toBe(false);
+      expect(playlistsRead).toHaveLength(calls.length);
+      const copy = playlistsRead[0] as string;
+      expect(copy).not.toContain("%20");
+      expect(copy).toContain(
+        `#EXT-X-MAP:URI="${rendition()}",BYTERANGE="1024@0"`,
+      );
+      expect(copy).toContain(`#EXT-X-BYTERANGE:2048@1024\n${rendition()}\n`);
+      // The package's own playlist is left exactly as the browser needs it.
+      expect(await readFile(renditionPlaylist(), "utf8")).toBe(PLAYLIST);
+      // And the copy does not outlive the pass.
+      await expect(readFile(input, "utf8")).rejects.toThrow();
+    });
+
+    it("removes the local copy when FFmpeg fails too", async () => {
+      file = PACKAGED;
+      streams = [];
+      await expect(
+        service({
+          findPackagedVideo: packagedVideo,
+          write: async () => {
+            throw new Error("Trickplay generation failed.");
+          },
+        }).generateForItem(PACKAGED.itemId),
+      ).rejects.toThrow("Trickplay generation failed.");
+
+      const input = (calls[0] as string[])[
+        (calls[0] as string[]).indexOf("-i") + 1
+      ] as string;
+      await expect(readFile(input, "utf8")).rejects.toThrow();
     });
 
     it("keeps sampling the source while it is still on disk", async () => {
@@ -488,13 +628,43 @@ describe("generating a set into the title's own folder", () => {
       );
     });
 
-    it("has nothing to sample when there is no package either", async () => {
+    it("says there is nothing to sample when there is no package either", async () => {
       file = PACKAGED;
+      await expect(
+        service({
+          findPackagedVideo: async () => null,
+        }).generateForItem(PACKAGED.itemId),
+      ).rejects.toThrow(TRICKPLAY_NOTHING_TO_SAMPLE);
+      expect(calls).toEqual([]);
+    });
+
+    /*
+     * Sopranos S05E11: probed while its source existed, then packaged, with
+     * the registry's ready status lost since. FFmpeg used to be handed the
+     * deleted source path.
+     */
+    it("never hands FFmpeg a probed source that is gone", async () => {
+      await expect(
+        service({
+          findPackagedVideo: async () => null,
+        }).generateForItem(MOVIE_SOURCE.itemId),
+      ).rejects.toThrow(TRICKPLAY_NOTHING_TO_SAMPLE);
+      expect(calls).toEqual([]);
+    });
+
+    it("still returns the sheets a title already has, with nothing to sample", async () => {
+      file = PACKAGED;
+      streams = [];
+      const built = await service({
+        findPackagedVideo: packagedVideo,
+      }).generateForItem(PACKAGED.itemId);
+      calls = [];
+
       expect(
         await service({
           findPackagedVideo: async () => null,
         }).generateForItem(PACKAGED.itemId),
-      ).toBeNull();
+      ).toEqual(built);
       expect(calls).toEqual([]);
     });
   });
@@ -883,6 +1053,7 @@ describe("failure never costs a title the sheets it already had", () => {
     await mkdir(path.join(mediaRoot, "Movies", "Dune (2021)", "src"), {
       recursive: true,
     });
+    await writeFile(path.resolve(mediaRoot, SOURCE.relativePath), "source");
     file = SOURCE;
     streams = [videoStream()];
     rows = [
@@ -1075,6 +1246,7 @@ describe("legacy *.trickplay never counts as generated trickplay", () => {
     rows = [];
     calls = [];
     await mkdir(path.join(titleRoot(), "src"), { recursive: true });
+    await writeFile(path.resolve(mediaRoot, SOURCE.relativePath), "source");
     // Exactly what a Jellyfin-era library looks like.
     await mkdir(
       path.join(titleRoot(), "Dune (2021) [438631].trickplay", "320 - 10x10"),
