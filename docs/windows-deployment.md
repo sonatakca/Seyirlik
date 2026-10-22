@@ -112,16 +112,63 @@ revoked from `PUBLIC`.
 
 ## Migrations
 
-Neither service migrates. Both _validate_ that the schema is current and refuse
-to start otherwise, so a stale schema is a loud failure rather than two
-processes racing to change it. `runMigrations` takes a PostgreSQL advisory lock
-and runs in a transaction, so even two concurrent operators serialise.
+Neither service migrates. Both _validate_ that every migration their release
+ships is recorded, with the same checksum, and refuse to start otherwise, so a
+stale schema is a loud failure rather than two processes racing to change it.
+`runMigrations` takes a PostgreSQL advisory lock and runs in a transaction, so
+even two concurrent operators serialise.
+
+Migrations recorded _after_ a release's own are allowed. Releases overlap: a
+worker finishes its last job on the old release while the new server runs, the
+laptop may be switched on days after a ship, and a rollback runs older code
+against a newer schema. That only works while migrations add and never take
+away, and `migrationsAreAdditive.test.ts` fails any new migration that drops,
+renames, retypes, or newly requires a value. A removal that cannot be avoided
+takes two releases: one that stops using the thing, then one that removes it
+under a `-- contract:` line naming the first.
 
 Migrating is a deliberate deployment step, run before the services start:
 
 ```
 node --env-file=<settings> --env-file=<secrets> --import tsx scripts/run-own-api-migrations.ts
 ```
+
+## Releasing without stopping the worker
+
+Both machines start the worker from a `current` junction (NSSM's AppDirectory
+on the server, the Start Seyirlik window on the laptop), and deploying a
+release is switching that junction. The worker checks every 15 s where it
+points (`src/server/releaseHandoff.ts`). When it points at another release,
+the worker takes no new job, lets the ones it holds finish on the code they
+started with, and exits cleanly; its supervisor starts it again on the new
+release. Nothing is killed, so no encode is lost and no `running` row is left
+for the storage guard to treat as interrupted. If the junction comes back
+before then (an activation that rolled back), the worker takes work again.
+
+- `activate-release.ps1` first runs the new release's worker with `--check`,
+  which loads its whole module graph, reads its configuration and checks the
+  schema. It then restarts only the server. A worker already on a hand-off
+  release is left running; an older one is stopped and started around the
+  switch, which is needed once, for the first hand-off release.
+- `deploy/ship.sh` stages the laptop after Windows has activated, when the
+  laptop is reachable and something the worker loads has changed
+  (`deploy/msi/stage-release.ps1`). It uses a new folder per release, reuses
+  `node_modules` from a release with the same lock or runs `npm ci`, runs the
+  same `--check` with the laptop's configuration, then switches `current`.
+  Folders are never deleted.
+- A worker only claims job types it has a handler for. A type added by a newer
+  release waits in the queue for a worker that knows it, rather than being
+  failed as "No handler is registered" by an older one.
+- A worker on its way out says so in its log: `release.handoff.pending` names
+  the jobs it is waiting for, then `release.handoff.exit` (or
+  `release.handoff.cancelled`). Set `SEYIRLIK_RELEASE_HANDOFF=false` to turn it
+  off. Windows keeps the working directory as given, junction included; on
+  macOS and Linux it is always the resolved path, so a deployment there that
+  switches a symlink names it in `SEYIRLIK_RELEASE_POINTER`.
+
+A long encode keeps its worker on the old release until the encode ends. That
+is deliberate: changing the encoder in the middle of a job is what once
+destroyed a 22-epoch assembly.
 
 ## FFmpeg
 

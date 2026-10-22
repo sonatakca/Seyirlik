@@ -194,11 +194,39 @@ try {
 finally { Pop-Location }
 Write-Phase 'migrate'
 
+# --- 5b. prove the new worker would start ----------------------------------
+# The running worker is not restarted below: it leaves its release on its own
+# once `current` names another one, after the job it holds (releaseHandoff.ts).
+# So a worker that cannot start must be caught here, while `current` still
+# names the old release; afterwards it would only be found by a worker that
+# exits and does not come back. Loads the whole module graph, reads the
+# worker's configuration and checks the schema, then exits.
+Push-Location $target
+try {
+  & node $settingsArg $secretsArg --import tsx src/server/mediaWorker.ts --check
+  if ($LASTEXITCODE -ne 0) { throw "the new release's worker would not start; nothing has been switched" }
+}
+finally { Pop-Location }
+Write-Phase 'worker-check'
+
 # --- 6. switch -------------------------------------------------------------
-# Services stop worker-first so nothing is mid-job while the server goes, and
-# start server-first so the worker never races an absent API.
-& sc.exe stop $WorkerService | Out-Null
-if (-not (Wait-Svc $WorkerService 'Stopped')) { throw "$WorkerService would not stop" }
+# A worker on a release that hands itself over is left running: switching the
+# junction is the whole of its deployment, and the job it holds finishes on the
+# code it started with. One on an older release does not know to look, so it
+# is stopped and started around the switch as before — once, for the first
+# release that carries the hand-off.
+$workerHandsOff = $previous -and
+  (Test-Path -LiteralPath (Join-Path $previous 'src\server\releaseHandoff.ts')) -and
+  ((Get-SvcState $WorkerService) -eq 'Running')
+if ($workerHandsOff) {
+  Write-Output 'WORKER=left running; it moves to the new release when it holds no job'
+}
+else {
+  # Worker first so nothing is mid-job while the server goes, and started
+  # after the server so it never races an absent API.
+  & sc.exe stop $WorkerService | Out-Null
+  if (-not (Wait-Svc $WorkerService 'Stopped')) { throw "$WorkerService would not stop" }
+}
 & sc.exe stop $ServerService | Out-Null
 if (-not (Wait-Svc $ServerService 'Stopped')) { throw "$ServerService would not stop" }
 
@@ -213,7 +241,7 @@ Set-Current $target
 $failure = $null
 & sc.exe start $ServerService | Out-Null
 if (-not (Wait-Svc $ServerService 'Running')) { $failure = "$ServerService would not start" }
-if (-not $failure) {
+if (-not $failure -and -not $workerHandsOff) {
   & sc.exe start $WorkerService | Out-Null
   if (-not (Wait-Svc $WorkerService 'Running')) { $failure = "$WorkerService would not start" }
 }
@@ -237,7 +265,10 @@ if (-not $failure) {
 if ($failure) {
   Write-Output "FAILED=$failure"
 
-  & sc.exe stop $WorkerService | Out-Null; Wait-Svc $WorkerService 'Stopped' | Out-Null
+  # A worker left running goes back on its own: it sees `current` name its
+  # release again and takes work as before, or, if it had already moved over,
+  # moves back once it holds nothing.
+  if (-not $workerHandsOff) { & sc.exe stop $WorkerService | Out-Null; Wait-Svc $WorkerService 'Stopped' | Out-Null }
   & sc.exe stop $ServerService | Out-Null; Wait-Svc $ServerService 'Stopped' | Out-Null
 
   # The junction goes back only if there was one. On a first activation there
@@ -250,7 +281,7 @@ if ($failure) {
   }
 
   & sc.exe start $ServerService | Out-Null; $backUp = Wait-Svc $ServerService 'Running'
-  & sc.exe start $WorkerService | Out-Null; Wait-Svc $WorkerService 'Running' | Out-Null
+  if (-not $workerHandsOff) { & sc.exe start $WorkerService | Out-Null; Wait-Svc $WorkerService 'Running' | Out-Null }
 
   Write-Output ("ROLLED_BACK_TO=" + $previousAppDir[$ServerService])
   if (-not $backUp) { Write-Output 'ROLLBACK_INCOMPLETE: the previous version did not come back up either' }

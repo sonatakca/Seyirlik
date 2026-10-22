@@ -12,6 +12,13 @@
 #             on every request, built from a clean `git archive` so nobody's
 #             uncommitted work goes out with it.
 #
+# And the helper laptop (MSI), which runs the heavy worker and serves nothing:
+# once Windows has activated (and so migrated), the commit is staged there in
+# a new folder and its `current` junction is switched. Its worker moves over by
+# itself after the job it holds, so this never waits for an encode and never
+# stops one. A laptop that is switched off is skipped and caught up by the
+# next ship.
+#
 # When the commits touch the server, its migrations or the deploy scripts,
 # Windows goes first and the front ends wait for it (a new front end may need
 # the new API). Otherwise all three run at once.
@@ -19,6 +26,9 @@ set -euo pipefail
 
 HOST="${SEYIRLIK_WINDOWS_HOST:-sonat@100.71.12.79}"
 SCRATCH='C:\ProgramData\Seyirlik\scratch'
+MSI_HOST="${SEYIRLIK_MSI_HOST:-sonat@100.112.168.11}"
+MSI_APP='C:\Seyirlik\app'
+MSI_TMP='C:\Seyirlik\tmp'
 HOSTS=(www.seyirlik.org seyirlik.org origin.seyirlik.org playback.seyirlik.org
   www.seyirlik.sonatakca.com seyirlik.sonatakca.com frontend.sonatakca.com)
 
@@ -127,6 +137,53 @@ ship_origin() {
   log "origin: built"
 }
 
+ship_msi() {
+  local t; t=$(date +%s)
+  if ! ssh -n -o BatchMode=yes -o ConnectTimeout=8 "$MSI_HOST" "exit" >/dev/null 2>&1; then
+    log "msi: not reachable (switched off?); the next ship while it is on will stage it"
+    return 0
+  fi
+  local msi_commit
+  msi_commit=$(ssh -n -o BatchMode=yes "$MSI_HOST" "type $MSI_APP\\current\\RELEASE.json" 2>/dev/null |
+    sed -nE 's/.*"commit": *"([0-9a-f]{40})".*/\1/p')
+  if [ "$msi_commit" = "$sha" ]; then
+    log "msi: already current"
+    return 0
+  fi
+  # Staging costs the worker a few seconds between jobs and nothing else, so
+  # only what the worker cannot possibly load is let off: components, styles
+  # and tests. Everything else in src/ might be in its import graph.
+  # Captured rather than piped into `grep -q`: under pipefail an early exit
+  # there fails the pipeline and would read as "nothing changed".
+  if [ -n "$msi_commit" ] && git -C "$repo" cat-file -e "$msi_commit^{commit}" 2>/dev/null; then
+    local changed
+    changed=$(git -C "$repo" diff --name-only "$msi_commit" "$sha" |
+      grep -E '^(src/|scripts/|package\.json$|package-lock\.json$)' |
+      grep -vE '^src/components/|\.css$|\.(test|integration\.test|browser\.test)\.(ts|tsx)$' || true)
+    if [ -z "$changed" ]; then
+      log "msi: nothing the worker runs changed since ${msi_commit:0:7}"
+      return 0
+    fi
+  fi
+  # Named like the Windows release it goes with, when there is one.
+  local version
+  version=$(sed -nE 's/^  windows: STAGED=(.+)$/\1/p' "$work/windows.out" 2>/dev/null | tail -1)
+  [ -n "$version" ] || version="$(date +%Y.%m.%d)-$short"
+  local script="$MSI_TMP\\stage-release.ps1"
+  git -C "$repo" show "$sha:deploy/msi/stage-release.ps1" >"$work/stage-msi.ps1"
+  scp -q -o BatchMode=yes "$work/stage-msi.ps1" "$MSI_HOST:${MSI_TMP//\\//}/stage-release.ps1"
+  local ps="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Version $version -Commit $sha"
+  {
+    ssh -n -o BatchMode=yes "$MSI_HOST" "$ps -Prepare" 2>&1 &&
+      git -C "$repo" archive "$sha" | ssh -o BatchMode=yes "$MSI_HOST" "tar -xf - -C ${MSI_APP//\\//}/$version" 2>&1 &&
+      ssh -n -o BatchMode=yes "$MSI_HOST" "$ps" 2>&1
+    echo $? >"$work/msi.exit"
+  } | { grep --line-buffered -vE 'post-quantum|store now, decrypt later|openssh.com/pq|^[[:space:]]*$' || true; } |
+    sed -l 's/^/  msi: /'
+  since "$t" >"$work/msi.time"
+  [ "$(cat "$work/msi.exit" 2>/dev/null)" = 0 ]
+}
+
 failed=""
 check_hosts=("${HOSTS[@]}")
 if [ "$sequential" = 1 ] && [ "$frontend" = 0 ]; then
@@ -169,6 +226,13 @@ else
   wait "$origin_pid" || failed="$failed origin"
 fi
 
+# After Windows, never beside it: the laptop's worker checks the schema before
+# its junction moves, and Windows activation is what migrates.
+case "$failed" in
+  *windows*) log "msi: skipped; Windows did not activate" ;;
+  *) ship_msi || failed="$failed msi" ;;
+esac
+
 echo
 log "live commit on every hostname:"
 stale=0
@@ -186,7 +250,7 @@ done
 
 echo
 log "timings:"
-for target in windows www origin; do
+for target in windows www origin msi; do
   [ -f "$work/$target.time" ] && printf '  %-8s %ss\n' "$target" "$(cat "$work/$target.time")"
 done
 printf '  %-8s %ss\n' total "$(since "$started")"
