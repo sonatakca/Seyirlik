@@ -103,6 +103,14 @@ class Bakery {
       const animation = element.animate(keyframes, {
         duration,
         easing: "linear",
+        // `now` is usually a few ms ahead of the document timeline: framer
+        // stamps its frame with performance.now(), past the frame's own time,
+        // and a flush between frames is later still. Until the timeline
+        // reaches it the animation has not begun, and without a backwards
+        // fill the element would be drawn at its own style — the journey's
+        // end — for that frame: a title flashing at full size before it
+        // rises, or jumping ahead mid-flight when a re-bake lands.
+        fill: "backwards",
       });
       // Started at the frame it was computed for, so every element baked
       // together moves on one clock, and what the sources report mid-flight
