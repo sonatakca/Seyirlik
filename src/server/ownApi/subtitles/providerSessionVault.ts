@@ -57,26 +57,58 @@ export function deriveVaultKey(secret: string): Buffer {
   );
 }
 
+/**
+ * iv ‖ tag ‖ ciphertext of any JSON value, bound to the row id it was sealed
+ * for. The row id is the associated data, so ciphertext moved between rows
+ * does not open.
+ */
+export function sealJson(key: Buffer, rowId: string, value: unknown): Buffer {
+  const iv = randomBytes(IV_BYTES);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  cipher.setAAD(Buffer.from(rowId, "utf8"));
+  const body = Buffer.concat([
+    cipher.update(JSON.stringify(value), "utf8"),
+    cipher.final(),
+  ]);
+  return Buffer.concat([iv, cipher.getAuthTag(), body]);
+}
+
+/** The value, or null when the bytes were not sealed by this key for this row. */
+export function unsealJson(
+  key: Buffer,
+  rowId: string,
+  sealed: Buffer,
+): unknown {
+  if (sealed.length <= IV_BYTES + TAG_BYTES) return null;
+  try {
+    const decipher = createDecipheriv(
+      "aes-256-gcm",
+      key,
+      sealed.subarray(0, IV_BYTES),
+    );
+    decipher.setAAD(Buffer.from(rowId, "utf8"));
+    decipher.setAuthTag(sealed.subarray(IV_BYTES, IV_BYTES + TAG_BYTES));
+    return JSON.parse(
+      Buffer.concat([
+        decipher.update(sealed.subarray(IV_BYTES + TAG_BYTES)),
+        decipher.final(),
+      ]).toString("utf8"),
+    ) as unknown;
+  } catch {
+    return null;
+  }
+}
+
 /** iv ‖ tag ‖ ciphertext, bound to the provider id it was sealed for. */
 export function seal(
   key: Buffer,
   providerId: string,
   material: BrowserSessionMaterial,
 ): Buffer {
-  const iv = randomBytes(IV_BYTES);
-  const cipher = createCipheriv("aes-256-gcm", key, iv);
-  cipher.setAAD(Buffer.from(providerId, "utf8"));
-  const body = Buffer.concat([
-    cipher.update(
-      JSON.stringify({
-        cookie: material.cookie,
-        userAgent: material.userAgent,
-      }),
-      "utf8",
-    ),
-    cipher.final(),
-  ]);
-  return Buffer.concat([iv, cipher.getAuthTag(), body]);
+  return sealJson(key, providerId, {
+    cookie: material.cookie,
+    userAgent: material.userAgent,
+  });
 }
 
 /** The material, or null when the bytes were not sealed by this key for this provider. */
@@ -85,27 +117,16 @@ export function unseal(
   providerId: string,
   sealed: Buffer,
 ): BrowserSessionMaterial | null {
-  if (sealed.length <= IV_BYTES + TAG_BYTES) return null;
-  try {
-    const decipher = createDecipheriv(
-      "aes-256-gcm",
-      key,
-      sealed.subarray(0, IV_BYTES),
-    );
-    decipher.setAAD(Buffer.from(providerId, "utf8"));
-    decipher.setAuthTag(sealed.subarray(IV_BYTES, IV_BYTES + TAG_BYTES));
-    const text = Buffer.concat([
-      decipher.update(sealed.subarray(IV_BYTES + TAG_BYTES)),
-      decipher.final(),
-    ]).toString("utf8");
-    const value = JSON.parse(text) as Partial<BrowserSessionMaterial>;
-    return typeof value.cookie === "string" &&
-      typeof value.userAgent === "string"
-      ? { cookie: value.cookie, userAgent: value.userAgent }
-      : null;
-  } catch {
-    return null;
-  }
+  const value = unsealJson(
+    key,
+    providerId,
+    sealed,
+  ) as Partial<BrowserSessionMaterial> | null;
+  return value &&
+    typeof value.cookie === "string" &&
+    typeof value.userAgent === "string"
+    ? { cookie: value.cookie, userAgent: value.userAgent }
+    : null;
 }
 
 /**

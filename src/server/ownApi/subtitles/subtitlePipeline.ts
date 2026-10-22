@@ -57,6 +57,16 @@ export type SubtitlePipelineResult =
       fit?: SubtitleFitSummary;
     })
   | { outcome: "existing" }
+  /**
+   * A provider refused for now. `retryAfterMs` is when the soonest one said
+   * it would answer again — a download allowance renewing, for one.
+   */
+  | {
+      outcome: "error";
+      failure: "provider-rate-limited";
+      reason: string;
+      retryAfterMs?: number;
+    }
   /** Nothing usable was offered. `reason` says what the last candidate lacked. */
   | { outcome: "unavailable"; reason?: string }
   | { outcome: "needs-authentication"; providerId: string };
@@ -230,56 +240,19 @@ export async function runSubtitlePipeline(input: {
         reason: "No configured provider carries this language.",
       };
     }
-    const candidates: ScoredCandidate[] = input.resumeCandidate
-      ? [input.resumeCandidate]
-      : [];
     let pendingAuth: string | undefined;
     let failure: SubtitleFailureClass | undefined;
+    /* The soonest a rate-limited provider said it would answer again. */
+    let retryAfterMs: number | undefined;
+    const rateLimited = (after: number | null) => {
+      failure = "provider-rate-limited";
+      if (after !== null)
+        retryAfterMs =
+          retryAfterMs === undefined ? after : Math.min(retryAfterMs, after);
+    };
     /* Why the last candidate was turned down, for the operator-facing reason. */
     let lastRejection: string | undefined;
-    await phase("searching", 0, providers.length);
-    for (let i = 0; i < (input.resumeCandidate ? 0 : providers.length); i++) {
-      const provider = providers[i]!;
-      try {
-        const result = await providerCall(provider, (session, signal) =>
-          provider.search(query, session, signal),
-        );
-        if (result.outcome === "needs-authentication")
-          pendingAuth ??= provider.id;
-        else if (result.outcome === "error") failure = "provider-error";
-        else if (result.outcome === "rate-limited")
-          failure = "provider-rate-limited";
-        else if (result.outcome === "ok") {
-          for (const candidate of result.value) {
-            const assessment = assessCandidate(
-              query,
-              want,
-              candidate,
-              provider,
-            );
-            if (assessment.accepted) candidates.push(assessment.scored);
-            else lastRejection = assessment.reason;
-          }
-        }
-      } catch (error) {
-        if (error instanceof CallFailure && error.failure === "cancelled")
-          throw error;
-        failure =
-          error instanceof CallFailure
-            ? (error.failure as SubtitleFailureClass)
-            : "provider-error";
-      }
-      await phase("searching", i + 1, providers.length);
-    }
-    const ordered = orderCandidates(candidates);
     const seen = new Set<string>();
-    /*
-     * Downloads worth choosing between. Without a fitter the first is the
-     * answer, exactly as before; with one, up to `fitCandidates` are measured
-     * against the audio and the best fit wins. A candidate the audio could not
-     * be read for keeps its metadata rank.
-     */
-    const limit = input.fit ? Math.max(1, input.fitCandidates ?? 5) : 1;
     let fitter = input.fit;
     const downloaded: {
       selected: ScoredCandidate;
@@ -287,71 +260,135 @@ export async function runSubtitlePipeline(input: {
       fit: SubtitleFit | null;
     }[] = [];
     let lastSelected: ScoredCandidate | undefined;
-    for (let i = 0; i < ordered.length && downloaded.length < limit; i++) {
-      const selected = ordered[i]!;
-      const key = JSON.stringify([
-        selected.candidate.providerId,
-        selected.candidate.candidateId,
-      ]);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const provider = providers.find(
-        (p) => p.id === selected.candidate.providerId,
-      )!;
-      try {
-        await input.selected?.(selected);
-        lastSelected = selected;
-        await phase("downloading", i, ordered.length);
-        const result = await providerCall(provider, (session, signal) =>
-          provider.download(selected.candidate, session, signal),
-        );
-        if (result.outcome === "needs-authentication") {
-          pendingAuth ??= provider.id;
-          continue;
-        }
-        if (result.outcome !== "ok") {
-          if (result.outcome !== "empty")
-            failure =
-              result.outcome === "rate-limited"
-                ? "provider-rate-limited"
-                : "provider-error";
-          continue;
-        }
-        await phase("validating", 0, 1);
+    /*
+     * One provider at a time, in rank order, stopping at the first that yields
+     * a subtitle: a lower-ranked provider is a fallback, asked only when every
+     * provider above it had nothing it could install. A resumed attempt already
+     * holds its candidate and searches nothing.
+     */
+    const rounds: (SubtitleProvider | null)[] = input.resumeCandidate
+      ? [null]
+      : providers;
+    await phase("searching", 0, providers.length);
+    for (let round = 0; round < rounds.length && !downloaded.length; round++) {
+      const searched = rounds[round];
+      const candidates: ScoredCandidate[] = searched
+        ? []
+        : [input.resumeCandidate!];
+      if (searched) {
+        const provider = searched;
         try {
-          validateSubtitle(result.value);
-        } catch {
-          failure = "payload-invalid";
-          continue;
-        }
-        await phase("validating", 1, 1);
-        if (input.signal?.aborted) return { outcome: "cancelled" };
-        // The same bytes from another listing measure the same; keep the first.
-        if (
-          downloaded.some((entry) =>
-            sameBytes(entry.payload.bytes, result.value.bytes),
-          )
-        )
-          continue;
-        let fit: SubtitleFit | null = null;
-        if (fitter) {
-          try {
-            fit = await fitter.measure(result.value.bytes);
-          } catch {
-            if (input.signal?.aborted) return { outcome: "cancelled" };
-            // No audio to listen to: rank by metadata alone from here on.
-            fitter = undefined;
+          const result = await providerCall(provider, (session, signal) =>
+            provider.search(query, session, signal),
+          );
+          if (result.outcome === "needs-authentication")
+            pendingAuth ??= provider.id;
+          else if (result.outcome === "error") failure = "provider-error";
+          else if (result.outcome === "rate-limited")
+            rateLimited(result.retryAfterMs);
+          else if (result.outcome === "ok") {
+            for (const candidate of result.value) {
+              const assessment = assessCandidate(
+                query,
+                want,
+                candidate,
+                provider,
+              );
+              if (assessment.accepted) candidates.push(assessment.scored);
+              else lastRejection = assessment.reason;
+            }
           }
+        } catch (error) {
+          if (error instanceof CallFailure && error.failure === "cancelled")
+            throw error;
+          failure =
+            error instanceof CallFailure
+              ? (error.failure as SubtitleFailureClass)
+              : "provider-error";
         }
-        downloaded.push({ selected, payload: result.value, fit });
-        if (!fitter) break;
-      } catch (error) {
-        if (error instanceof CallFailure && error.failure === "cancelled")
-          throw error;
-        failure =
-          error instanceof CallFailure
-            ? (error.failure as SubtitleFailureClass)
-            : "provider-error";
+        await phase("searching", round + 1, providers.length);
+      }
+      const ordered = orderCandidates(candidates);
+      /*
+       * Downloads worth choosing between. Without a fitter the first is the
+       * answer, exactly as before; with one, up to `fitCandidates` are measured
+       * against the audio and the best fit wins — fewer where the provider
+       * counts its downloads. A candidate the audio could not be read for keeps
+       * its metadata rank.
+       */
+      const limit = input.fit
+        ? Math.max(
+            1,
+            Math.min(
+              input.fitCandidates ?? 5,
+              searched?.downloadsPerSearch ?? Infinity,
+            ),
+          )
+        : 1;
+      for (let i = 0; i < ordered.length && downloaded.length < limit; i++) {
+        const selected = ordered[i]!;
+        const key = JSON.stringify([
+          selected.candidate.providerId,
+          selected.candidate.candidateId,
+        ]);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const provider = providers.find(
+          (p) => p.id === selected.candidate.providerId,
+        )!;
+        try {
+          await input.selected?.(selected);
+          lastSelected = selected;
+          await phase("downloading", i, ordered.length);
+          const result = await providerCall(provider, (session, signal) =>
+            provider.download(selected.candidate, session, signal),
+          );
+          if (result.outcome === "needs-authentication") {
+            pendingAuth ??= provider.id;
+            continue;
+          }
+          if (result.outcome !== "ok") {
+            if (result.outcome === "rate-limited")
+              rateLimited(result.retryAfterMs);
+            else if (result.outcome !== "empty") failure = "provider-error";
+            continue;
+          }
+          await phase("validating", 0, 1);
+          try {
+            validateSubtitle(result.value);
+          } catch {
+            failure = "payload-invalid";
+            continue;
+          }
+          await phase("validating", 1, 1);
+          if (input.signal?.aborted) return { outcome: "cancelled" };
+          // The same bytes from another listing measure the same; keep the first.
+          if (
+            downloaded.some((entry) =>
+              sameBytes(entry.payload.bytes, result.value.bytes),
+            )
+          )
+            continue;
+          let fit: SubtitleFit | null = null;
+          if (fitter) {
+            try {
+              fit = await fitter.measure(result.value.bytes);
+            } catch {
+              if (input.signal?.aborted) return { outcome: "cancelled" };
+              // No audio to listen to: rank by metadata alone from here on.
+              fitter = undefined;
+            }
+          }
+          downloaded.push({ selected, payload: result.value, fit });
+          if (!fitter) break;
+        } catch (error) {
+          if (error instanceof CallFailure && error.failure === "cancelled")
+            throw error;
+          failure =
+            error instanceof CallFailure
+              ? (error.failure as SubtitleFailureClass)
+              : "provider-error";
+        }
       }
     }
     const chosen = downloaded.reduce<(typeof downloaded)[number] | undefined>(
@@ -416,6 +453,9 @@ export async function runSubtitlePipeline(input: {
           outcome: "error",
           failure,
           reason: `Every provider was tried; the last failed with ${failure}.`,
+          ...(failure === "provider-rate-limited" && retryAfterMs !== undefined
+            ? { retryAfterMs }
+            : {}),
         }
       : {
           outcome: "unavailable",

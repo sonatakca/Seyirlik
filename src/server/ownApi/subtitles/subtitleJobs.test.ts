@@ -252,3 +252,72 @@ describe("reconciling what a crash left behind", () => {
     expect(run).not.toHaveBeenCalled();
   });
 });
+
+describe("a search every provider rate-limited", () => {
+  function limited(retryAfterMs: number, open: string | null = null) {
+    const run = vi.fn(async () => ({
+      state: "failed",
+      failure: "provider-rate-limited",
+      retryAfterMs,
+    }));
+    const repository = {
+      getAttempt: vi.fn(async () => attemptRow()),
+      openAttempt: vi.fn(async () => open),
+      beginAttempt: vi.fn(async () => attemptRow({ id: "next-attempt" })),
+    } as unknown as SubtitleRepository;
+    const runLater = vi.fn(async () => {});
+    const handlers = createSubtitleJobHandlers(
+      { run } as unknown as SubtitleService,
+      repository,
+      undefined,
+      runLater,
+    );
+    const invoke = () =>
+      handlers[SUBTITLE_JOB_TYPES.run]!({
+        job: { payload: { attemptId: ATTEMPT } },
+        reportProgress: vi.fn(async () => {}),
+        isCancelled: vi.fn(async () => false),
+      } as unknown as Parameters<(typeof handlers)[string]>[0]);
+    return { invoke, repository, runLater };
+  }
+
+  it("starts a fresh attempt for when the provider renews", async () => {
+    const { invoke, repository, runLater } = limited(3 * 60 * 60 * 1000);
+    const started = Date.now();
+    await expect(invoke()).resolves.toMatchObject({
+      retryAttemptId: "next-attempt",
+    });
+    expect(repository.beginAttempt).toHaveBeenCalledWith("want");
+    const [attemptId, runAfter] = runLater.mock.calls[0] as unknown as [
+      string,
+      Date,
+    ];
+    expect(attemptId).toBe("next-attempt");
+    expect(runAfter.getTime() - started).toBeGreaterThanOrEqual(
+      3 * 60 * 60 * 1000,
+    );
+    expect(runAfter.getTime() - started).toBeLessThan(
+      3 * 60 * 60 * 1000 + 5_000,
+    );
+  });
+
+  it("waits at least a minute, and never longer than a day and an hour", async () => {
+    const soon = limited(0);
+    await soon.invoke();
+    const [, early] = soon.runLater.mock.calls[0] as unknown as [string, Date];
+    expect(early.getTime() - Date.now()).toBeGreaterThan(55_000);
+    const far = limited(30 * 24 * 60 * 60 * 1000);
+    await far.invoke();
+    const [, late] = far.runLater.mock.calls[0] as unknown as [string, Date];
+    expect(late.getTime() - Date.now()).toBeLessThanOrEqual(
+      25 * 60 * 60 * 1000,
+    );
+  });
+
+  it("leaves a want alone that already has an attempt under way", async () => {
+    const { invoke, repository, runLater } = limited(60_000, "other-attempt");
+    await invoke();
+    expect(repository.beginAttempt).not.toHaveBeenCalled();
+    expect(runLater).not.toHaveBeenCalled();
+  });
+});

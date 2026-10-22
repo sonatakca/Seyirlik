@@ -374,14 +374,26 @@ export function createSubtitleService(dependencies: {
             return { state: "validating", attention: "commit-ambiguous" };
           const failure =
             outcome.outcome === "error" ? outcome.failure : "unknown";
+          // When a provider said it would answer again, so a later attempt can wait for it.
+          const retryAfterMs =
+            outcome.outcome === "error" && "retryAfterMs" in outcome
+              ? outcome.retryAfterMs
+              : undefined;
           await work.transaction(async () => {
             await move("failed", {
               failureClass: failure,
               failureDetail: `Subtitle operation stopped: ${failure}.`,
             });
-            await work.event("failed", { failure });
+            await work.event("failed", {
+              failure,
+              ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+            });
           });
-          return { state: "failed", failure };
+          return {
+            state: "failed",
+            failure,
+            ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+          };
         },
       );
       return result ?? { state: "busy" };
