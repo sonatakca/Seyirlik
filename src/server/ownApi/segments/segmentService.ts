@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { setPriority } from "node:os";
 import path from "node:path";
+import { writeLocalPackagePlaylist } from "../../../renditions/adaptive/localPlaylist";
 import { BACKGROUND_PROCESS_NICENESS } from "../../../renditions/processExecution";
 import type { DatabasePool } from "../database/databasePool";
 import { withTransaction } from "../database/transaction";
@@ -161,9 +162,12 @@ export function createSegmentService({
    * What to listen to: the source's default audio while the source is on
    * disk, the package's default audio rendition once packaging consumed it.
    */
-  async function audioInputFor(
-    title: ProcessableTitleRow,
-  ): Promise<{ input: DecodeInput; durationSeconds: number } | null> {
+  async function audioInputFor(title: ProcessableTitleRow): Promise<{
+    input: DecodeInput;
+    durationSeconds: number;
+    /** A package's HLS playlist, which FFmpeg is handed a local copy of. */
+    isPackagePlaylist?: boolean;
+  } | null> {
     if (!title.mediaFileId || !title.relativePath) return null;
     const sourcePath = path.resolve(
       resolvedMediaRoot,
@@ -214,6 +218,7 @@ export function createSegmentService({
            */
           input: { path: packaged.playlistPath, map: "0:a:0" },
           durationSeconds: packaged.durationSeconds,
+          isPackagePlaylist: true,
         };
       }
     }
@@ -410,17 +415,37 @@ export function createSegmentService({
           });
           continue;
         }
+        /*
+         * A package's playlist goes to FFmpeg as a decoded copy, for the
+         * reason on `localPackagePlaylist`: a kept original track is named
+         * `english (original)`, and the playlist's own `%20` sent FFmpeg
+         * looking for a file that does not exist. Both windows were then
+         * silently unreadable. A copy that cannot be made leaves the playlist
+         * itself, which still opens for a name without a space.
+         */
+        const localPlaylist = audio.isPackagePlaylist
+          ? await writeLocalPackagePlaylist(audio.input.path).catch(() => null)
+          : null;
+        const input: DecodeInput = localPlaylist
+          ? { ...audio.input, path: localPlaylist.path }
+          : audio.input;
         const closing = closingWindow(audio.durationSeconds);
-        const opening = await windowOf(
-          audio.input,
-          0,
-          openingWindowSeconds(audio.durationSeconds),
-        );
-        const closingAudio = await windowOf(
-          audio.input,
-          closing.startSeconds,
-          closing.seconds,
-        );
+        let opening: AudioWindow | null;
+        let closingAudio: AudioWindow | null;
+        try {
+          opening = await windowOf(
+            input,
+            0,
+            openingWindowSeconds(audio.durationSeconds),
+          );
+          closingAudio = await windowOf(
+            input,
+            closing.startSeconds,
+            closing.seconds,
+          );
+        } finally {
+          await localPlaylist?.remove();
+        }
         if (!opening && !closingAudio) unreadable += 1;
         episodes.push({
           itemId: title.itemId,

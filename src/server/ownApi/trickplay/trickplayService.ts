@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { setPriority, tmpdir } from "node:os";
+import { rm, stat } from "node:fs/promises";
+import { setPriority } from "node:os";
 import path from "node:path";
 import { BACKGROUND_PROCESS_NICENESS } from "../../../renditions/processExecution";
 import { isHdrTransfer } from "../../../renditions/probe";
@@ -10,6 +10,10 @@ import {
   TITLE_CONTENT_DIRECTORY,
 } from "../../../renditions/adaptive/layout";
 import { TITLE_PACKAGE_DIRECTORY } from "../../../renditions/adaptive/titleLayout";
+import {
+  type LocalPlaylistCopy,
+  writeLocalPackagePlaylist,
+} from "../../../renditions/adaptive/localPlaylist";
 import {
   resolveTitleRoot,
   titleRootLayoutForKind,
@@ -166,46 +170,6 @@ export class TrickplayUnsupportedError extends Error {
  */
 export const TRICKPLAY_NOTHING_TO_SAMPLE =
   "Trickplay generation failed: the source file is gone and no ready package was found to sample instead.";
-
-/**
- * A package playlist rewritten so FFmpeg can open it from anywhere.
- *
- * The packager writes each URI percent-encoded, because browsers fetch them —
- * an HDR rung is named `2160p HDR`, so its segment is `2160p%20HDR.mp4`. FFmpeg
- * opens a local playlist's URIs as literal file names and never decodes them,
- * so it looked for a file called `2160p%20HDR.mp4` and failed. The copy names
- * every file by its decoded, absolute path; byte ranges and tags are unchanged.
- */
-export function localPackagePlaylist(
-  playlist: string,
-  playlistDirectory: string,
-): string {
-  const localPath = (uri: string): string => {
-    // Anything with a scheme is not a file beside the playlist.
-    if (/^[a-z][a-z0-9+.-]+:/i.test(uri)) return uri;
-    let decoded = uri;
-    try {
-      decoded = decodeURIComponent(uri);
-    } catch {
-      // A lone `%` is not an escape; the name is then exactly as written.
-    }
-    return path.resolve(playlistDirectory, ...decoded.split("/"));
-  };
-  return playlist
-    .split("\n")
-    .map((line) => {
-      const content = line.trim();
-      if (content === "") return line;
-      if (content.startsWith("#")) {
-        return line.replace(
-          /URI="([^"]*)"/g,
-          (_, uri: string) => `URI="${localPath(uri)}"`,
-        );
-      }
-      return localPath(content);
-    })
-    .join("\n");
-}
 
 /**
  * The reason FFmpeg gave, in words that are safe to store on a job.
@@ -837,28 +801,14 @@ export function createTrickplayService({
 
       /*
        * A package's playlist goes to FFmpeg as a decoded copy in local temp
-       * storage — see `localPackagePlaylist`. Local rather than beside the
-       * original, which is on the media volume, and removed however the pass
-       * ends.
+       * storage — see `localPackagePlaylist` — removed however the pass ends.
        */
-      let localPlaylistDirectory: string | null = null;
+      let localPlaylist: LocalPlaylistCopy | null = null;
       try {
         let inputPath = input.path;
         if (input.isPackagePlaylist) {
-          localPlaylistDirectory = await mkdtemp(
-            path.join(tmpdir(), "seyirlik-trickplay-"),
-          );
-          inputPath = path.join(
-            localPlaylistDirectory,
-            path.basename(input.path),
-          );
-          await writeFile(
-            inputPath,
-            localPackagePlaylist(
-              await readFile(input.path, "utf8"),
-              path.dirname(input.path),
-            ),
-          );
+          localPlaylist = await writeLocalPackagePlaylist(input.path);
+          inputPath = localPlaylist.path;
         }
         const outcomes = await Promise.allSettled(
           segments.map((segment, index) =>
@@ -940,12 +890,7 @@ export function createTrickplayService({
         await discardTrickplayStaging(staging);
         throw error;
       } finally {
-        if (localPlaylistDirectory) {
-          await rm(localPlaylistDirectory, {
-            recursive: true,
-            force: true,
-          }).catch(() => undefined);
-        }
+        await localPlaylist?.remove();
       }
 
       /*
