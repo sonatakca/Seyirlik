@@ -23,7 +23,6 @@ import {
   createTrickplayService,
   frameIndexFromAnnouncement,
   isGeneratedMediaPath,
-  localPackagePlaylist,
   TRICKPLAY_NOTHING_TO_SAMPLE,
   trickplayFailureMessage,
   TrickplayUnsupportedError,
@@ -228,42 +227,6 @@ describe("reading the frame FFmpeg has reached out of its own log", () => {
     ]) {
       expect(frameIndexFromAnnouncement(other)).toBeNull();
     }
-  });
-});
-
-describe("a package playlist FFmpeg can open", () => {
-  const directory = path.resolve("/media/Show/.seyirlik/video");
-
-  it("decodes each URI and resolves it against the playlist's own folder", () => {
-    const copy = localPackagePlaylist(
-      [
-        "#EXTM3U",
-        '#EXT-X-MAP:URI="../../video/2160p%20HDR.mp4",BYTERANGE="900@0"',
-        "#EXTINF:6.0,",
-        "#EXT-X-BYTERANGE:100@900",
-        "../../video/2160p%20HDR.mp4",
-        "",
-      ].join("\n"),
-      directory,
-    );
-    const media = path.resolve("/media/Show/video/2160p HDR.mp4");
-
-    expect(copy).toBe(
-      [
-        "#EXTM3U",
-        `#EXT-X-MAP:URI="${media}",BYTERANGE="900@0"`,
-        "#EXTINF:6.0,",
-        "#EXT-X-BYTERANGE:100@900",
-        media,
-        "",
-      ].join("\n"),
-    );
-  });
-
-  it("leaves a name that is not an escape exactly as written", () => {
-    expect(localPackagePlaylist("100%.mp4", directory)).toBe(
-      path.resolve(directory, "100%.mp4"),
-    );
   });
 });
 

@@ -1,8 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { mediaUriFromPlaylist } from "../../../renditions/adaptive/titleLayout";
 import type { DatabasePool } from "../database/databasePool";
 import type { ProcessableTitleRow } from "../catalogue/catalogueRepository";
 import { createSegmentService } from "./segmentService";
@@ -198,6 +206,110 @@ describe.skipIf(!ffmpegAvailable)(
         ),
       ).toBe(true);
     });
+
+    /*
+     * A kept original track is named `english (original)`, and the package
+     * playlist percent-encodes the space for browsers. FFmpeg read the `%20`
+     * literally, so every window of such a title was silently unreadable.
+     */
+    it("hears a packaged track whose name has a space in it", async () => {
+      const stem = "english (original)";
+      const packages = new Map<string, string>();
+      for (const index of layout.keys()) {
+        const titleRoot = path.join(root, `packaged${index + 1}`);
+        const playlistDirectory = path.join(titleRoot, ".seyirlik", "audio");
+        await mkdir(path.join(titleRoot, "audio"), { recursive: true });
+        await mkdir(playlistDirectory, { recursive: true });
+        const encoded = spawnSync(
+          "ffmpeg",
+          [
+            "-hide_banner",
+            "-v",
+            "error",
+            "-i",
+            path.join(root, `episode${index + 1}.wav`),
+            "-c:a",
+            "aac",
+            "-f",
+            "hls",
+            "-hls_segment_type",
+            "fmp4",
+            "-hls_flags",
+            "single_file",
+            "-hls_time",
+            "6",
+            "-hls_playlist_type",
+            "vod",
+            path.join(titleRoot, `${stem}.m3u8`),
+          ],
+          { stdio: "ignore" },
+        );
+        expect(encoded.status).toBe(0);
+        await rename(
+          path.join(titleRoot, `${stem}.m4s`),
+          path.join(titleRoot, "audio", `${stem}.m4a`),
+        );
+        // Pointed at the published file exactly the way the packager does.
+        const playlist = (
+          await readFile(path.join(titleRoot, `${stem}.m3u8`), "utf8")
+        )
+          .split(`${stem}.m4s`)
+          .join(mediaUriFromPlaylist(`audio/${stem}.m4a`));
+        expect(playlist).toContain("english%20(original).m4a");
+        const playlistPath = path.join(playlistDirectory, `${stem}.m3u8`);
+        await writeFile(playlistPath, playlist);
+        packages.set(`file-${index + 1}`, playlistPath);
+      }
+
+      const service = createSegmentService({
+        pool: recordingPool([]),
+        mediaRoot: root,
+        catalogue: {
+          listProcessableTitles: async () =>
+            layout.map(
+              (_, index) =>
+                ({
+                  itemId: `episode-${index + 1}`,
+                  kind: "episode",
+                  title: `Episode ${index + 1}`,
+                  sortTitle: `Episode ${index + 1}`,
+                  indexNumber: index + 1,
+                  seasonId: "season-1",
+                  mediaFileId: `file-${index + 1}`,
+                  // Never written: packaging consumed the source.
+                  relativePath: `gone${index + 1}.mkv`,
+                  probeState: "probed",
+                  durationMs: null,
+                  runtimeMs: null,
+                  itemMissingSince: null,
+                  fileMissingSince: null,
+                }) as unknown as ProcessableTitleRow,
+            ),
+          listChapters: async () => [],
+          listStreams: async () => [],
+          getFileById: async (id) =>
+            ({ id, sizeBytes: "1", mtimeMs: "1" }) as never,
+        },
+        findPackagedAudio: async (media) => ({
+          path: "unused",
+          playlistPath: packages.get(media.mediaId) as string,
+          durationSeconds: (() => {
+            const episode = layout[Number(media.mediaId.slice(5)) - 1]!;
+            return episode.lead + 45 + episode.body + 30;
+          })(),
+        }),
+      });
+
+      expect(await service.detectSeason("season-1")).toMatchObject({
+        episodes: 3,
+        unreadable: 0,
+        intros: 3,
+      });
+      // The package's own playlists are left exactly as the browser needs them.
+      for (const playlistPath of packages.values()) {
+        expect(await readFile(playlistPath, "utf8")).toContain("%20");
+      }
+    });
   },
 );
 
@@ -247,7 +359,9 @@ describe("listening to a title whose source is gone", () => {
       await service.detectSeason("season-1");
 
       // The playlist's byte ranges are the fragment index the MP4 demuxer
-      // would otherwise rebuild with a seek per fragment, through Drive.
+      // would otherwise rebuild with a seek per fragment, through Drive. It is
+      // not on disk here, so no decoded copy can be made and the playlist
+      // itself is what FFmpeg is given.
       expect(decoded.length).toBeGreaterThan(0);
       for (const input of decoded) {
         expect(input).toEqual({
