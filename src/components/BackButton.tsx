@@ -154,7 +154,11 @@ export function BackButton({
           aria-label={hasLabel ? trimmedLabel : fallbackLabel}
         >
           <ChevronLeft size={16} strokeWidth={2.4} />
-          {hasLabel ? <span>{trimmedLabel}</span> : null}
+          {hasLabel ? (
+            <AnimatedWidth value={trimmedLabel}>
+              <AnimatedText value={trimmedLabel} />
+            </AnimatedWidth>
+          ) : null}
         </button>
       </span>
     );

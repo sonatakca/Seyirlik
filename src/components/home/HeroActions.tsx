@@ -6,6 +6,8 @@ import { useLanguage } from "../../i18n/LanguageContext";
 import type { TranslationKey } from "../../i18n/translations";
 import { formatRuntime } from "../../lib/format";
 import type { MediaItem } from "../../lib/types";
+import { AnimatedText } from "../AnimatedText";
+import { AnimatedWidth } from "../AnimatedWidth";
 import { canStartOverFromHero } from "../HeroSection";
 import { FavouriteButton } from "../FavouriteButton";
 import { DownloadButton } from "../offline/DownloadButton";
@@ -212,12 +214,21 @@ export function HeroActions({
             />
           ) : null}
           <Play size={18} fill="currentColor" className="relative shrink-0" />
-          <span className="relative truncate">{shortPlayLabel}</span>
+          {/* No truncating wrapper: its clip would cut the outgoing words. */}
+          <AnimatedWidth value={shortPlayLabel}>
+            <AnimatedText value={shortPlayLabel} />
+          </AnimatedWidth>
           {progress ? (
             <span
               className={`relative shrink-0 text-xs text-zinc-600 ${PLAY_TIME_LEFT}`}
             >
-              {t("hero.timeLeft").replace("{time}", progress.left)}
+              <AnimatedWidth
+                value={t("hero.timeLeft").replace("{time}", progress.left)}
+              >
+                <AnimatedText
+                  value={t("hero.timeLeft").replace("{time}", progress.left)}
+                />
+              </AnimatedWidth>
             </span>
           ) : null}
         </Link>
@@ -230,14 +241,18 @@ export function HeroActions({
           className={`${action} hero-dock-restart`}
         >
           <RotateCcw size={16} />
-          <span>{t("details.restartWatching")}</span>
+          <AnimatedWidth value={t("details.restartWatching")}>
+            <AnimatedText value={t("details.restartWatching")} />
+          </AnimatedWidth>
         </Link>
       ) : null}
       <div className="hero-dock-row">
         {onShowDetails ? (
           <button type="button" onClick={onShowDetails} className={action}>
             <Info size={16} />
-            <span>{t("common.details")}</span>
+            <AnimatedWidth value={t("common.details")}>
+              <AnimatedText value={t("common.details")} />
+            </AnimatedWidth>
           </button>
         ) : (
           <Link
@@ -246,7 +261,9 @@ export function HeroActions({
             className={action}
           >
             <Info size={16} />
-            <span>{t("common.details")}</span>
+            <AnimatedWidth value={t("common.details")}>
+              <AnimatedText value={t("common.details")} />
+            </AnimatedWidth>
           </Link>
         )}
         <FavouriteButton
@@ -266,7 +283,9 @@ export function HeroActions({
             className={action}
           >
             <AlignLeft size={16} />
-            <span>{t("details.overview")}</span>
+            <AnimatedWidth value={t("details.overview")}>
+              <AnimatedText value={t("details.overview")} />
+            </AnimatedWidth>
             <span
               aria-hidden="true"
               className="hero-dock-story-dot"

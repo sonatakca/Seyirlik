@@ -12,6 +12,8 @@ import {
 import type { MediaItem } from "../lib/types";
 import { isItemCompleted } from "../lib/watchStatus";
 import { Tooltip } from "./ui/Tooltip";
+import { AnimatedText } from "./AnimatedText";
+import { AnimatedWidth } from "./AnimatedWidth";
 
 type WatchedStatusScope = "item" | "season" | "show";
 type WatchedStatusAction = "mark" | "remove";
@@ -171,7 +173,11 @@ export function WatchedStatusButton({
         ) : (
           <EyeOff size={iconSize} />
         )}
-        {showLabel ? <span>{shortLabel ?? buttonLabel}</span> : null}
+        {showLabel ? (
+          <AnimatedWidth value={shortLabel ?? buttonLabel}>
+            <AnimatedText value={shortLabel ?? buttonLabel} />
+          </AnimatedWidth>
+        ) : null}
       </button>
     </Tooltip>
   );
