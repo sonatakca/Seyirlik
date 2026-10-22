@@ -327,7 +327,7 @@ export function DesktopPlayerPage() {
               className="absolute inset-0 z-10 grid place-items-center"
             >
               <div className="flex items-center justify-center">
-                <LoadingSpinner label="" variant="brand" />
+                <LoadingSpinner label="" />
               </div>
             </motion.div>
           </motion.div>

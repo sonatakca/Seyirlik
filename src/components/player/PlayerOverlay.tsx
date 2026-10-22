@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useLanguage } from "../../i18n/LanguageContext";
-import { BrandLoadingMark } from "../LoadingSpinner";
+import { LoadingRing } from "../LoadingRing";
 import { Tooltip } from "../ui/Tooltip";
 
 interface SeekFeedbackItem {
@@ -375,7 +375,7 @@ export function PlayerOverlay({
                 ease: CENTER_STATE_EASE,
               }}
             >
-              <BrandLoadingMark className="w-24 sm:w-32" />
+              <LoadingRing size={80} stroke={2.5} />
             </motion.span>
           ) : (
             <motion.span
