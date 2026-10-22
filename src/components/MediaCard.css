@@ -1,4 +1,4 @@
-.media-card-cinematic {
+.media-card-cinematic:not(.media-card-lifted) {
   z-index: 0;
   box-shadow: var(--shadow-media-card-rest);
   transition-duration: 300ms, 800ms, 300ms;
@@ -7,11 +7,54 @@
 }
 
 .shadow-cinematic-card-hover,
-.media-card-cinematic:hover,
-.media-card-cinematic:focus-within {
+.media-card-cinematic:not(.media-card-lifted):hover,
+.media-card-cinematic:not(.media-card-lifted):focus-within {
   z-index: 10;
   box-shadow: var(--shadow-cinematic-card-hover);
   transition-duration: 300ms, 450ms, 300ms;
+}
+
+/*
+ * A media card's hover, on the compositor: the card moves with a transform,
+ * and its shadow and brighter edge are a layer behind it (CardLiftShadow)
+ * that fades with opacity and moves with the same transform. Nothing here
+ * repaints while it plays. The wrapper raises the hovered card over its
+ * neighbours, as the card's own z-index used to.
+ */
+.media-card-lifted {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.media-card-lift-shadow {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  border: 1px solid rgba(255, 255, 255, 0.112);
+  border-radius: 0.75rem;
+  box-shadow:
+    0 38px 120px rgba(0, 0, 0, 0.58),
+    0 16px 38px rgba(0, 0, 0, 0.42),
+    0 0 34px color-mix(in srgb, var(--accent) 12%, transparent);
+  opacity: 0;
+  transition:
+    opacity 800ms ease-out,
+    transform 300ms ease;
+}
+
+.media-card-lifted:is(:hover, :focus-within) + .media-card-lift-shadow {
+  opacity: 1;
+  transition-duration: 450ms, 300ms;
+}
+
+.media-card-lifted:hover + .media-card-lift-shadow {
+  transform: var(--card-lift);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .media-card-lifted:hover + .media-card-lift-shadow {
+    transform: none;
+  }
 }
 
 /*

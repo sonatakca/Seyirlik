@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
+import { move, settle } from "../../lib/compositorMotion";
 import { Search, SlidersHorizontal } from "lucide-react";
 import { useLocation, useParams } from "react-router-dom";
 import {
@@ -713,8 +714,8 @@ export function MobileLibraryPage({
         ) : (
           <motion.h1
             className="mx-auto max-w-[84vw] text-center text-3xl font-black tracking-tight text-white drop-shadow-[0_16px_38px_rgba(0,0,0,0.9)]"
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
+            initial={{ opacity: 0, transform: move({ y: 6 }) }}
+            animate={{ opacity: 1, ...settle }}
             transition={{
               duration: 0.5,
               ease: [0.16, 1, 0.3, 1],

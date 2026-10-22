@@ -9,13 +9,7 @@ import {
   type PointerEvent,
   type RefObject,
 } from "react";
-import {
-  animate,
-  useMotionValue,
-  useReducedMotion,
-  useTransform,
-  type MotionValue,
-} from "framer-motion";
+import { useReducedMotion } from "framer-motion";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useLanguage } from "../../../i18n/LanguageContext";
 import {
@@ -26,6 +20,15 @@ import {
   ShowsGlyph,
   type GlyphProps,
 } from "./TabBarGlyphs";
+import {
+  beamTransform,
+  cubicBezier,
+  edgesAt,
+  flightKeyframes,
+  lampTransform,
+  type Edges,
+  type Flight,
+} from "./tabBeam";
 
 export interface TabDef {
   key: string;
@@ -65,7 +68,7 @@ export function slotEdges(
 
 // A sine ease-out: it leaves at a little over one and a half times its mean
 // speed, so it sets off briskly without snapping away.
-const glide = [0.61, 1, 0.88, 1] as const;
+const glide = cubicBezier(0.61, 1, 0.88, 1);
 
 // Every trip takes the same time, one tab or four: a longer one simply
 // travels faster. The leading edge arrives first, the trailing edge after.
@@ -75,11 +78,12 @@ const LAG = 0.48;
 export interface TabBarMotion {
   barRef: RefObject<HTMLElement>;
   width: number;
-  /** The indicator's two edges. The leading one leaves first, the trailing one follows. */
-  left: MotionValue<number>;
-  right: MotionValue<number>;
-  /** The indicator's centre, for anything carried along with it. */
-  centre: MotionValue<number>;
+  /** The beam, one slot wide; moved and stretched by transform (see tabBeam). */
+  beamRef: RefObject<HTMLDivElement>;
+  /** The lamp inside the beam, kept at its own width. */
+  lampRef: RefObject<HTMLDivElement>;
+  /** One tab's width, which is the beam's own. */
+  slot: number;
   activeIndex: number;
   /** The tab under a scrubbing finger, or the active one. */
   litIndex: number;
@@ -110,9 +114,41 @@ export function useTabBarMotion({ tabs, inset }: Options): TabBarMotion {
   const reduced = Boolean(useReducedMotion());
   const barRef = useRef<HTMLElement>(null);
   const [width, setWidth] = useState(0);
-  const left = useMotionValue(0);
-  const right = useMotionValue(0);
-  const centre = useTransform(() => (left.get() + right.get()) / 2);
+  const beamRef = useRef<HTMLDivElement>(null);
+  const lampRef = useRef<HTMLDivElement>(null);
+  const slot = width > 0 ? (width - inset * 2) / tabs.length : 0;
+  // Where the beam's edges rest, or the journey they are on.
+  const edgesRef = useRef<Edges>([0, 0]);
+  const flightRef = useRef<{ flight: Flight; animations: Animation[] } | null>(
+    null,
+  );
+
+  /** The edges as drawn now: part way along a journey, or at rest. */
+  const currentEdges = useCallback((): Edges => {
+    const current = flightRef.current;
+    if (!current) return edgesRef.current;
+    const elapsed = (performance.now() - current.flight.startedAt) / 1000;
+    return edgesAt(current.flight, elapsed, glide);
+  }, []);
+
+  /** Stops a journey where it is and draws the beam at `edges`. */
+  const place = useCallback(
+    (edges: Edges) => {
+      for (const animation of flightRef.current?.animations ?? []) {
+        animation.cancel();
+      }
+      flightRef.current = null;
+      edgesRef.current = edges;
+      if (slot <= 0) return;
+      if (beamRef.current) {
+        beamRef.current.style.transform = beamTransform(edges, slot);
+      }
+      if (lampRef.current) {
+        lampRef.current.style.transform = lampTransform(edges, slot);
+      }
+    },
+    [slot],
+  );
   const activeIndex = activeTabIndex(tabs, location.pathname);
   const [scrubIndex, setScrubIndex] = useState<number | null>(null);
   const placedRef = useRef<{ index: number; width: number } | null>(null);
@@ -136,21 +172,51 @@ export function useTabBarMotion({ tabs, inset }: Options): TabBarMotion {
   // gathers itself on arrival, rather than gliding as a rigid block.
   const sendTo = useCallback(
     (index: number, instant: boolean) => {
-      const [toLeft, toRight] = target(index);
-      const fromLeft = left.get();
-      if (instant || reduced) {
-        left.set(toLeft);
-        right.set(toRight);
+      const to = target(index);
+      const from = currentEdges();
+      place(from);
+      const beam = beamRef.current;
+      const lamp = lampRef.current;
+      if (
+        instant ||
+        reduced ||
+        slot <= 0 ||
+        !beam ||
+        !lamp ||
+        typeof beam.animate !== "function"
+      ) {
+        place(to);
         return;
       }
-      const rightward = toLeft > fromLeft;
-      animate(left, toLeft, { duration: rightward ? LAG : LEAD, ease: glide });
-      animate(right, toRight, {
-        duration: rightward ? LEAD : LAG,
-        ease: glide,
-      });
+      const rightward = to[0] > from[0];
+      const flight: Flight = {
+        from,
+        to,
+        durations: rightward ? [LAG, LEAD] : [LEAD, LAG],
+        startedAt: performance.now(),
+      };
+      const frames = flightKeyframes(flight, slot, glide);
+      const timing = { duration: frames.durationMs, easing: "linear" } as const;
+      // The flight's end is drawn underneath before it starts, so nothing
+      // jumps when the animations finish and are let go.
+      edgesRef.current = to;
+      beam.style.transform = beamTransform(to, slot);
+      lamp.style.transform = lampTransform(to, slot);
+      const animations = [
+        beam.animate(frames.beam, timing),
+        lamp.animate(frames.lamp, timing),
+      ];
+      flightRef.current = { flight, animations };
+      void animations[0]!.finished.then(
+        () => {
+          if (flightRef.current?.animations === animations) {
+            flightRef.current = null;
+          }
+        },
+        () => undefined,
+      );
     },
-    [left, reduced, right, target],
+    [currentEdges, place, reduced, slot, target],
   );
 
   useLayoutEffect(() => {
@@ -235,10 +301,7 @@ export function useTabBarMotion({ tabs, inset }: Options): TabBarMotion {
       const [l, r] = target(Math.max(0, activeIndex));
       const half = (r - l) / 2;
       const clamped = Math.min(width - inset - half, Math.max(inset + half, x));
-      left.stop();
-      right.stop();
-      left.set(clamped - half);
-      right.set(clamped + half);
+      place([clamped - half, clamped + half]);
       const next = indexAt(x);
       setScrubIndex((current) => (current === next ? current : next));
     },
@@ -282,9 +345,9 @@ export function useTabBarMotion({ tabs, inset }: Options): TabBarMotion {
   return {
     barRef,
     width,
-    left,
-    right,
-    centre,
+    beamRef,
+    lampRef,
+    slot,
     activeIndex,
     litIndex: scrubIndex ?? activeIndex,
     scrubbing: scrubIndex !== null,

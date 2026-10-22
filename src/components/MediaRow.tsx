@@ -15,6 +15,8 @@ import { MediaCard } from "./MediaCard";
 import { AnimatedText } from "./AnimatedText";
 import { AnimatedWidth } from "./AnimatedWidth";
 import { MotionReveal } from "./MotionReveal";
+import { useFlipLayout } from "../hooks/useFlipLayout";
+import { move, REST } from "../lib/compositorMotion";
 
 interface MediaRowProps {
   title: string;
@@ -40,6 +42,11 @@ export function MediaRow({
   const { t } = useLanguage();
   const shouldReduceMotion = useReducedMotion();
   const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const cardsRef = useRef<HTMLDivElement>(null);
+  // A cleared card leaves its neighbours to close the gap: a measured FLIP on
+  // the compositor. framer-motion's layout projection did this on the main
+  // thread, and re-ran over every card whenever the row's gutter was measured.
+  useFlipLayout(cardsRef, items.map((item) => item.Id).join("|"));
   const headerRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const canScrollLeftRef = useRef(false);
@@ -287,20 +294,21 @@ export function MediaRow({
                 style={{ width: `${rowGutter}px` }}
               />
 
-              <div className="flex gap-3 sm:gap-5">
-                <AnimatePresence initial={false}>
+              <div ref={cardsRef} className="relative flex gap-3 sm:gap-5">
+                {/* A leaving card steps out of the row at once, so the rest
+                    close up together with its exit. */}
+                <AnimatePresence initial={false} mode="popLayout">
                   {items.map((item, index) => (
                     <motion.div
                       key={item.Id}
                       data-media-row-card
-                      layout={onClearContinueWatching ? "position" : undefined}
                       exit={
                         onClearContinueWatching
                           ? {
                               opacity: 0,
-                              x: shouldReduceMotion ? 0 : -36,
-                              scale: shouldReduceMotion ? 1 : 0.96,
-                              filter: shouldReduceMotion ? "none" : "blur(8px)",
+                              transform: shouldReduceMotion
+                                ? REST
+                                : [REST, move({ x: -36, scale: 0.96 })],
                             }
                           : undefined
                       }

@@ -6,6 +6,7 @@ import {
   useReducedMotion,
   type HTMLMotionProps,
 } from "framer-motion";
+import { move, REST, settle } from "../../lib/compositorMotion";
 import { Loader2, Search, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useLanguage } from "../../i18n/LanguageContext";
@@ -380,17 +381,15 @@ export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {
         exit: { opacity: 0 },
       }
     : {
-        initial: { opacity: 0, y: -18, scale: 0.97 },
+        initial: { opacity: 0, transform: move({ y: -18, scale: 0.97 }) },
         animate: {
           opacity: 1,
-          y: 0,
-          scale: 1,
+          ...settle,
           transition: { type: "spring", bounce: 0, duration: 0.38 },
         },
         exit: {
           opacity: 0,
-          y: -10,
-          scale: 0.985,
+          transform: [REST, move({ y: -10, scale: 0.985 })],
           transition: { duration: 0.14, ease: [0.4, 0, 1, 1] as const },
         },
       };
@@ -445,9 +444,12 @@ export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {
                 {status === "loading" ? (
                   <motion.span
                     key="search-loading"
-                    initial={{ opacity: 0, scale: 0.6 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.6 }}
+                    initial={{ opacity: 0, transform: move({ scale: 0.6 }) }}
+                    animate={{ opacity: 1, ...settle }}
+                    exit={{
+                      opacity: 0,
+                      transform: [REST, move({ scale: 0.6 })],
+                    }}
                     transition={{ duration: 0.16 }}
                     className="flex shrink-0"
                   >
@@ -514,11 +516,11 @@ export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {
                               initial={
                                 shouldReduceMotion
                                   ? { opacity: 0 }
-                                  : { opacity: 0, y: 8 }
+                                  : { opacity: 0, transform: move({ y: 8 }) }
                               }
                               animate={{
                                 opacity: 1,
-                                y: 0,
+                                ...(shouldReduceMotion ? {} : settle),
                                 transition: {
                                   duration: 0.26,
                                   delay,

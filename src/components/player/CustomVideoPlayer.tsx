@@ -5384,21 +5384,24 @@ export function CustomVideoPlayer({
                 className="absolute inset-0 h-full w-full object-cover"
                 initial={{
                   opacity: 0,
-                  scale: shouldReduceMotion ? 1 : 1.035,
+                  transform: `scale(${shouldReduceMotion ? 1 : 1.035})`,
                 }}
                 animate={{
                   opacity: 1,
-                  scale: 1.02,
+                  transform: "scale(1.02)",
                 }}
                 exit={{
                   opacity: 0,
-                  scale: shouldReduceMotion ? 1 : 1.01,
+                  transform: [
+                    "scale(1.02)",
+                    `scale(${shouldReduceMotion ? 1 : 1.01})`,
+                  ],
                 }}
                 transition={{
                   opacity: {
                     duration: shouldReduceMotion ? 0 : 0.5,
                   },
-                  scale: {
+                  transform: {
                     duration: shouldReduceMotion ? 0 : 1.2,
                     ease: [0.22, 1, 0.36, 1],
                   },

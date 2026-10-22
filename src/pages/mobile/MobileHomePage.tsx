@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { move, REST, settle } from "../../lib/compositorMotion";
 import { MotionReveal } from "../../components/MotionReveal";
 import { ErrorMessage } from "../../components/ErrorMessage";
 import { HomeHero } from "../../components/home/HomeHero";
@@ -248,9 +249,13 @@ export function MobileHomePage() {
           {data.continueWatching.length > 0 ? (
             <motion.div
               key="continue-watching"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8, height: 0 }}
+              initial={{ opacity: 0, transform: move({ y: 20 }) }}
+              animate={{ opacity: 1, ...settle }}
+              exit={{
+                opacity: 0,
+                transform: [REST, move({ y: -8 })],
+                height: 0,
+              }}
               transition={{ duration: 0.4, ease: [0.25, 1, 0.5, 1] }}
             >
               <MobileMediaRow

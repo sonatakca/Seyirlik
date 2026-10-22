@@ -1,4 +1,6 @@
+import { forwardRef, type ForwardedRef } from "react";
 import { motion } from "framer-motion";
+import { move, REST } from "../../lib/compositorMotion";
 import { Link } from "react-router-dom";
 import { useLanguage } from "../../i18n/LanguageContext";
 import type { TranslationKey } from "../../i18n/translations";
@@ -103,7 +105,15 @@ function getSeriesCount(
   return null;
 }
 
-export function MobileMediaCard({
+// Forwards its ref to the article, so a row's AnimatePresence can pop a
+// leaving card out of the flow (mode="popLayout") while it exits.
+export const MobileMediaCard = forwardRef<HTMLElement, MobileMediaCardProps>(
+  function MobileMediaCard(props, ref) {
+    return <MobileMediaCardBody {...props} articleRef={ref} />;
+  },
+);
+
+function MobileMediaCardBody({
   item,
   to,
   variant = "poster",
@@ -111,7 +121,8 @@ export function MobileMediaCard({
   collectionItems,
   animateRemoval = false,
   showDownload = false,
-}: MobileMediaCardProps) {
+  articleRef,
+}: MobileMediaCardProps & { articleRef: ForwardedRef<HTMLElement> }) {
   const { language, t } = useLanguage();
   const labels = {
     season: t("media.seasonNumber"),
@@ -231,11 +242,11 @@ export function MobileMediaCard({
 
   return (
     <motion.article
+      ref={articleRef}
       data-flip-key={item.Id}
-      layout={animateRemoval ? "position" : undefined}
       exit={
         animateRemoval
-          ? { opacity: 0, x: -28, scale: 0.96, filter: "blur(6px)" }
+          ? { opacity: 0, transform: [REST, move({ x: -28, scale: 0.96 })] }
           : undefined
       }
       className={

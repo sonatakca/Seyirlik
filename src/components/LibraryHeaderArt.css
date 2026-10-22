@@ -35,65 +35,72 @@
 .library-art__barcode-wipe {
   position: absolute;
   inset: 0;
-  -webkit-mask-image:
-    linear-gradient(
-      to bottom,
-      transparent 0%,
-      #000 30%,
-      #000 62%,
-      transparent 100%
-    ),
-    linear-gradient(to right, #000 40%, transparent 60%);
-  mask-image:
-    linear-gradient(
-      to bottom,
-      transparent 0%,
-      #000 30%,
-      #000 62%,
-      transparent 100%
-    ),
-    linear-gradient(to right, #000 40%, transparent 60%);
-  -webkit-mask-size:
-    100% 100%,
-    250% 100%;
-  mask-size:
-    100% 100%,
-    250% 100%;
-  -webkit-mask-repeat: no-repeat;
-  mask-repeat: no-repeat;
-  -webkit-mask-composite: source-in;
-  mask-composite: intersect;
-  -webkit-mask-position:
-    0 0,
-    100% 0;
-  mask-position:
-    0 0,
-    100% 0;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 30%,
+    #000 62%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    #000 30%,
+    #000 62%,
+    transparent 100%
+  );
 }
 
-/* Laid on left to right once, like a brush across the wall. */
-.library-art__barcode-wipe.is-painted {
+/*
+ * Laid on left to right once, like a brush across the wall.
+ *
+ * The brush's soft edge is a mask on a layer two and a half times as wide as
+ * the wall, carried across it with a transform, while the barcode inside is
+ * carried back the same distance, so it stands still and only the edge
+ * travels. Both are compositor animations. Sliding the mask itself
+ * (mask-position) repainted the barcode on every frame.
+ */
+.library-art__barcode-reveal {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 250%;
+  -webkit-mask-image: linear-gradient(to right, #000 40%, transparent 60%);
+  mask-image: linear-gradient(to right, #000 40%, transparent 60%);
+  transform: translateX(-60%);
+}
+
+.library-art__barcode-counter {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 40%;
+  transform: translateX(150%);
+}
+
+.library-art__barcode-wipe.is-painted .library-art__barcode-reveal {
   animation: library-art-wipe 1.6s cubic-bezier(0.37, 0, 0.63, 1) forwards;
 }
 
-.library-art__barcode-wipe.is-painted.is-still {
+.library-art__barcode-wipe.is-painted .library-art__barcode-counter {
+  animation: library-art-wipe-counter 1.6s cubic-bezier(0.37, 0, 0.63, 1)
+    forwards;
+}
+
+.library-art__barcode-wipe.is-painted.is-still .library-art__barcode-reveal,
+.library-art__barcode-wipe.is-painted.is-still .library-art__barcode-counter {
   animation: none;
-  -webkit-mask-position:
-    0 0,
-    0 0;
-  mask-position:
-    0 0,
-    0 0;
+  transform: none;
 }
 
 @keyframes library-art-wipe {
   to {
-    -webkit-mask-position:
-      0 0,
-      0 0;
-    mask-position:
-      0 0,
-      0 0;
+    transform: translateX(0);
+  }
+}
+
+@keyframes library-art-wipe-counter {
+  to {
+    transform: translateX(0);
   }
 }
 

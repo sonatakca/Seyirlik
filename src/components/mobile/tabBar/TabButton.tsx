@@ -1,7 +1,11 @@
 import type { MouseEvent, ReactNode } from "react";
 import { motion } from "framer-motion";
+import { move, REST } from "../../../lib/compositorMotion";
 import { NavLink } from "react-router-dom";
 import type { TabDef } from "./useTabBar";
+
+// A press starts at rest, so it names its start (see compositorMotion).
+const GLYPH_PRESS = { transform: [REST, move({ scale: 0.84 })] };
 
 // How bright a glyph stands when its tab is not the lit one.
 const DIM = 0.5;
@@ -48,7 +52,7 @@ export function TabButton({
         className="relative block text-white"
         initial={false}
         animate={{ opacity: lit ? 1 : DIM }}
-        whileTap={reduced ? undefined : { scale: 0.84 }}
+        whileTap={reduced ? undefined : GLYPH_PRESS}
         transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
       >
         <Glyph active={lit} reduced={reduced} />

@@ -409,11 +409,11 @@ export function MediaCard({
     return (
       <motion.div
         data-flip-key={item.Id}
-        className={`h-full min-w-0 shrink-0 ${sizeClass}`}
+        className={`relative isolate h-full min-w-0 shrink-0 hover:z-10 focus-within:z-10 ${sizeClass}`}
         whileTap={shouldReduceMotion ? undefined : CARD_PRESS}
         {...motionProps}
       >
-        <div className="media-card-cinematic group relative grid aspect-[4/3] h-full min-w-0 grid-cols-2 scroll-ml-4 transform-gpu overflow-hidden rounded-xl border border-white/10 bg-[var(--surface)] shadow-cinematic-card transition-[border-color,box-shadow,transform] duration-300 will-change-transform hover:-translate-y-1.5 hover:scale-[1.012] hover:border-white/20 motion-reduce:hover:translate-y-0 motion-reduce:hover:scale-100">
+        <div className="media-card-cinematic media-card-lifted group relative grid aspect-[4/3] h-full min-w-0 grid-cols-2 scroll-ml-4 transform-gpu overflow-hidden rounded-xl border border-white/10 bg-[var(--surface)] transition-transform duration-300 will-change-transform hover:-translate-y-1.5 hover:scale-[1.012] motion-reduce:hover:translate-y-0 motion-reduce:hover:scale-100">
           <Link
             to={primaryCardTo}
             aria-label={`${primaryActionLabel} ${title}`}
@@ -543,6 +543,7 @@ export function MediaCard({
             </div>
           ) : null}
         </div>
+        <CardLiftShadow lift="translateY(-0.375rem) scale(1.012)" />
       </motion.div>
     );
   };
@@ -656,12 +657,12 @@ export function MediaCard({
   return (
     <motion.div
       data-flip-key={item.Id}
-      className={`h-full min-w-0 shrink-0 ${sizeClass}`}
+      className={`relative isolate h-full min-w-0 shrink-0 hover:z-10 focus-within:z-10 ${sizeClass}`}
       whileTap={shouldReduceMotion ? undefined : CARD_PRESS}
       {...motionProps}
     >
       <div
-        className={`media-card-cinematic group relative h-full w-full min-w-0 scroll-ml-4 transform-gpu overflow-hidden rounded-xl border border-white/10 bg-[var(--surface)] shadow-cinematic-card transition-[border-color,box-shadow,transform] duration-300 will-change-transform hover:border-white/20 motion-reduce:hover:translate-y-0 motion-reduce:hover:scale-100 ${
+        className={`media-card-cinematic media-card-lifted group relative h-full w-full min-w-0 scroll-ml-4 transform-gpu overflow-hidden rounded-xl border border-white/10 bg-[var(--surface)] transition-transform duration-300 will-change-transform motion-reduce:hover:translate-y-0 motion-reduce:hover:scale-100 ${
           isEpisode
             ? "flex flex-col hover:-translate-y-1"
             : `block ${aspectClass} hover:-translate-y-1.5 hover:scale-[1.025]`
@@ -834,6 +835,29 @@ export function MediaCard({
           ) : null}
         </div>
       </div>
+      <CardLiftShadow
+        lift={
+          isEpisode
+            ? "translateY(-0.25rem)"
+            : "translateY(-0.375rem) scale(1.025)"
+        }
+      />
     </motion.div>
+  );
+}
+
+/**
+ * The shadow a hovered card stands on, and its brighter edge, drawn once on a
+ * layer behind the card and faded in with opacity, lifted with the card's own
+ * transform. The card's box-shadow and border colour used to be transitioned
+ * instead, which repainted the card and its 120px blur on every frame.
+ */
+function CardLiftShadow({ lift }: { lift: string }) {
+  return (
+    <div
+      aria-hidden="true"
+      className="media-card-lift-shadow"
+      style={{ "--card-lift": lift } as React.CSSProperties}
+    />
   );
 }

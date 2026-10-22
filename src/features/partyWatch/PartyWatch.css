@@ -1,20 +1,19 @@
+/* Toasts arrive and leave on the compositor: transform and opacity only. They
+   used to pull focus through a blur, which is re-rasterised every frame. */
 @keyframes partyToastEnter {
   0% {
     opacity: 0;
     transform: translate3d(-1.15rem, 0.55rem, 0) scale(0.94);
-    filter: blur(8px);
   }
 
   55% {
     opacity: 1;
     transform: translate3d(0.18rem, -0.04rem, 0) scale(1.015);
-    filter: blur(0);
   }
 
   100% {
     opacity: 1;
     transform: translate3d(0, 0, 0) scale(1);
-    filter: blur(0);
   }
 }
 
@@ -22,18 +21,15 @@
   0% {
     opacity: 1;
     transform: translate3d(0, 0, 0) scale(1);
-    filter: blur(0);
   }
 
   35% {
     opacity: 0.9;
     transform: translate3d(0.12rem, -0.03rem, 0) scale(1.01);
-    filter: blur(0);
   }
 
   100% {
     opacity: 0;
     transform: translate3d(-0.75rem, 0.55rem, 0) scale(0.96);
-    filter: blur(7px);
   }
 }

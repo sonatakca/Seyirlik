@@ -1,5 +1,5 @@
 import type { RefObject } from "react";
-import { motion, useTransform } from "framer-motion";
+import { motion } from "framer-motion";
 import { TabButton } from "./TabButton";
 import { useTabBarMotion, useTabs } from "./useTabBar";
 
@@ -15,7 +15,6 @@ const INSET = 4;
 export function MobileTabBar() {
   const tabs = useTabs();
   const bar = useTabBarMotion({ tabs, inset: INSET });
-  const width = useTransform(() => bar.right.get() - bar.left.get());
   const showBeam = bar.activeIndex >= 0 || bar.scrubbing;
 
   return (
@@ -47,9 +46,10 @@ export function MobileTabBar() {
         style={{ paddingInline: INSET }}
       >
         <motion.div
+          ref={bar.beamRef}
           aria-hidden="true"
-          className="pointer-events-none absolute inset-y-0 left-0"
-          style={{ x: bar.left, width }}
+          className="pointer-events-none absolute inset-y-0 left-0 origin-left"
+          style={{ width: bar.slot }}
           initial={false}
           animate={{ opacity: showBeam ? 1 : 0 }}
           transition={{ duration: 0.2 }}
@@ -74,6 +74,7 @@ export function MobileTabBar() {
           />
           {/* The lamp. */}
           <div
+            ref={bar.lampRef}
             className="absolute bottom-0 left-1/2 h-[3px] w-6 -translate-x-1/2 rounded-t-full"
             style={{
               background: "color-mix(in srgb, var(--accent-hover) 70%, white)",

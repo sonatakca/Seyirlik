@@ -6,6 +6,7 @@ import {
   useReducedMotion,
   type Variants,
 } from "framer-motion";
+import { move, settle } from "../lib/compositorMotion";
 import { Lock, User } from "lucide-react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import appIcon from "../assets/AppIcon2.png";
@@ -29,16 +30,20 @@ const entrance: Variants = {
   hidden: {},
   shown: { transition: { staggerChildren: 0.08, delayChildren: 0.12 } },
 };
+// Whole transforms, which framer-motion hands to the compositor.
 const rise: Variants = {
-  hidden: { opacity: 0, y: 14 },
-  shown: { opacity: 1, y: 0, transition: { duration: 0.6, ease: ARRIVE } },
-};
-const markArrives: Variants = {
-  hidden: { opacity: 0, y: 10, scale: 0.86 },
+  hidden: { opacity: 0, transform: move({ y: 14 }) },
   shown: {
     opacity: 1,
-    y: 0,
-    scale: 1,
+    ...settle,
+    transition: { duration: 0.6, ease: ARRIVE },
+  },
+};
+const markArrives: Variants = {
+  hidden: { opacity: 0, transform: move({ y: 10, scale: 0.86 }) },
+  shown: {
+    opacity: 1,
+    ...settle,
     transition: { duration: 0.7, ease: ARRIVE },
   },
 };
@@ -100,7 +105,7 @@ export function LoginPage() {
       // A refusal is felt before it is read: the card shakes its head.
       if (!shouldReduceMotion) {
         void formControls.start({
-          x: [0, -10, 8, -5, 3, 0],
+          transform: [0, -10, 8, -5, 3, 0].map((x) => move({ x })),
           transition: { duration: 0.42, ease: "easeInOut" },
         });
       }

@@ -1,5 +1,6 @@
 import { NotificationHistoryPanel } from "../notifications/NotificationHistoryPanel";
-import { useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
+import { useReducedMotion } from "framer-motion";
 import { useNavbarScrolled } from "../../hooks/useNavbarScrolled";
 import { Search } from "lucide-react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
@@ -31,6 +32,29 @@ export function DesktopNavbar() {
   };
   const location = useLocation();
   const navLinksRef = useRef<HTMLDivElement | null>(null);
+  const navRef = useRef<HTMLElement | null>(null);
+  const shouldReduceMotion = useReducedMotion();
+  const wasScrolledRef = useRef(hasScrolled);
+
+  // The contents' 8px drop. `top` takes its new value at once and a
+  // compositor transform carries the bar there from where it was, ending at
+  // no transform: a transform at rest would anchor the menus' fixed panels to
+  // the bar, and transitioning `top` itself re-laid out the header on every
+  // frame of the move.
+  useLayoutEffect(() => {
+    const nav = navRef.current;
+    const was = wasScrolledRef.current;
+    wasScrolledRef.current = hasScrolled;
+    if (!nav || was === hasScrolled || shouldReduceMotion) return;
+    if (typeof nav.animate !== "function") return;
+    nav.animate(
+      [
+        { transform: `translateY(${hasScrolled ? 8 : -8}px)` },
+        { transform: "translateY(0px)" },
+      ],
+      { duration: 300, easing: "ease-out" },
+    );
+  }, [hasScrolled, shouldReduceMotion]);
   const navLinks = [
     { to: "/home", label: t("nav.home") },
     { to: libraryRoutes.movies, label: t("nav.movies") },
@@ -71,10 +95,11 @@ export function DesktopNavbar() {
       <NavbarSurface shown={hasScrolled} variant="desktop" />
       {/* Clear, the bar sits over a floating backdrop that starts 8px down,
           so its contents drop by as much to stand as far inside its top edge
-          as inside its side. `top`, not a transform: a transform would
-          anchor the menus' fixed panels to the bar. */}
+          as inside its side. `top`, not a resting transform: a transform
+          would anchor the menus' fixed panels to the bar. */}
       <nav
-        className={`relative z-[1] mx-auto flex h-16 w-full max-w-[1600px] items-center gap-3 px-4 transition-[top] duration-300 ease-out motion-reduce:transition-none sm:h-20 sm:gap-8 sm:px-6 lg:px-8 ${
+        ref={navRef}
+        className={`relative z-[1] mx-auto flex h-16 w-full max-w-[1600px] items-center gap-3 px-4 sm:h-20 sm:gap-8 sm:px-6 lg:px-8 ${
           hasScrolled ? "top-0" : "top-2"
         }`}
       >

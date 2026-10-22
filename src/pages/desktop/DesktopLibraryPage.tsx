@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import { motion } from "framer-motion";
+import { move, settle } from "../../lib/compositorMotion";
 import { Search, SlidersHorizontal } from "lucide-react";
 import { BackButton } from "../../components/BackButton";
 import { ErrorMessage } from "../../components/ErrorMessage";
@@ -760,15 +761,15 @@ export function DesktopLibraryPage({
                   className="cinematic-logo-shadow z-30 h-auto max-h-10 max-w-[min(10rem,42vw)] transform-gpu object-contain will-change-transform sm:max-h-20 sm:max-w-[min(18rem,40vw)]"
                   initial={{
                     opacity: 0,
-                    scale: 0.98,
+                    transform: move({ scale: 0.98 }),
                   }}
                   animate={{
                     opacity: 1,
-                    scale: 1,
+                    ...settle,
                   }}
                   transition={{
                     opacity: { duration: 0.55, ease: [0.22, 1, 0.36, 1] },
-                    scale: { duration: 0.6, ease: [0.16, 1, 0.3, 1] },
+                    transform: { duration: 0.6, ease: [0.16, 1, 0.3, 1] },
                   }}
                 />
 
@@ -777,11 +778,12 @@ export function DesktopLibraryPage({
                   className="z-10 h-10 w-px shrink-0 origin-center bg-gradient-to-b from-transparent via-white/24 to-transparent will-change-transform sm:h-14"
                   initial={{
                     opacity: 0,
-                    scaleY: 0.55,
+                    transform: "scaleY(0.55)",
                   }}
                   animate={{
                     opacity: 1,
-                    scaleY: 1,
+                    transform: "scaleY(1)",
+                    transitionEnd: { transform: "none" },
                   }}
                   transition={{
                     duration: 0.78,
@@ -791,16 +793,14 @@ export function DesktopLibraryPage({
                 />
 
                 <motion.div
-                  className="relative z-20 transform-gpu will-change-[transform,opacity,filter]"
+                  className="relative z-20 transform-gpu will-change-[transform,opacity]"
                   initial={{
                     opacity: 0,
-                    scale: 0.975,
-                    filter: "blur(6px)",
+                    transform: move({ scale: 0.975 }),
                   }}
                   animate={{
                     opacity: 1,
-                    scale: 1,
-                    filter: "blur(0px)",
+                    ...settle,
                   }}
                   transition={{
                     duration: 0.95,

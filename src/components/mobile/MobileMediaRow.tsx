@@ -1,4 +1,6 @@
+import { useRef } from "react";
 import { AnimatePresence } from "framer-motion";
+import { useFlipLayout } from "../../hooks/useFlipLayout";
 import type { MediaItem } from "../../lib/types";
 import { MobileMediaCard } from "./MobileMediaCard";
 
@@ -21,6 +23,11 @@ export function MobileMediaRow({
   showRestartWatching = false,
   onClearContinueWatching,
 }: MobileMediaRowProps) {
+  const cardsRef = useRef<HTMLDivElement>(null);
+  // A cleared card leaves its neighbours to close the gap: a measured FLIP on
+  // the compositor, in place of framer-motion's layout projection.
+  useFlipLayout(cardsRef, items.map((item) => item.Id).join("|"));
+
   if (items.length === 0 && !emptyMessage) {
     return null;
   }
@@ -32,8 +39,13 @@ export function MobileMediaRow({
       </h2>
 
       {items.length > 0 ? (
-        <div className="media-scroll -mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-2">
-          <AnimatePresence initial={false}>
+        <div
+          ref={cardsRef}
+          className="media-scroll relative -mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-2"
+        >
+          {/* A leaving card steps out of the row at once, so the rest close
+              up together with its exit. */}
+          <AnimatePresence initial={false} mode="popLayout">
             {items.map((item) => (
               <MobileMediaCard
                 key={item.Id}
