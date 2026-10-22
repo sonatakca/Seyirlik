@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDatabasePool } from "./databasePool";
-import { runMigrations, validateMigrationsCurrent } from "./migrationRunner";
+import { runMigrations, validateMigrationsApplied } from "./migrationRunner";
 import { withTransaction } from "./transaction";
 import { createUserRepository } from "../users/userRepository";
 
@@ -43,7 +43,7 @@ integration("PostgreSQL native identity persistence", () => {
     expect(migrationRows.rows.map((row) => row.version)).toEqual(
       [...first.applied].sort(),
     );
-    await expect(validateMigrationsCurrent(pool)).resolves.toBeUndefined();
+    await expect(validateMigrationsApplied(pool)).resolves.toBeUndefined();
 
     const original = await pool.query<{ checksum: string }>(
       "SELECT checksum FROM seyirlik_migrations WHERE version = $1",
@@ -53,7 +53,7 @@ integration("PostgreSQL native identity persistence", () => {
       "UPDATE seyirlik_migrations SET checksum = $2 WHERE version = $1",
       ["001_native_identity", "tampered"],
     );
-    await expect(validateMigrationsCurrent(pool)).rejects.toThrow(
+    await expect(validateMigrationsApplied(pool)).rejects.toThrow(
       "Native identity database migrations are not current.",
     );
     await pool.query(

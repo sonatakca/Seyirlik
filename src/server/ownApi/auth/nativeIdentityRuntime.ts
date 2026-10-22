@@ -7,7 +7,7 @@ import {
   type DatabasePool,
 } from "../database/databasePool";
 import { parseDatabaseConfig } from "../database/databaseConfig";
-import { validateMigrationsCurrent } from "../database/migrationRunner";
+import { validateMigrationsApplied } from "../database/migrationRunner";
 import { createUserRepository } from "../users/userRepository";
 import { createNativeAuthService, type NativeAuthService } from "./authService";
 import { parseNativeAuthConfig } from "./authConfig";
@@ -49,7 +49,7 @@ export async function createNativeIdentityRuntime({
   }
   try {
     await validateNativeIdentitySchema(pool);
-    await validateMigrationsCurrent(pool);
+    await validateMigrationsApplied(pool);
   } catch {
     await pool.end().catch(() => undefined);
     throw new Error("Native identity database migrations are not current.");

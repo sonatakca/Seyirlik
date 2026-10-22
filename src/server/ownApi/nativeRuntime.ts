@@ -11,7 +11,7 @@ import {
   type DatabasePool,
 } from "./database/databasePool";
 import { parseDatabaseConfig } from "./database/databaseConfig";
-import { validateMigrationsCurrent } from "./database/migrationRunner";
+import { validateMigrationsApplied } from "./database/migrationRunner";
 import { createUserRepository } from "./users/userRepository";
 import { createSessionRepository } from "./auth/sessionRepository";
 import { createArgon2PasswordHasher } from "./auth/passwords";
@@ -424,7 +424,7 @@ export async function createNativeRuntime({
     startup?.update("database", { operation: "verify-schema" });
     await validateNativeIdentitySchema(pool);
     startup?.update("database", { operation: "verify-migrations" });
-    await validateMigrationsCurrent(pool);
+    await validateMigrationsApplied(pool);
   } catch (error) {
     await pool.end().catch(() => undefined);
     throw new Error(

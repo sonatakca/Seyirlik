@@ -80,7 +80,7 @@ one that removes, with a version serving in between.
   `seyirlik_migrations`. It is the check step 5 makes.
 - `/admin/schema` shows it to an operator, naming the missing versions rather
   than counting them.
-- `validateMigrationsCurrent` is the refusal the services already make.
+- `validateMigrationsApplied` is the refusal the services already make.
 
 ## What is deliberately not built yet
 

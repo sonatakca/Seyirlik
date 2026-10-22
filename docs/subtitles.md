@@ -358,7 +358,7 @@ Nor has any of it run against real media. That waits on the storage phase.
 1. Apply migrations 023 and 024 — **before or with the code, never after it**.
 
    Migrations are validated at startup, not applied at startup. `nativeRuntime`
-   and the identity runtime both call `validateMigrationsCurrent`, which
+   and the identity runtime both call `validateMigrationsApplied`, which
    compares every file in `migrations/` against the `seyirlik_migrations` table
    by version _and_ checksum, and throws when they disagree. Deploying a
    checkout that contains 023 and 024 to a host whose database has neither will

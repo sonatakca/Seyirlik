@@ -90,7 +90,22 @@ export async function readSchemaState(
   };
 }
 
-export async function validateMigrationsCurrent(
+/**
+ * Refuses to start code whose schema the database does not carry.
+ *
+ * Every migration this release ships must be recorded, in order, with the
+ * checksum of the file shipped. Migrations recorded *after* those are allowed:
+ * they belong to a newer release, and an older one has to keep running beside
+ * them — the worker finishing its last job on the old release while the new
+ * server runs (`releaseHandoff.ts`), MSI switched on after a ship that
+ * migrated, or a rollback. That is safe because migrations only add; see
+ * `migrationsAreAdditive.test.ts`, which holds them to it.
+ *
+ * It used to demand an exact match, which made every older worker unbootable
+ * the moment a newer release migrated, and made activation's own rollback
+ * fail on the step it existed for.
+ */
+export async function validateMigrationsApplied(
   database: Pick<Pool, "query">,
   migrationsDirectory = DEFAULT_MIGRATIONS_DIRECTORY,
 ): Promise<void> {
@@ -106,7 +121,7 @@ export async function validateMigrationsCurrent(
   }
 
   if (
-    rows.length !== expected.length ||
+    rows.length < expected.length ||
     expected.some(
       (migration, index) =>
         rows[index]?.version !== migration.version ||
