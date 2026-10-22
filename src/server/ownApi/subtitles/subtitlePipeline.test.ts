@@ -515,3 +515,129 @@ describe("payload validation", () => {
     ).toThrow();
   });
 });
+
+describe("a fallback provider", () => {
+  /** The mock provider ranked first, and a second one below it. */
+  function withFallback() {
+    const input = setup();
+    const fallbackCandidate = {
+      ...candidate,
+      providerId: "fallback",
+      candidateId: "f1",
+    };
+    const fallback: SubtitleProvider = {
+      id: "fallback",
+      label: "Fallback",
+      requiresSession: false,
+      rank: 0,
+      languages: null,
+      search: vi.fn(async () => ({
+        outcome: "ok" as const,
+        value: [fallbackCandidate],
+      })),
+      download: vi.fn(async () => ({ outcome: "ok" as const, value: payload })),
+    };
+    return {
+      input: { ...input, providers: [fallback, ...input.providers] },
+      fallback,
+    };
+  }
+
+  it("is not asked when the first provider's subtitle installs", async () => {
+    const { input, fallback } = withFallback();
+    expect(await runSubtitlePipeline(input)).toMatchObject({
+      outcome: "installed",
+      selection: { candidate: { providerId: "mock" } },
+    });
+    expect(fallback.search).not.toHaveBeenCalled();
+    expect(fallback.download).not.toHaveBeenCalled();
+  });
+
+  it("is asked when the first provider has nothing", async () => {
+    const { input, fallback } = withFallback();
+    input.providers[1]!.search = vi.fn(async () => ({
+      outcome: "empty" as const,
+    }));
+    expect(await runSubtitlePipeline(input)).toMatchObject({
+      outcome: "installed",
+      selection: { candidate: { providerId: "fallback" } },
+    });
+    expect(fallback.search).toHaveBeenCalledTimes(1);
+  });
+
+  it("is asked when the first provider's downloads all fail, and wins over its sign-in", async () => {
+    const { input } = withFallback();
+    input.providers[1]!.download = vi.fn(async () => ({
+      outcome: "needs-authentication" as const,
+      reason: "Cloudflare",
+      authenticateAt: null,
+    }));
+    expect(await runSubtitlePipeline(input)).toMatchObject({
+      outcome: "installed",
+      selection: { candidate: { providerId: "fallback" } },
+    });
+  });
+
+  it("still waits for the first provider's sign-in when the fallback has nothing either", async () => {
+    const { input, fallback } = withFallback();
+    input.providers[1]!.search = vi.fn(async () => ({
+      outcome: "needs-authentication" as const,
+      reason: "Cloudflare",
+      authenticateAt: null,
+    }));
+    fallback.search = vi.fn(async () => ({ outcome: "empty" as const }));
+    expect(await runSubtitlePipeline(input)).toEqual({
+      outcome: "needs-authentication",
+      providerId: "mock",
+    });
+  });
+
+  it("spends no more downloads measuring than the provider allows", async () => {
+    const { input, fallback } = withFallback();
+    input.providers[1]!.search = vi.fn(async () => ({
+      outcome: "empty" as const,
+    }));
+    const metered = { ...fallback, downloadsPerSearch: 2 };
+    metered.search = vi.fn(async () => ({
+      outcome: "ok" as const,
+      value: [1, 2, 3, 4].map((n) => ({
+        ...candidate,
+        providerId: "fallback",
+        candidateId: `f${n}`,
+      })),
+    }));
+    let n = 0;
+    metered.download = vi.fn(async () => ({
+      outcome: "ok" as const,
+      value: {
+        ...payload,
+        bytes: new TextEncoder().encode(
+          `1\n00:00:0${++n},000 --> 00:00:0${n + 1},000\nMerhaba\n`,
+        ),
+      },
+    }));
+    const result = await runSubtitlePipeline({
+      ...input,
+      providers: [metered, input.providers[1]!],
+      fit: { measure: vi.fn(async () => null) },
+    });
+    expect(result).toMatchObject({ outcome: "installed" });
+    expect(metered.download).toHaveBeenCalledTimes(2);
+  });
+
+  it("says when a rate-limited provider will answer again", async () => {
+    const { input, fallback } = withFallback();
+    input.providers[1]!.search = vi.fn(async () => ({
+      outcome: "empty" as const,
+    }));
+    fallback.download = vi.fn(async () => ({
+      outcome: "rate-limited" as const,
+      retryAfterMs: 3_600_000,
+    }));
+    expect(await runSubtitlePipeline(input)).toMatchObject({
+      outcome: "error",
+      failure: "provider-rate-limited",
+      retryAfterMs: 3_600_000,
+    });
+  });
+});

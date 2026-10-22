@@ -74,10 +74,21 @@ export function parseSyncPayload(
   };
 }
 
+/*
+ * A rate-limited search is tried again when the provider said it would answer,
+ * but never sooner than a minute (a throttle that says "now" would otherwise
+ * spin) and never later than a day and an hour (a download allowance renews
+ * daily, and a later date is a clock or a parse gone wrong).
+ */
+const MIN_RETRY_MS = 60_000;
+const MAX_RETRY_MS = 25 * 60 * 60 * 1000;
+
 export function createSubtitleJobHandlers(
   service: SubtitleService,
   repository: SubtitleRepository,
   sync?: SubtitleSyncService,
+  /** Queues a run of a fresh attempt for later. Absent, a rate limit ends the want's search. */
+  runLater?: (attemptId: string, runAfter: Date) => Promise<void>,
 ): Record<string, JobHandler> {
   const execute =
     (resume: boolean): JobHandler =>
@@ -117,6 +128,33 @@ export function createSubtitleJobHandlers(
           "Another subtitle operation owns this media file.",
           5_000,
         );
+      /*
+       * Every account's downloads used up for the day, or a provider asking
+       * for a pause: this attempt is over, and a new one waits for the
+       * renewal rather than leaving the want failed until somebody notices.
+       */
+      if (
+        runLater &&
+        result.state === "failed" &&
+        result.failure === "provider-rate-limited" &&
+        typeof result.retryAfterMs === "number"
+      ) {
+        const attempt = await repository.getAttempt(id);
+        if (attempt && !(await repository.openAttempt(attempt.wantId))) {
+          const next = await repository.beginAttempt(attempt.wantId);
+          const delay = Math.min(
+            Math.max(result.retryAfterMs, MIN_RETRY_MS),
+            MAX_RETRY_MS,
+          );
+          const runAfter = new Date(Date.now() + delay);
+          await runLater(next.id, runAfter);
+          return {
+            ...result,
+            retryAttemptId: next.id,
+            retryAt: runAfter.toISOString(),
+          };
+        }
+      }
       return result;
     };
   /**

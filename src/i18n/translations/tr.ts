@@ -282,6 +282,33 @@ export const tr = {
   "admin.integrations.session.invalid":
     "Bu bir Cookie başlığına benzemiyor. Başlık değerini tek satır olarak yapıştırın.",
   "admin.integrations.session.failed": "Oturum kaydedilemedi.",
+  "admin.integrations.opensubtitles.description":
+    "Yalnızca TürkçeAltyazı'da bulunamadığında sorulur. Önce 1. hesap indirir; günlük indirme hakkı bitince 2. hesap devralır.",
+  "admin.integrations.opensubtitles.apiKey": "API anahtarı",
+  "admin.integrations.opensubtitles.apiKeyHint":
+    "API consumers sayfasından oluşturun:",
+  "admin.integrations.opensubtitles.keyActive": "Kaydedildi",
+  "admin.integrations.opensubtitles.keyMissing": "Eklenmedi",
+  "admin.integrations.opensubtitles.saveKey": "Anahtarı kaydet",
+  "admin.integrations.opensubtitles.removeKey": "Anahtarı kaldır",
+  "admin.integrations.opensubtitles.keySaved": "API anahtarı kaydedildi.",
+  "admin.integrations.opensubtitles.account": "Hesap",
+  "admin.integrations.opensubtitles.username": "Kullanıcı adı",
+  "admin.integrations.opensubtitles.password": "Şifre",
+  "admin.integrations.opensubtitles.signOut": "Çıkış yap",
+  "admin.integrations.opensubtitles.signedIn": "Giriş yapıldı.",
+  "admin.integrations.opensubtitles.perDay": "indirme hakkı / gün.",
+  "admin.integrations.opensubtitles.quotaUsed":
+    "Bugünkü indirme hakkı doldu. Yenilenme:",
+  "admin.integrations.opensubtitles.refused":
+    "OpenSubtitles bu kullanıcı adını ve şifreyi kabul etmedi.",
+  "admin.integrations.opensubtitles.keyRefused":
+    "OpenSubtitles API anahtarını kabul etmedi.",
+  "admin.integrations.opensubtitles.keyFirst": "Önce API anahtarını ekleyin.",
+  "admin.integrations.opensubtitles.invalid":
+    "Girdiklerinizi kontrol edip yeniden deneyin.",
+  "admin.integrations.opensubtitles.unreachable":
+    "OpenSubtitles'a ulaşılamadı. Bir dakika sonra yeniden deneyin.",
 
   "nav.home": "Ana Sayfa",
   "nav.brandHome": "Seyirlik ana sayfa",
@@ -2387,6 +2414,7 @@ export const tr = {
   "admin.subtitles.state.validating": "Denetleniyor",
   "admin.subtitles.state.installed": "Kuruldu",
   "admin.subtitles.state.needs-authentication": "Giriş bekleniyor",
+  "admin.subtitles.state.unavailable": "Bulunamadı",
   "admin.subtitles.state.failed": "Başarısız",
   "admin.subtitles.state.superseded": "Yerine yenisi geldi",
   "admin.imports.title": "İçe aktarmalar",

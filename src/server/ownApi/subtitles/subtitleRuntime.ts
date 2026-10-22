@@ -1,4 +1,5 @@
 import type { DatabasePool } from "../database/databasePool";
+import { createJobQueue } from "../tasks/jobQueue";
 import type { PlaybackRefreshBoundary } from "../playback/playbackRefresh";
 import type { SubtitleCatalogueAttachment } from "./subtitleAttachment";
 import type { SubtitleConfig } from "./subtitleConfig";
@@ -153,6 +154,18 @@ export function createSubtitleRuntime(options: {
     repository,
     service,
     sync,
-    handlers: createSubtitleJobHandlers(service, repository, sync),
+    handlers: createSubtitleJobHandlers(
+      service,
+      repository,
+      sync,
+      async (attemptId, runAfter) => {
+        await createJobQueue(options.pool).enqueue({
+          jobType: SUBTITLE_JOB_TYPES.run,
+          payload: { attemptId, replace: false },
+          dedupeKey: `subtitle:${attemptId}`,
+          runAfter,
+        });
+      },
+    ),
   };
 }

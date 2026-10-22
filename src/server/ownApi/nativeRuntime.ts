@@ -213,6 +213,11 @@ import { createSubtitleRoutes } from "./subtitles/subtitleRoutes";
 import type { TitleReferences } from "./subtitles/subtitleReferences";
 import { createSubtitleUploader } from "./subtitles/subtitleUpload";
 import { createProviderSessionVault } from "./subtitles/providerSessionVault";
+import { createOpenSubtitlesAccounts } from "./subtitles/openSubtitlesAccounts";
+import {
+  createOpenSubtitlesProvider,
+  OPENSUBTITLES_ID,
+} from "./subtitles/openSubtitlesProvider";
 import {
   createTurkceAltyaziProvider,
   SEYIRLIK_USER_AGENT,
@@ -1364,8 +1369,22 @@ export async function createNativeRuntime({
    * sessions are sealed in. Constructed only when subtitles are configured, so
    * a server that never enabled them never reads or writes a session row.
    */
+  const openSubtitlesAccounts = subtitleConfig
+    ? createOpenSubtitlesAccounts({
+        db: pool,
+        secret: authConfig.sessionHashSecret,
+      })
+    : undefined;
   const availableSubtitleProviders = subtitleProviders ?? [
     createTurkceAltyaziProvider(),
+    // Ranked below TürkçeAltyazı: asked only when it had nothing.
+    ...(openSubtitlesAccounts
+      ? [
+          createOpenSubtitlesProvider({
+            credentials: openSubtitlesAccounts.credentials,
+          }),
+        ]
+      : []),
   ];
   const subtitleVault = subtitleConfig
     ? createProviderSessionVault({
@@ -1875,6 +1894,10 @@ export async function createNativeRuntime({
                   subtitleConfig.providerIds.includes(provider.id),
                 ),
                 vault: subtitleVault,
+                ...(openSubtitlesAccounts &&
+                subtitleConfig.providerIds.includes(OPENSUBTITLES_ID)
+                  ? { openSubtitles: { accounts: openSubtitlesAccounts } }
+                  : {}),
               }
             : undefined,
           subtitleConfig

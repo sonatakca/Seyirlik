@@ -13,6 +13,7 @@ import type { SubtitleUploader } from "./subtitleUpload";
 import type { SubtitleSyncService } from "./subtitleSync";
 import type { JobRecord } from "../tasks/jobQueue";
 import type { SubtitleWant } from "./subtitleState";
+import type { OpenSubtitlesLogin } from "./openSubtitlesProvider";
 
 /**
  * The only surface a client can reach.
@@ -435,6 +436,129 @@ describe("a provider sign-in", () => {
         },
       ),
     ).rejects.toThrow();
+  });
+});
+
+describe("OpenSubtitles accounts", () => {
+  function accountsHarness(
+    options: {
+      apiKey?: string | null;
+      login?: OpenSubtitlesLogin;
+    } = {},
+  ) {
+    const h = harness();
+    const repository = h.repository as unknown as Record<string, unknown>;
+    repository.attemptsAwaiting = vi.fn(async () => ["a1"]);
+    const stored: { slot: number; account: unknown }[] = [];
+    const accounts = {
+      credentials: {
+        apiKey: vi.fn(async () =>
+          options.apiKey === undefined ? "key-123456" : options.apiKey,
+        ),
+      },
+      storeApiKey: vi.fn(async () => undefined),
+      storeAccount: vi.fn(async (slot: number, account: unknown) => {
+        stored.push({ slot, account });
+      }),
+      clearAccount: vi.fn(async () => undefined),
+      status: vi.fn(async () => ({
+        apiKey: { state: "active", updatedAt: null },
+        accounts: [],
+      })),
+    };
+    const login = vi.fn(
+      async () =>
+        options.login ?? {
+          outcome: "ok" as const,
+          token: "token",
+          baseUrl: "https://api.opensubtitles.com/api/v1",
+          allowedDownloads: 20,
+        },
+    );
+    const routes = createSubtitleRoutes(
+      h.repository,
+      {
+        enqueue: (job: Record<string, unknown>) => (
+          h.enqueued.push(job),
+          Promise.resolve("job")
+        ),
+      } as unknown as JobQueue,
+      {
+        providers: [],
+        vault: {} as never,
+        openSubtitles: { accounts: accounts as never, login },
+      },
+    );
+    const put = (slot: string, body: unknown) =>
+      invoke(
+        route(
+          routes,
+          "PUT",
+          "/subtitles/providers/opensubtitles/accounts/:slot",
+        ),
+        { params: { slot }, body },
+      );
+    return { ...h, routes, stored, accounts, login, put };
+  }
+
+  it("signs the account in before saving it, answers without the password, and resumes what waited", async () => {
+    const h = accountsHarness();
+    const captured = await h.put("2", {
+      username: "sonat",
+      password: "hunter2",
+    });
+    expect(h.login).toHaveBeenCalledWith({
+      apiKey: "key-123456",
+      username: "sonat",
+      password: "hunter2",
+    });
+    expect(h.stored).toEqual([
+      { slot: 2, account: { username: "sonat", password: "hunter2" } },
+    ]);
+    expect(JSON.stringify(captured.payload)).not.toContain("hunter2");
+    expect(captured.payload?.data).toMatchObject({
+      allowedDownloads: 20,
+      resumed: 1,
+    });
+    expect(h.enqueued.map((job) => job.jobType)).toEqual([
+      SUBTITLE_JOB_TYPES.resume,
+    ]);
+  });
+
+  it("saves nothing OpenSubtitles refused", async () => {
+    const h = accountsHarness({
+      login: { outcome: "refused", reason: "Refused." },
+    });
+    await expect(
+      h.put("1", { username: "sonat", password: "wrong" }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(h.stored).toEqual([]);
+  });
+
+  it("asks for the API key first", async () => {
+    const h = accountsHarness({ apiKey: null });
+    await expect(
+      h.put("1", { username: "sonat", password: "pw" }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect(h.login).not.toHaveBeenCalled();
+  });
+
+  it("has two account slots and no others", async () => {
+    const h = accountsHarness();
+    await expect(
+      h.put("3", { username: "sonat", password: "pw" }),
+    ).rejects.toMatchObject({ statusCode: 404 });
+    await expect(
+      h.put("../1", { username: "sonat", password: "pw" }),
+    ).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("refuses a username that would break a request", async () => {
+    const h = accountsHarness();
+    await expect(
+      h.put("1", { username: "a\r\nb", password: "pw" }),
+    ).rejects.toThrow();
+    expect(h.login).not.toHaveBeenCalled();
   });
 });
 

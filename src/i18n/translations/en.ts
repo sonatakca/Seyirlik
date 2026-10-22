@@ -282,6 +282,33 @@ export const en = {
   "admin.integrations.session.invalid":
     "That does not look like a Cookie header. Paste the header value as one line.",
   "admin.integrations.session.failed": "The session could not be saved.",
+  "admin.integrations.opensubtitles.description":
+    "Asked only when TürkçeAltyazı has nothing. Account 1 downloads first; when its downloads for the day run out, account 2 takes over.",
+  "admin.integrations.opensubtitles.apiKey": "API key",
+  "admin.integrations.opensubtitles.apiKeyHint":
+    "Create one under API consumers on",
+  "admin.integrations.opensubtitles.keyActive": "Saved",
+  "admin.integrations.opensubtitles.keyMissing": "Not set",
+  "admin.integrations.opensubtitles.saveKey": "Save key",
+  "admin.integrations.opensubtitles.removeKey": "Remove key",
+  "admin.integrations.opensubtitles.keySaved": "API key saved.",
+  "admin.integrations.opensubtitles.account": "Account",
+  "admin.integrations.opensubtitles.username": "Username",
+  "admin.integrations.opensubtitles.password": "Password",
+  "admin.integrations.opensubtitles.signOut": "Sign out",
+  "admin.integrations.opensubtitles.signedIn": "Signed in.",
+  "admin.integrations.opensubtitles.perDay": "downloads a day.",
+  "admin.integrations.opensubtitles.quotaUsed":
+    "Today's downloads are used up. They renew",
+  "admin.integrations.opensubtitles.refused":
+    "OpenSubtitles refused this username and password.",
+  "admin.integrations.opensubtitles.keyRefused":
+    "OpenSubtitles refused the API key.",
+  "admin.integrations.opensubtitles.keyFirst": "Add the API key first.",
+  "admin.integrations.opensubtitles.invalid":
+    "Check what you entered and try again.",
+  "admin.integrations.opensubtitles.unreachable":
+    "OpenSubtitles could not be reached. Try again in a minute.",
 
   "nav.home": "Home",
   "nav.brandHome": "Seyirlik home",
@@ -2396,6 +2423,7 @@ export const en = {
   "admin.subtitles.state.validating": "Checking",
   "admin.subtitles.state.installed": "Installed",
   "admin.subtitles.state.needs-authentication": "Waiting for a sign-in",
+  "admin.subtitles.state.unavailable": "Not found",
   "admin.subtitles.state.failed": "Failed",
   "admin.subtitles.state.superseded": "Superseded",
   "admin.imports.title": "Imports",

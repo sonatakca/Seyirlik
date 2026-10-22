@@ -8,6 +8,7 @@ import {
   saveProviderSession,
   type SubtitleProviderStatus,
 } from "../../lib/subtitlesApi";
+import { OpenSubtitlesAccounts } from "./OpenSubtitlesAccounts";
 
 const PROVIDER_SITES: Record<string, string> = {
   turkcealtyazi: "https://turkcealtyazi.org/",
@@ -151,6 +152,9 @@ export function SubtitleProvidersPanel() {
                 <p className="mt-1 text-xs text-amber-100/70">
                   {provider.session.reason}
                 </p>
+              ) : null}
+              {provider.id === "opensubtitles" ? (
+                <OpenSubtitlesAccounts />
               ) : null}
               {provider.session?.updatedAt ? (
                 <p className="mt-1 text-xs text-white/40">

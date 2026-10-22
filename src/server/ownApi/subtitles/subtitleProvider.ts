@@ -255,6 +255,12 @@ export interface SubtitleProvider {
   readonly rank: number;
   /** Languages it is worth asking, or `null` for "ask about anything". */
   readonly languages: readonly string[] | null;
+  /**
+   * The most downloads one search may spend measuring candidates here. Set by
+   * a provider that counts downloads against a daily allowance, where every
+   * candidate measured is one fewer subtitle for another title.
+   */
+  readonly downloadsPerSearch?: number;
 
   search(
     query: SubtitleQuery,
@@ -286,6 +292,8 @@ export function providerCoversLanguage(
 /**
  * The providers worth asking, in the order to ask them.
  *
+ * The pipeline asks them one at a time and stops at the first that yields a
+ * subtitle, so rank is priority: a lower-ranked provider is a fallback.
  * Highest rank first, and ties broken by id so the order is stable across
  * restarts — an unstable order makes two runs of the same search return
  * different subtitles, which is the kind of thing that looks like a bug in
