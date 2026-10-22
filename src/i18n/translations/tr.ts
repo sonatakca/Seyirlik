@@ -13,12 +13,7 @@ export const tr = {
   "media.status.paused": "Duraklatıldı",
   "media.status.awaiting-import": "İndirildi · içe aktarma bekliyor",
 
-  "notifications.history": "Bildirim geçmişi",
   "notifications.historyEmpty": "Henüz bildirim yok.",
-  "notifications.historyNote":
-    "Bu oturumdaki son etkinlikler. Tekrarlanan güncellemeler bir kez gösterilir.",
-  "notifications.firstShown": "İlk gösterim",
-  "notifications.updated": "Güncelleme",
   "appUpdate.available": "Güncelle",
   "appUpdate.applying": "Güncelleniyor…",
   "appUpdate.tooltip":
@@ -1715,10 +1710,11 @@ export const tr = {
   "logoLayout.couldNotSave": "Konum kaydedilemedi.",
   "logoLayout.noLogo": "Bu yapımın henüz yerleştirilecek bir logosu yok.",
   "notifications.dismiss": "Kapat",
-  "notifications.more": "+{count} tane daha",
-  "notifications.showLess": "Daha az göster",
   "notifications.dismissAll": "Tümünü temizle",
   "notifications.waiting": "+{count} bekliyor",
+  "notifications.now": "Şimdi",
+  "notifications.earlier": "Daha önce",
+  "notifications.clearHistory": "Geçmişi temizle",
   "tasks.mediaProcess": "Medya işleme",
   "tasks.nfoItem": "Öğe NFO dışa aktarımı",
   "tasks.nfoLibrary": "Kütüphane NFO dışa aktarımı",

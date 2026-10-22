@@ -31,7 +31,7 @@ import { LibraryAliasPage } from "./pages/LibraryAliasPage";
 import { LoginPage } from "./pages/LoginPage";
 import { PlayerPage } from "./pages/PlayerPage";
 import { ReaderPage } from "./pages/ReaderPage";
-import { NotificationHost } from "./components/notifications/NotificationHost";
+import { NotificationAnnouncer } from "./components/notifications/NotificationAnnouncer";
 import { useTaskNotifications } from "./hooks/useTaskNotifications";
 import { setPageTitle } from "./lib/pageTitle";
 import {
@@ -394,7 +394,7 @@ export default function App() {
     <>
       <ScrollToTop />
       <NonPlayerHistoryTracker />
-      <NotificationHost />
+      <NotificationAnnouncer />
 
       <RouteColorTransition />
       <Routes>

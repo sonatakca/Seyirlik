@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -23,10 +22,6 @@ import { DwellClock } from "../../lib/dwellClock";
 import { useBake } from "../../lib/timeline/bake";
 import { Curve, derive, type TweenControls } from "../../lib/timeline/curve";
 import { getItemDisplayMetadata } from "../../lib/itemMetadataPreferences";
-import {
-  claimBottomChrome,
-  releaseBottomChrome,
-} from "../../lib/layout/bottomChrome";
 import { getHeroPreviewUrl } from "../../lib/mediaApi";
 import type { MediaItem } from "../../lib/types";
 import { HeroControlButton, HeroCopyBlock } from "./HeroCopy";
@@ -102,9 +97,6 @@ const Z: Record<Role, number> = {
 
 /** The queue's resting shade: none, the miniatures show their artwork clean. */
 const QUEUE_DIM = 0;
-
-/** Space kept above the controls for the notification pile. */
-const CHROME_CLEARANCE_PX = 14;
 
 /**
  * A swipe across the stage: how far a finger must travel, and how much more
@@ -786,46 +778,6 @@ export function HomeHero({
 
   const endTrailer = useCallback(() => setIsTrailerPlaying(false), []);
 
-  // ------------------------------------------ sharing the bottom-right corner
-  const claimId = useId();
-  const controlsTopRef = useRef(0);
-  const controlsBottomRef = useRef(0);
-  useEffect(() => {
-    /*
-     * The control and the thumbnails under it scroll with the section, so the
-     * band they occupy moves with every scroll. It is published as a band —
-     * where it starts as well as where it ends — so the pile can stand below
-     * it once it has risen far enough, instead of climbing after it towards
-     * the masthead and being squeezed to a sliver there.
-     */
-    const update = () => {
-      const section = sectionRef.current;
-      if (!section || !hasOpened) {
-        releaseBottomChrome(claimId);
-        return;
-      }
-      const sectionTop = section.getBoundingClientRect().top;
-      const top = sectionTop + controlsTopRef.current;
-      const occupied = window.innerHeight - top;
-      const below =
-        window.innerHeight - (sectionTop + controlsBottomRef.current);
-      if (occupied <= 0 || top < 0) releaseBottomChrome(claimId);
-      else
-        claimBottomChrome(claimId, Math.round(occupied + CHROME_CLEARANCE_PX), {
-          bottomPx: Math.round(below - CHROME_CLEARANCE_PX),
-          tracking: true,
-        });
-    };
-    update();
-    window.addEventListener("scroll", update, { passive: true });
-    window.addEventListener("resize", update);
-    return () => {
-      window.removeEventListener("scroll", update);
-      window.removeEventListener("resize", update);
-      releaseBottomChrome(claimId);
-    };
-  }, [claimId, hasOpened, stage]);
-
   // ----------------------------------------------------------- the swipe
   const swipeRef = useRef<{
     id: number;
@@ -882,9 +834,6 @@ export function HomeHero({
   const headSlot = slots[0];
   // A phone's pill holds touch-sized buttons, so it stands taller.
   const controlsTop = headSlot ? headSlot.y - (isCompact ? 62 : 54) : 0;
-  controlsTopRef.current = controlsTop;
-  // The progress bar under the thumbnails is the lowest thing in the band.
-  controlsBottomRef.current = headSlot ? headSlot.y + headSlot.height + 12 : 0;
   const copyItem = copyItemId ? (itemsById.get(copyItemId) ?? null) : null;
 
   // The queue's furniture steps aside with the queue, on the same course.

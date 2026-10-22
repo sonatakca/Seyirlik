@@ -13,12 +13,7 @@ export const en = {
   "media.status.paused": "Paused",
   "media.status.awaiting-import": "Downloaded · awaiting import",
 
-  "notifications.history": "Notification history",
   "notifications.historyEmpty": "No notifications yet.",
-  "notifications.historyNote":
-    "Recent activity in this session. Repeated updates appear once.",
-  "notifications.firstShown": "First shown",
-  "notifications.updated": "Updated",
   "appUpdate.available": "Update",
   "appUpdate.applying": "Updating…",
   "appUpdate.tooltip":
@@ -1716,10 +1711,11 @@ export const en = {
   "logoLayout.couldNotSave": "Could not save the placement.",
   "logoLayout.noLogo": "This title has no logo to place yet.",
   "notifications.dismiss": "Dismiss",
-  "notifications.more": "+{count} more",
-  "notifications.showLess": "Show less",
   "notifications.dismissAll": "Clear all",
   "notifications.waiting": "+{count} waiting",
+  "notifications.now": "Now",
+  "notifications.earlier": "Earlier",
+  "notifications.clearHistory": "Clear history",
   "tasks.mediaProcess": "Media processing",
   "tasks.nfoItem": "Item NFO export",
   "tasks.nfoLibrary": "Library NFO export",

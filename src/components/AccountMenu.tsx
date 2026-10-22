@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowDownToLine,
-  Bell,
   LogOut,
   Palette,
   ShieldCheck,
@@ -16,7 +15,6 @@ import { formatBuildLabel } from "../lib/appVersion/buildInfo";
 import { clearAuthSession, getCachedSession } from "../lib/authStorage";
 import { isOfflineSupported } from "../lib/offline/offlineLibrary";
 import { ROUTE_COLOR_TRANSITION_FORCE_EVENT } from "./RouteColorTransition";
-import { openNotificationHistory } from "../lib/notifications/notificationHistoryOpen";
 import type { Language } from "../i18n/translations";
 
 const ITEM =
@@ -38,9 +36,10 @@ interface AccountMenuProps {
 }
 
 /**
- * Everything about the person rather than the library: notifications,
- * downloads, administration, theme, language and logout. They were loose
- * icons in the bar, and logout was one stray tap from any page.
+ * Everything about the person rather than the library: downloads,
+ * administration, theme, language and logout. They were loose icons in the
+ * bar, and logout was one stray tap from any page. Notifications have their
+ * own bell beside it (NotificationCenter).
  */
 export function AccountMenu({
   variant = "desktop",
@@ -121,11 +120,6 @@ export function AccountMenu({
     window.dispatchEvent(new Event(ROUTE_COLOR_TRANSITION_FORCE_EVENT));
   };
 
-  const handleNotifications = () => {
-    setIsOpen(false);
-    openNotificationHistory(triggerRef.current);
-  };
-
   const handleLogout = () => {
     clearAuthSession();
     navigate("/login", { replace: true });
@@ -191,15 +185,6 @@ export function AccountMenu({
             <p className="truncate px-3 pb-2 pt-1.5 text-xs font-semibold text-white/50">
               {session.username}
             </p>
-            <button
-              type="button"
-              role="menuitem"
-              onClick={handleNotifications}
-              className={ITEM}
-            >
-              <Bell size={16} className="shrink-0" />
-              {t("nav.notifications")}
-            </button>
             {isOfflineSupported() ? (
               <Link to="/downloads" role="menuitem" className={ITEM}>
                 <ArrowDownToLine size={16} className="shrink-0" />

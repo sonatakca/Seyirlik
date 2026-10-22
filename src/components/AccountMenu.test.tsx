@@ -3,17 +3,12 @@ import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { AccountMenu } from "./AccountMenu";
 
-const { setLanguage, openNotificationHistory } = vi.hoisted(() => ({
+const { setLanguage } = vi.hoisted(() => ({
   setLanguage: vi.fn(),
-  openNotificationHistory: vi.fn(),
 }));
 
 vi.mock("../i18n/LanguageContext", () => ({
   useLanguage: () => ({ t: (key: string) => key, language: "tr", setLanguage }),
-}));
-
-vi.mock("../lib/notifications/notificationHistoryOpen", () => ({
-  openNotificationHistory,
 }));
 
 vi.mock("../lib/authStorage", () => ({
@@ -74,20 +69,17 @@ describe("account menu", () => {
     expect(screen.getByRole("menu")).toBeInTheDocument();
   });
 
-  it("closes and opens the notification history, handing focus back to it", () => {
+  it("leaves notifications to their own bell", () => {
     render(
       <MemoryRouter>
         <AccountMenu />
       </MemoryRouter>,
     );
 
-    const trigger = screen.getByRole("button", { name: /nav\.account/ });
-    fireEvent.click(trigger);
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "nav.notifications" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /nav\.account/ }));
 
-    expect(openNotificationHistory).toHaveBeenCalledWith(trigger);
-    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(
+      screen.queryByRole("menuitem", { name: "nav.notifications" }),
+    ).toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-import { NotificationHistoryPanel } from "../notifications/NotificationHistoryPanel";
+import { NotificationCenter } from "../notifications/NotificationCenter";
 import { useNavbarScrolled } from "../../hooks/useNavbarScrolled";
 import { Search } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
@@ -58,9 +58,9 @@ export function MobileNavbar() {
               <Search size={18} />
             </button>
           </Tooltip>
+          <NotificationCenter variant="mobile" />
           <AccountMenu variant="mobile" />
         </div>
-        <NotificationHistoryPanel />
       </header>
 
       <MobileTabBar />

@@ -3,7 +3,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useTaskNotifications } from "./useTaskNotifications";
 import {
   dismissAllNotifications,
+  getNotificationHistory,
   getNotifications,
+  holdNotificationClocks,
   resetNotificationsForTests,
 } from "../lib/notifications/notificationStore";
 import type { TaskDto } from "../api/ownApi/dto";
@@ -244,8 +246,10 @@ it.each([10, 20])(
       await vi.advanceTimersByTimeAsync(15000);
     });
     expect(getTasks).toHaveBeenLastCalledWith("2026-09-06T10:00:00.000Z");
-    expect(getNotifications()).toHaveLength(1);
-    const card = getNotifications()[0];
+    // What was raised, not what is still live: a notice now runs out its own
+    // life in the store, whether or not anything shows it.
+    expect(getNotificationHistory()).toHaveLength(1);
+    const card = getNotificationHistory()[0];
     expect(card).toMatchObject({
       tone: "warning",
       task: { outcome: "organize-disabled", status: "succeeded" },
@@ -253,8 +257,8 @@ it.each([10, 20])(
     await act(async () => {
       await vi.advanceTimersByTimeAsync(15000);
     });
-    expect(getNotifications()).toHaveLength(1);
-    expect(getNotifications()[0]?.id).toBe(card?.id);
+    expect(getNotificationHistory()).toHaveLength(1);
+    expect(getNotificationHistory()[0]?.id).toBe(card?.id);
   },
 );
 
@@ -302,6 +306,9 @@ it("keeps the half-minute download handoff to one card, and only when it did som
   // A card per run was a fresh "done" every thirty seconds, stacking up for a
   // job that had found nothing to hand over.
   vi.useFakeTimers();
+  // Held, as an open notification centre holds them, so what was shown stays
+  // to be counted across two minutes of runs.
+  holdNotificationClocks(true);
   let run = 0;
   let started = 0;
   const handoff = (): TaskDto => ({

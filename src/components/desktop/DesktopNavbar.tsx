@@ -1,4 +1,4 @@
-import { NotificationHistoryPanel } from "../notifications/NotificationHistoryPanel";
+import { NotificationCenter } from "../notifications/NotificationCenter";
 import { useLayoutEffect, useRef } from "react";
 import { useReducedMotion } from "framer-motion";
 import { useNavbarScrolled } from "../../hooks/useNavbarScrolled";
@@ -176,11 +176,12 @@ export function DesktopNavbar() {
             </button>
           </Tooltip>
 
+          <NotificationCenter />
+
           {/* The name doubles as the way into /dev: five quick presses. */}
           <AccountMenu onTriggerClick={handleBrandEasterEggClick} />
         </div>
       </nav>
-      <NotificationHistoryPanel />
     </header>
   );
 }

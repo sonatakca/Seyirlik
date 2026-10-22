@@ -1,9 +1,5 @@
-import { useEffect, useId, useRef, useState, type MouseEvent } from "react";
+import { useState, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
-import {
-  claimBottomChrome,
-  releaseBottomChrome,
-} from "../../lib/layout/bottomChrome";
 import { Info, Play, RotateCcw } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { Link, useNavigate } from "react-router-dom";
@@ -120,25 +116,6 @@ export function PhoneTitleHero({
     event.preventDefault();
     navigate(await getPlayTargetForItem(playItem));
   };
-
-  const dockRef = useRef<HTMLDivElement>(null);
-  const claimId = useId();
-  useEffect(() => {
-    const update = () => {
-      const rect = dockRef.current?.getBoundingClientRect();
-      if (rect)
-        claimBottomChrome(claimId, window.innerHeight - rect.top + 16, {
-          bottomPx: window.innerHeight - rect.bottom - 16,
-          tracking: true,
-        });
-    };
-    update();
-    window.addEventListener("resize", update);
-    return () => {
-      window.removeEventListener("resize", update);
-      releaseBottomChrome(claimId);
-    };
-  }, [claimId, isRevealed]);
 
   const line = (index: number) => ({
     initial: { opacity: 0 },
@@ -286,7 +263,6 @@ export function PhoneTitleHero({
             <AnimatePresence>
               {isRevealed ? (
                 <motion.div
-                  ref={dockRef}
                   className={PHONE_TITLE_HERO_ACTIONS}
                   initial={{ opacity: 0 }}
                   animate={{
