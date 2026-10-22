@@ -397,6 +397,7 @@ export function createSubtitleSyncService(dependencies: {
           ffmpegPath,
           inputPath: audio.path,
           streamIndex: audio.streamIndex,
+          ...(audio.isPackagePlaylist ? { isPackagePlaylist: true } : {}),
           ...(request.signal ? { signal: request.signal } : {}),
         });
         await request.progress?.("Matching the subtitle against the speech");

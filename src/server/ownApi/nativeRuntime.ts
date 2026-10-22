@@ -1422,7 +1422,12 @@ export async function createNativeRuntime({
           const packaged = await renditions
             .findPackagedAudio(found.media, sourceStreamIndex)
             .catch(() => null);
-          if (packaged) return { path: packaged.playlistPath, streamIndex: 0 };
+          if (packaged)
+            return {
+              path: packaged.playlistPath,
+              streamIndex: 0,
+              isPackagePlaylist: true,
+            };
           const present = await stat(found.sourcePath).then(
             (stats) => stats.isFile(),
             () => false,

@@ -29,6 +29,7 @@
  * stdout. Nothing decodes audio in this process.
  */
 
+import { writeLocalPackagePlaylist } from "../../../renditions/adaptive/localPlaylist";
 import { runBoundedProcess } from "../../../renditions/processExecution";
 import type { SpeechInterval } from "./subtitleAlignment";
 
@@ -279,20 +280,39 @@ export async function readAudioEnvelope(options: {
   ffmpegPath: string;
   inputPath: string;
   streamIndex: number;
+  /**
+   * The input is a package's HLS playlist, which FFmpeg is handed a decoded
+   * local copy of: a kept original track is named `english (original)`, and
+   * the playlist's own `%20` sends FFmpeg looking for a file that does not
+   * exist. See `localPackagePlaylist`.
+   */
+  isPackagePlaylist?: boolean;
   signal?: AbortSignal;
 }): Promise<EnvelopeSample[]> {
-  const { stdout } = await runBoundedProcess({
-    command: options.ffmpegPath,
-    args: buildAudioEnvelopeArgs(options.inputPath, options.streamIndex),
-    timeoutMs: ENVELOPE_TIMEOUT_MS,
-    // Two lines per quarter-second: a six-hour file is still under thirty
-    // megabytes, and anything past that is not a film.
-    maxOutputBytes: 64 * 1024 * 1024,
-    ...(options.signal ? { signal: options.signal } : {}),
-    // Never the path: this string reaches an operator's screen.
-    describe: "Audio speech analysis",
-  });
-  return parseAudioEnvelope(stdout);
+  // A copy that cannot be made leaves the playlist itself, which still opens
+  // for a name without a space.
+  const localPlaylist = options.isPackagePlaylist
+    ? await writeLocalPackagePlaylist(options.inputPath).catch(() => null)
+    : null;
+  try {
+    const { stdout } = await runBoundedProcess({
+      command: options.ffmpegPath,
+      args: buildAudioEnvelopeArgs(
+        localPlaylist?.path ?? options.inputPath,
+        options.streamIndex,
+      ),
+      timeoutMs: ENVELOPE_TIMEOUT_MS,
+      // Two lines per quarter-second: a six-hour file is still under thirty
+      // megabytes, and anything past that is not a film.
+      maxOutputBytes: 64 * 1024 * 1024,
+      ...(options.signal ? { signal: options.signal } : {}),
+      // Never the path: this string reaches an operator's screen.
+      describe: "Audio speech analysis",
+    });
+    return parseAudioEnvelope(stdout);
+  } finally {
+    await localPlaylist?.remove();
+  }
 }
 
 /** The speaking intervals of one audio track, at the default threshold. */

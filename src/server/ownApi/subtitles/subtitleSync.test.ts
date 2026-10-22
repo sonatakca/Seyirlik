@@ -4,12 +4,16 @@ import type {
   MediaStreamRow,
 } from "../catalogue/catalogueRepository";
 import { createSubtitleSyncService } from "./subtitleSync";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { TitleReferences } from "./subtitleReferences";
 import type { SubtitleStorage } from "./subtitleStorage";
 import { subtitleDigest } from "./subtitleStorage";
+import {
+  ffmpegAvailable,
+  writeSpacedAudioPackage,
+} from "./packagedAudioTestFixture";
 
 const MEDIA_FILE_ID = "11111111-2222-3333-4444-555555555555";
 const RELATIVE_MEDIA = "Movies/Film (2024)/Film.mkv";
@@ -392,3 +396,41 @@ describe("sync", () => {
     expect((await gone.sync(request)).outcome).toBe("refused");
   });
 });
+
+describe.skipIf(!ffmpegAvailable)(
+  "timing against a packaged track whose name has a space in it",
+  { timeout: 120_000 },
+  () => {
+    /*
+     * The package's rendition of a kept original track is
+     * `english (original)`, reached from its playlist as
+     * `english%20(original).m4a`, which FFmpeg could not open.
+     */
+    it("listens through the package playlist once the source is removed", async () => {
+      const pkg = await writeSpacedAudioPackage(cues(120));
+      try {
+        const { service } = harness(
+          { [ENGLISH]: cues(120), [TURKISH]: cues(120, 14.5) },
+          {
+            audio: async () => ({
+              path: pkg.playlistPath,
+              streamIndex: 0,
+              isPackagePlaylist: true,
+            }),
+            embeddedSubtitles: async () => [],
+          },
+        );
+        const result = await service.sync({
+          ...request,
+          reference: { kind: "audio", streamIndex: 1 },
+          dryRun: true,
+        });
+        expect(result.outcome).toBe("analysed");
+        if (result.outcome !== "analysed") return;
+        expect(result.offsetSeconds).toBeCloseTo(-14.5, 0);
+      } finally {
+        await rm(pkg.root, { recursive: true, force: true });
+      }
+    });
+  },
+);
