@@ -2010,6 +2010,9 @@ export async function packageAdaptiveRendition(
           sourcePath: request.sourcePath,
           audioOutputs: plannedAudioOutputs,
           sourceDurationSeconds: probe.durationSeconds,
+          // The ladder stops at the last frame; sound after it would make the
+          // audio outlast every rung. See `withVideoEnd`.
+          ...(videoEndSeconds === null ? {} : { endSeconds: videoEndSeconds }),
           ffmpegPath,
           ffprobePath,
           logPath: path.join(paths.logsRoot, `${request.mediaId}.adaptive.log`),

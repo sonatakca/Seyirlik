@@ -82,6 +82,14 @@ export interface EnsureAudioStageInput {
   sourcePath: string;
   audioOutputs: readonly AdaptiveAudioOutput[];
   sourceDurationSeconds: number;
+  /**
+   * Where the source's video ends, when its sound runs on past the last frame.
+   *
+   * The ladder stops at that frame, so audio encoded to the container's end
+   * would outlast every video rendition and the package would fail its
+   * coverage check after the whole encode had run.
+   */
+  endSeconds?: number;
   ffmpegPath: string;
   ffprobePath: string;
   logPath: string;
@@ -157,6 +165,7 @@ export async function ensureAudioStage({
   sourcePath,
   audioOutputs,
   sourceDurationSeconds,
+  endSeconds,
   ffmpegPath,
   ffprobePath,
   logPath,
@@ -171,6 +180,13 @@ export async function ensureAudioStage({
   now = Date.now,
 }: EnsureAudioStageInput): Promise<AudioStageResult> {
   const wanted = audioOutputs.map((output) => output.sourceStreamIndex);
+  // How much of the timeline the tracks cover: up to the last frame when the
+  // source's sound runs on past it, otherwise the whole source.
+  const end =
+    endSeconds !== undefined && endSeconds < sourceDurationSeconds
+      ? Number(endSeconds.toFixed(6))
+      : undefined;
+  const coverSeconds = end ?? sourceDurationSeconds;
   const salvaging = damagedIntervals.length > 0;
   const existing = await readAuxiliaryStage(stageDirectory);
   if (
@@ -181,6 +197,7 @@ export async function ensureAudioStage({
     existing.adaptiveProfileVersion === adaptiveProfileVersion &&
     sameStreams(existing, wanted) &&
     sameDamagedIntervals(existing.damagedIntervals, damagedIntervals) &&
+    existing.endSeconds === end &&
     (await audioFilesPresent(stageDirectory, audioOutputs))
   ) {
     /*
@@ -201,8 +218,8 @@ export async function ensureAudioStage({
           writtenBytes: 0,
         };
       }),
-      processedSeconds: sourceDurationSeconds,
-      durationSeconds: sourceDurationSeconds,
+      processedSeconds: coverSeconds,
+      durationSeconds: coverSeconds,
       fraction: 1,
       writtenBytes: existing.totalBytes,
       reused: true,
@@ -239,7 +256,7 @@ export async function ensureAudioStage({
         sourcePath,
         audioOutputs,
         damagedIntervals,
-        sourceDurationSeconds,
+        sourceDurationSeconds: coverSeconds,
       })
     : null;
   const args = buildAdaptivePackageFfmpegArgs({
@@ -253,6 +270,7 @@ export async function ensureAudioStage({
           audioFilterComplex: salvagePlan.filterComplex,
         }
       : {}),
+    ...(end === undefined ? {} : { durationSeconds: end }),
     statsPeriodSeconds: 1,
   });
 
@@ -312,7 +330,7 @@ export async function ensureAudioStage({
               });
               const fraction = safeFraction(
                 progress.processedSeconds,
-                sourceDurationSeconds,
+                coverSeconds,
               );
               /*
                * The estimate uses FFmpeg's own throughput multiplier over the
@@ -322,7 +340,7 @@ export async function ensureAudioStage({
                */
               const remaining = Math.max(
                 0,
-                sourceDurationSeconds - progress.processedSeconds,
+                coverSeconds - progress.processedSeconds,
               );
               const etaSeconds =
                 smoothed && smoothed > 0
@@ -331,7 +349,7 @@ export async function ensureAudioStage({
               onProgress({
                 tracks,
                 processedSeconds: progress.processedSeconds,
-                durationSeconds: sourceDurationSeconds,
+                durationSeconds: coverSeconds,
                 fraction,
                 ...(smoothed === undefined ? {} : { speed: smoothed }),
                 writtenBytes: tracks.reduce(
@@ -439,11 +457,11 @@ export async function ensureAudioStage({
 
     const probe = await probePackagedAudio(mediaPath, ffprobePath, signal);
     if (
-      Math.abs(probe.durationSeconds - sourceDurationSeconds) >
-      Math.max(AUDIO_DURATION_TOLERANCE_SECONDS, sourceDurationSeconds * 0.01)
+      Math.abs(probe.durationSeconds - coverSeconds) >
+      Math.max(AUDIO_DURATION_TOLERANCE_SECONDS, coverSeconds * 0.01)
     ) {
       throw new Error(
-        `Audio rendition ${id} covers ${probe.durationSeconds.toFixed(2)}s of a ${sourceDurationSeconds.toFixed(2)}s source.`,
+        `Audio rendition ${id} covers ${probe.durationSeconds.toFixed(2)}s of a ${coverSeconds.toFixed(2)}s source.`,
       );
     }
   }
@@ -462,6 +480,7 @@ export async function ensureAudioStage({
           })),
         }
       : {}),
+    ...(end === undefined ? {} : { endSeconds: end }),
     totalBytes,
     completedAt: new Date().toISOString(),
   };
@@ -481,8 +500,8 @@ export async function ensureAudioStage({
         writtenBytes: measuredBytes.get(output.sourceStreamIndex) ?? 0,
       };
     }),
-    processedSeconds: sourceDurationSeconds,
-    durationSeconds: sourceDurationSeconds,
+    processedSeconds: coverSeconds,
+    durationSeconds: coverSeconds,
     fraction: 1,
     writtenBytes: totalBytes,
   });

@@ -247,3 +247,88 @@ describe("audio progress comes from the encoder, not from a clock", () => {
     expect(samples.some((sample) => sample.fraction === 1)).toBe(false);
   });
 });
+
+/**
+ * The Sopranos S06E01 failure: the source carries a second of sound after its
+ * last frame, the ladder stops at that frame, and audio encoded to the
+ * container's end failed the package's coverage check after a full encode.
+ */
+describe("audio ends where the video ends", () => {
+  const VIDEO_END = DURATION - 0.986;
+
+  async function run(endSeconds?: number) {
+    let args: string[] = [];
+    const samples: AudioPhaseProgress[] = [];
+    await ensureAudioStage({
+      stageDirectory: path.join(workspace, "audio-stage"),
+      mediaId: MEDIA_ID,
+      sourceFingerprint: FINGERPRINT,
+      adaptiveProfileVersion: PROFILE,
+      sourcePath: path.join(workspace, "source.mkv"),
+      audioOutputs: [audioOutput(1, true)],
+      sourceDurationSeconds: DURATION,
+      ...(endSeconds === undefined ? {} : { endSeconds }),
+      ffmpegPath: "ffmpeg",
+      ffprobePath: "ffprobe",
+      logPath: path.join(workspace, "log.txt"),
+      now: (() => {
+        let tick = 0;
+        return () => (tick += 1_000);
+      })(),
+      runEncoder: async (_command, encoderArgs, options) => {
+        args = encoderArgs;
+        options.onProgress?.({ processedSeconds: VIDEO_END / 2 });
+        throw new Error("fake encoder stopped after reporting");
+      },
+      onProgress: (progress) => samples.push(progress),
+    }).catch(() => undefined);
+    return { args, samples };
+  }
+
+  /** The output duration, as distinct from an input `-t` before `-i`. */
+  function outputDuration(args: string[]): string | undefined {
+    const afterInputs = args.slice(args.lastIndexOf("-i") + 2);
+    const at = afterInputs.indexOf("-t");
+    return at === -1 ? undefined : afterInputs[at + 1];
+  }
+
+  it("cuts the audio at the last frame", async () => {
+    const { args, samples } = await run(VIDEO_END);
+    expect(outputDuration(args)).toBe(VIDEO_END.toFixed(6));
+    expect(samples[0]!.durationSeconds).toBe(VIDEO_END);
+    expect(samples[0]!.fraction).toBeCloseTo(0.5, 5);
+  });
+
+  it("runs to the source's end when the video lasts as long", async () => {
+    expect(outputDuration((await run()).args)).toBeUndefined();
+    expect(outputDuration((await run(DURATION)).args)).toBeUndefined();
+  });
+
+  it("rebuilds a stage encoded to the container's end", async () => {
+    const stageDirectory = path.join(workspace, "audio-stage");
+    await mkdir(path.join(stageDirectory, "audio", "track-1"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(stageDirectory, "audio", "track-1", "media.m4s"),
+      "bytes",
+    );
+    await writeFile(
+      path.join(stageDirectory, "audio", "track-1", "playlist.m3u8"),
+      "#EXTM3U",
+    );
+    await writeAuxiliaryStage(stageDirectory, {
+      schemaVersion: EPOCH_CHECKPOINT_SCHEMA_VERSION,
+      mediaId: MEDIA_ID,
+      sourceFingerprint: FINGERPRINT,
+      adaptiveProfileVersion: PROFILE,
+      stage: "audio",
+      streamIndexes: [1],
+      totalBytes: 4_096,
+      completedAt: new Date().toISOString(),
+    });
+
+    const { args } = await run(VIDEO_END);
+    expect(outputDuration(args)).toBe(VIDEO_END.toFixed(6));
+  });
+});
