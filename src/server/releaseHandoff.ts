@@ -29,6 +29,12 @@ export interface ReleaseHandoffOptions {
   worker: WorkerControl;
   /** Ends the process. Called once, with nothing held. */
   exit(): void | Promise<void>;
+  /**
+   * Whether a job type can hold the wait for hours (an encode). While such a
+   * job is held, `onLongWait` names the release the short work should move to.
+   */
+  isLong?: (jobType: string) => boolean;
+  onLongWait?: (release: string) => void;
   intervalMs?: number;
   resolve?: (path: string) => Promise<string>;
   logger?: Pick<Console, "info" | "warn">;
@@ -48,6 +54,8 @@ export async function watchReleaseHandoff({
   pointer,
   worker,
   exit,
+  isLong = () => false,
+  onLongWait,
   intervalMs = DEFAULT_INTERVAL_MS,
   resolve = (path) => realpath(path),
   logger = console,
@@ -74,6 +82,15 @@ export async function watchReleaseHandoff({
   let paused = false;
   let exiting = false;
   let checking = false;
+  /** The release this wait is for; a second switch during it moves this. */
+  let waitingFor: string | null = null;
+
+  function offerLongWait(next: string): void {
+    if (!onLongWait) return;
+    if (worker.activeJobs().some((job) => isLong(job.jobType))) {
+      onLongWait(next);
+    }
+  }
 
   async function target(): Promise<string | null> {
     try {
@@ -88,6 +105,7 @@ export async function watchReleaseHandoff({
   function cancel(): void {
     generation += 1;
     paused = false;
+    waitingFor = null;
     worker.resume();
     logger.info(
       "[Seyirlik Worker] release.handoff.cancelled: the start directory points back at this release.",
@@ -128,10 +146,18 @@ export async function watchReleaseHandoff({
         if (paused) cancel();
         return;
       }
-      // Already waiting: a second switch during the wait ends in the same exit.
-      if (paused) return;
+      // Already waiting: a second switch during the wait ends in the same exit,
+      // but the short work moves on to the newer release.
+      if (paused) {
+        if (next !== waitingFor) {
+          waitingFor = next;
+          offerLongWait(next);
+        }
+        return;
+      }
 
       paused = true;
+      waitingFor = next;
       generation += 1;
       const mine = generation;
       worker.pause();
@@ -142,6 +168,7 @@ export async function watchReleaseHandoff({
             ? "nothing is running, switching now."
             : `switching after ${held.map((job) => `${job.jobType} ${job.id}`).join(", ")}.`),
       );
+      offerLongWait(next);
       void worker.whenIdle().then(() => finish(mine));
     } finally {
       checking = false;

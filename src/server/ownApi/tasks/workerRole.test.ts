@@ -6,6 +6,7 @@ import { SUBTITLE_JOB_TYPES } from "../subtitles/subtitleJobs";
 import { JOB_TYPES } from "./jobHandlers";
 import {
   HEAVY_JOB_TYPES,
+  LONG_JOB_TYPES,
   ownsLibrary,
   ownsProcessing,
   parseWorkerRole,
@@ -100,6 +101,31 @@ describe("worker roles", () => {
     ]);
     expect(claimingLane(all, IMPORT_JOB_TYPES.run)).toBe("library");
     expect(claimingLane(all, SUBTITLE_JOB_TYPES.run)).toBeNull();
+  });
+
+  /*
+   * A bridge runs beside a worker that still holds an encode. It must never
+   * take long work, nor the work that goes through the encoder's own scratch
+   * and enqueuer, and it should take everything else its role takes.
+   */
+  it("gives a bridge the short half of its role and nothing that holds the encoder", () => {
+    for (const role of ["heavy", "all"] as const) {
+      const bridge = workerLanes(role, [], { bridge: true });
+      const full = workerLanes(role, []);
+      for (const type of EVERY_TYPE) {
+        const owned =
+          LONG_JOB_TYPES.includes(type) ||
+          type === IMPORT_JOB_TYPES.process ||
+          type === GARBAGE_JOB_TYPES.collect;
+        expect(claimingLane(bridge, type) !== null, `${role} ${type}`).toBe(
+          !owned && claimingLane(full, type) !== null,
+        );
+      }
+    }
+    expect(
+      workerLanes("heavy", [], { bridge: true }).map((lane) => lane.name),
+    ).toEqual(["downloads"]);
+    expect(LONG_JOB_TYPES).toContain(JOB_TYPES.mediaProcess);
   });
 
   it("leaves encode bookkeeping to the worker that runs the encoder", () => {

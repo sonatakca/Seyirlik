@@ -16,8 +16,8 @@
 # once Windows has activated (and so migrated), the commit is staged there in
 # a new folder and its `current` junction is switched. Its worker moves over by
 # itself after the job it holds, so this never waits for an encode and never
-# stops one. A laptop that is switched off is skipped and caught up by the
-# next ship.
+# stops one; short jobs move at once, through a bridge (releaseBridge.ts). A
+# laptop that is switched off is skipped and caught up by the next ship.
 #
 # When the commits touch the server, its migrations or the deploy scripts,
 # Windows goes first and the front ends wait for it (a new front end may need

@@ -170,6 +170,16 @@ A long encode keeps its worker on the old release until the encode ends. That
 is deliberate: changing the encoder in the middle of a job is what once
 destroyed a 22-epoch assembly.
 
+The rest of the queue does not wait for it. While the old worker holds an
+encode or a trickplay sheet, it starts a bridge from `current`, which by then
+names the new release (`src/server/releaseBridge.ts`). The bridge claims the
+short jobs only (downloads, imports, replacements), never an encode, and none
+of the encoder owner's bookkeeping. It stops by itself once the old worker has
+exited, or when `current` moves away from its release. It logs
+`release.bridge.start` in the worker's log and writes its own output to
+`seyirlik-worker-bridge.log` in the temp folder (`C:\Seyirlik\tmp` on the
+laptop).
+
 ## FFmpeg
 
 Installed machine-wide and addressed by absolute path through

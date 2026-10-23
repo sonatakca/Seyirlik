@@ -459,8 +459,16 @@ export async function createNativeRuntime({
    * `workerRole.ts` and `ReconcileOptions.deleteMissing`.
    */
   const workerRole = parseWorkerRole(environment.SEYIRLIK_WORKER_ROLE);
-  const processingWorker = ownsProcessing(runWorker, workerRole);
-  const libraryWorker = ownsLibrary(runWorker, workerRole);
+  /*
+   * A bridge (`releaseBridge.ts`) runs beside a worker that still holds an
+   * encode. That worker owns everything a role owns; the bridge only claims
+   * short jobs, so it must not also recover "interrupted" encodes or run the
+   * timers, or it would act on the encode still running next to it.
+   */
+  const bridgeWorker = environment.SEYIRLIK_WORKER_BRIDGE === "1";
+  const processingWorker =
+    !bridgeWorker && ownsProcessing(runWorker, workerRole);
+  const libraryWorker = !bridgeWorker && ownsLibrary(runWorker, workerRole);
   const deleteMissingTitles = parseDeleteMissing(
     environment.SEYIRLIK_CATALOGUE_DELETE_MISSING,
   );
@@ -1685,7 +1693,9 @@ export async function createNativeRuntime({
      * A `light` or `heavy` worker runs only its half of these; see
      * `workerRole.ts`.
      */
-    lanes: workerLanes(workerRole, disabledSubtitleJobTypes(subtitleConfig)),
+    lanes: workerLanes(workerRole, disabledSubtitleJobTypes(subtitleConfig), {
+      bridge: bridgeWorker,
+    }),
     handlers: {
       ...createJobHandlers({
         libraries,

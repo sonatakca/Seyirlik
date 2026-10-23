@@ -125,6 +125,59 @@ describe("handing a worker over to a new release", () => {
   });
 
   /*
+   * An encode can hold the wait for hours. The short work moves to the new
+   * release meanwhile, through whatever `onLongWait` starts — and again if a
+   * newer release lands before the encode ends.
+   */
+  it("offers the short work to the new release while an encode holds the wait", async () => {
+    const link = pointer("/app/releases/1");
+    const held = fakeWorker(true);
+    const offered: string[] = [];
+    const handoff = await watchReleaseHandoff({
+      pointer: "/app/current",
+      worker: held.worker,
+      exit: vi.fn(),
+      isLong: (jobType) => jobType === "media.process",
+      onLongWait: (release) => void offered.push(release),
+      resolve: link.resolve,
+      logger: quiet,
+    });
+
+    link.point("/app/releases/2");
+    await handoff.check();
+    await handoff.check();
+    await settle();
+    expect(offered).toEqual(["/app/releases/2"]);
+
+    link.point("/app/releases/3");
+    await handoff.check();
+    await settle();
+    expect(offered).toEqual(["/app/releases/2", "/app/releases/3"]);
+    handoff.stop();
+  });
+
+  it("offers nothing when what it holds is short", async () => {
+    const link = pointer("/app/releases/1");
+    const held = fakeWorker(true);
+    const onLongWait = vi.fn();
+    const handoff = await watchReleaseHandoff({
+      pointer: "/app/current",
+      worker: held.worker,
+      exit: vi.fn(),
+      isLong: () => false,
+      onLongWait,
+      resolve: link.resolve,
+      logger: quiet,
+    });
+
+    link.point("/app/releases/2");
+    await handoff.check();
+    await settle();
+    expect(onLongWait).not.toHaveBeenCalled();
+    handoff.stop();
+  });
+
+  /*
    * Activation puts `current` back when the new server does not come up. The
    * worker was only waiting to leave; it goes back to work instead.
    */

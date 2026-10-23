@@ -17,8 +17,14 @@ import {
 import { createDatabasePool } from "./ownApi/database/databasePool";
 import { parseDatabaseConfig } from "./ownApi/database/databaseConfig";
 import { validateMigrationsApplied } from "./ownApi/database/migrationRunner";
-import { parseWorkerRole } from "./ownApi/tasks/workerRole";
+import { LONG_JOB_TYPES, parseWorkerRole } from "./ownApi/tasks/workerRole";
 import { watchReleaseHandoff } from "./releaseHandoff";
+import {
+  BRIDGE_ENV,
+  BRIDGE_PARENT_ENV,
+  createReleaseBridge,
+  watchBridgeParent,
+} from "./releaseBridge";
 
 /**
  * Optional dedicated worker process.
@@ -134,11 +140,15 @@ export async function startMediaWorkerFromEnv(): Promise<() => Promise<void>> {
     `Seyirlik worker running against media root: ${resolvedMediaRoot}`,
   );
 
-  const shutdown = async (reason: NodeJS.Signals | "release-handoff") => {
+  const shutdown = async (
+    reason: NodeJS.Signals | "release-handoff" | "bridge-done",
+  ) => {
     console.info(
       reason === "release-handoff"
         ? "[Seyirlik Worker] Handing over to the new release; shutting down."
-        : `[Seyirlik Worker] ${reason} received; shutting down.`,
+        : reason === "bridge-done"
+          ? "[Seyirlik Worker] The bridge's parent has gone; shutting down."
+          : `[Seyirlik Worker] ${reason} received; shutting down.`,
     );
 
     // An encoder that is slow to take its signal must not hold the process open
@@ -178,13 +188,40 @@ export async function startMediaWorkerFromEnv(): Promise<() => Promise<void>> {
    * symlink names it in SEYIRLIK_RELEASE_POINTER.
    */
   if (runtime.worker && process.env.SEYIRLIK_RELEASE_HANDOFF !== "false") {
+    const pointer =
+      process.env.SEYIRLIK_RELEASE_POINTER?.trim() || process.cwd();
+    const bridgeParent = Number(process.env[BRIDGE_PARENT_ENV]);
+    const isBridge =
+      process.env[BRIDGE_ENV] === "1" && Number.isInteger(bridgeParent);
+    /*
+     * While this release finishes an encode, the short jobs run on the new
+     * one in a bridge (`releaseBridge.ts`). A bridge starts no bridge of its
+     * own: it never holds long work.
+     */
+    const bridge =
+      isBridge || !process.argv[1]
+        ? null
+        : createReleaseBridge({ pointer, entry: process.argv[1] });
     const handoff = await watchReleaseHandoff({
-      pointer: process.env.SEYIRLIK_RELEASE_POINTER?.trim() || process.cwd(),
+      pointer,
       worker: runtime.worker,
       exit: () => shutdown("release-handoff"),
+      isLong: (jobType) => LONG_JOB_TYPES.includes(jobType),
+      ...(bridge
+        ? { onLongWait: (release: string) => bridge.start(release) }
+        : {}),
     });
     if (handoff.release) {
-      console.info(`[Seyirlik Worker] release: ${handoff.release}`);
+      console.info(
+        `[Seyirlik Worker] release: ${handoff.release}${isBridge ? ` (bridge for pid ${bridgeParent})` : ""}`,
+      );
+    }
+    if (isBridge) {
+      watchBridgeParent({
+        parentPid: bridgeParent,
+        worker: runtime.worker,
+        exit: () => shutdown("bridge-done"),
+      });
     }
   }
 
