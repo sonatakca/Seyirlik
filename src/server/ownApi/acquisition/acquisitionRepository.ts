@@ -18,6 +18,7 @@ import type {
   AcquisitionState,
   FailureClass,
 } from "./acquisitionState";
+import { importUnderWaySql } from "../imports/importLanding";
 import { isTerminal } from "./acquisitionState";
 
 export interface AcquisitionTarget {
@@ -426,7 +427,8 @@ export function createAcquisitionRepository(
        *
        * `downloaded` never changes again, so it cannot mean "still coming" on
        * its own. A finished download covers its target while its import is
-       * under way, or for a day while it waits for one; after that, whatever
+       * under way — which lasts until the library scan has registered what it
+       * filed — or for a day while it waits for one; after that, whatever
        * the import did not file is missing again. A season pack that filed
        * half its episodes used to block every later search of its season.
        */
@@ -437,7 +439,7 @@ export function createAcquisitionRepository(
               AND (
                 a.state <> 'downloaded'
                 OR EXISTS (SELECT 1 FROM imports i WHERE i.acquisition_id = a.id
-                             AND i.state NOT IN ('complete','cancelled','failed'))
+                             AND ${importUnderWaySql("i")})
                 OR (NOT EXISTS (SELECT 1 FROM imports i WHERE i.acquisition_id = a.id)
                     AND a.completed_at > now() - interval '1 day')
               )
