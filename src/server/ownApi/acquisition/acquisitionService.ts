@@ -16,6 +16,7 @@
  */
 import {
   assertTransition,
+  planRetry,
   type AcquisitionState,
   type FailureClass,
 } from "./acquisitionState";
@@ -53,6 +54,8 @@ export interface AcquisitionRecord {
   readonly idempotencyKey: string;
   readonly externalId?: string;
   readonly attempt: number;
+  /** When an `awaiting_retry` row is due; absent means now. */
+  readonly retryAfterMs?: number;
   readonly downloadPath?: string;
   readonly sizeBytes?: number;
   /** When the row entered its current state; the submit grace period uses it. */
@@ -262,6 +265,34 @@ export function createAcquisitionService({
     );
   }
 
+  /**
+   * Parks a transient failure until its next attempt is due.
+   *
+   * The time is what makes `awaiting_retry` true: the reconciler submits the
+   * row again once it has passed. A release that has used its attempts fails
+   * instead, so the row says it needs a person rather than waiting forever.
+   */
+  async function retryLater(
+    record: AcquisitionRecord,
+    failureClass: FailureClass,
+    detail: string,
+  ): Promise<boolean> {
+    const plan = planRetry(failureClass, record.attempt);
+    return store.update(
+      record.id,
+      record.state,
+      plan.action === "retry"
+        ? {
+            state: "awaiting_retry",
+            failureClass,
+            failureDetail: detail,
+            retryAfterMs: now() + plan.delayMs,
+          }
+        : { state: "failed", failureClass, failureDetail: detail },
+      detail,
+    );
+  }
+
   return {
     async submit(acquisitionId, signal) {
       const record = await store.get(acquisitionId);
@@ -302,10 +333,9 @@ export function createAcquisitionService({
           await fail(claimed, "sab-auth", error.message);
           return;
         }
-        await store.update(
-          claimed.id,
-          "resolving",
-          { state: "awaiting_retry", failureClass: "sab-unavailable" },
+        await retryLater(
+          claimed,
+          "sab-unavailable",
           "SABnzbd could not be asked whether the job already exists.",
         );
         return;
@@ -340,16 +370,7 @@ export function createAcquisitionService({
               ? "nzb-unavailable"
               : "indexer-unavailable";
         if (failureClass === "indexer-unavailable") {
-          await store.update(
-            claimed.id,
-            "resolving",
-            {
-              state: "awaiting_retry",
-              failureClass,
-              failureDetail: indexerError.message,
-            },
-            indexerError.message,
-          );
+          await retryLater(claimed, failureClass, indexerError.message);
         } else {
           await fail(claimed, failureClass, indexerError.message);
         }
@@ -486,10 +507,9 @@ export function createAcquisitionService({
           // has had time to list it.
           if (now() - record.updatedAtMs < submitGraceMs) continue;
           if (
-            await store.update(
-              record.id,
-              "submitting",
-              { state: "awaiting_retry", failureClass: "submission-timeout" },
+            await retryLater(
+              record,
+              "submission-timeout",
               "SABnzbd never showed the job; it will be offered again.",
             )
           ) {

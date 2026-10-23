@@ -20,7 +20,7 @@ import {
   validationError,
 } from "../api/validation";
 import type { JobQueue } from "../tasks/jobQueue";
-import { ACQUISITION_JOB_TYPES } from "./acquisitionJobs";
+import { ACQUISITION_JOB_TYPES, submitDedupeKey } from "./acquisitionJobs";
 import {
   createAcquisitionFallback,
   mediaTargetOf,
@@ -64,17 +64,6 @@ const CREATE_KEYS = [
   "score",
   "reasons",
 ] as const;
-
-/**
- * One queued submission per acquisition.
- *
- * The queue collapses this onto a job that is queued or already running, so
- * asking twice cannot put the same release in front of two workers. It does
- * not collapse onto a finished job, which is what leaves a retry free to run.
- */
-function submitDedupeKey(acquisitionId: string): string {
-  return `acquisition.submit:${acquisitionId}`;
-}
 
 interface AcquisitionDto {
   readonly id: string;

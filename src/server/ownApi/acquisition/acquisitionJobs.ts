@@ -34,8 +34,20 @@ export const ACQUISITION_JOB_TYPES = {
 } as const;
 
 /**
- * What the automatic replacement needs. Absent, a failed release waits for
- * an operator, which is how it always worked.
+ * One queued submission per acquisition.
+ *
+ * The queue collapses this onto a job that is queued or already running, so
+ * asking twice cannot put the same release in front of two workers. It does
+ * not collapse onto a finished job, which is what leaves a retry free to run.
+ */
+export function submitDedupeKey(acquisitionId: string): string {
+  return `${ACQUISITION_JOB_TYPES.submit}:${acquisitionId}`;
+}
+
+/**
+ * What automatic recovery needs: replacing a release that cannot complete,
+ * and submitting again one whose retry is due. Absent, both wait for an
+ * operator, which is how it always worked.
  */
 export interface AutomaticReplacement {
   readonly fallback: AcquisitionFallback;
@@ -77,7 +89,28 @@ export function createAcquisitionJobHandlers(
      */
     let retried = 0;
     let abandoned = 0;
+    let resubmitted = 0;
     for (const record of await repository.list(200)) {
+      if (record.state === "awaiting_retry") {
+        /*
+         * Its time has come, so it is submitted again. Nothing else picks a
+         * waiting row up, and without this it would wait forever while the
+         * page promised a retry. A row with no time is due now.
+         */
+        if (
+          automatic &&
+          (record.retryAfterMs === undefined ||
+            record.retryAfterMs <= Date.now())
+        ) {
+          await automatic.queue.enqueue({
+            jobType: ACQUISITION_JOB_TYPES.submit,
+            payload: { acquisitionId: record.id },
+            dedupeKey: submitDedupeKey(record.id),
+          });
+          resubmitted += 1;
+        }
+        continue;
+      }
       if (record.state !== "failed" || !record.failureClass) continue;
       const failure = record.failureClass as FailureClass;
       if (dispositionFor(failure) === "terminal") continue;
@@ -114,7 +147,12 @@ export function createAcquisitionJobHandlers(
         abandoned += 1;
       }
     }
-    return { ...result, retried, awaitingAlternative: abandoned };
+    return {
+      ...result,
+      retried,
+      resubmitted,
+      awaitingAlternative: abandoned,
+    };
   };
 
   /**

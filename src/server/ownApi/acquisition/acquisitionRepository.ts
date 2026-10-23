@@ -139,6 +139,7 @@ interface Row {
   idempotency_key: string;
   external_id: string | null;
   attempt: number;
+  retry_after: Date | null;
   download_path: string | null;
   size_bytes: string | number | null;
   failure_class: string | null;
@@ -155,7 +156,7 @@ interface Row {
 }
 
 const COLUMNS = `id, state, indexer_id, release_guid, release_title,
-  idempotency_key, external_id, attempt, download_path, size_bytes,
+  idempotency_key, external_id, attempt, retry_after, download_path, size_bytes,
   failure_class, failure_detail, target_title, target_kind, target_item_id,
   target_year, target_season, target_episode, origin, created_at, updated_at`;
 
@@ -170,6 +171,7 @@ function toSummary(row: Row): AcquisitionSummary {
     idempotencyKey: row.idempotency_key,
     ...(row.external_id ? { externalId: row.external_id } : {}),
     attempt: row.attempt,
+    ...(row.retry_after ? { retryAfterMs: row.retry_after.getTime() } : {}),
     ...(row.download_path ? { downloadPath: row.download_path } : {}),
     ...(size === undefined || Number.isNaN(size) ? {} : { sizeBytes: size }),
     ...(row.failure_class ? { failureClass: row.failure_class } : {}),
