@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createAcquisitionRoutes } from "./acquisitionRoutes";
 import { ACQUISITION_JOB_TYPES } from "./acquisitionJobs";
 import { SabError } from "./sabnzbd";
-import type { SabJob, SabnzbdClient } from "./sabnzbd";
+import type { SabJob, SabnzbdClient, SabServerStatus } from "./sabnzbd";
 import type {
   AcquisitionRepository,
   AcquisitionSummary,
@@ -935,6 +935,93 @@ describe("live progress", () => {
     expect(entry!.speedBytesPerSecond).toBeUndefined();
     expect(entry!.etaSeconds).toBeUndefined();
     expect(entry!.stage).toBe("paused");
+  });
+
+  /** Work waiting, nothing moving: SABnzbd 5's slots still say "Downloading". */
+  function idle(servers: () => Promise<SabServerStatus[]>) {
+    const sab = live();
+    const snapshot = sab.queueSnapshot.getMockImplementation()!;
+    sab.queueSnapshot.mockImplementation(async () => ({
+      ...(await snapshot()),
+      speedBytesPerSecond: 0,
+    }));
+    return { ...sab, servers: vi.fn(servers) };
+  }
+  const NEWSDEMON_502 =
+    "Cannot connect to server news.newsdemon.com [502 Connection failure. Please contact technical support.]";
+
+  it("calls a queue no news server will serve stalled, not downloading", async () => {
+    // House of the Dragon sat at 94% "downloading" for a day while
+    // SABnzbd's only server refused every connection.
+    const sab = idle(async () => [
+      { name: "news.newsdemon.com", active: false, error: NEWSDEMON_502 },
+    ]);
+    const h = harness([downloading, waiting, unpacking], { sab });
+    const { payload } = await invoke(route(h, "GET", path));
+    expect(payload?.data).toMatchObject({
+      reachable: true,
+      paused: false,
+      stalled: {
+        servers: [{ name: "news.newsdemon.com", error: NEWSDEMON_502 }],
+      },
+    });
+    const progress = payload?.data?.progress as Array<Record<string, unknown>>;
+    expect(progress.map((entry) => entry.stage)).toEqual([
+      "stalled",
+      "stalled",
+      // Unpacking needs no server, and goes on.
+      "processing",
+    ]);
+    // The figures are SABnzbd's own and stay; an estimate would be invented.
+    expect(progress[0]).toMatchObject({ percent: 48, queuePosition: 1 });
+    expect(progress[0]!.etaSeconds).toBeUndefined();
+    expect(progress[0]!.speedBytesPerSecond).toBeUndefined();
+  });
+
+  it("still calls a server between failures stalled while it holds an error", async () => {
+    // SABnzbd lets a refused server try again after a penalty; until it
+    // succeeds the error stands, and nothing is moving.
+    const sab = idle(async () => [
+      { name: "news.newsdemon.com", active: true, error: NEWSDEMON_502 },
+    ]);
+    const h = harness([downloading], { sab });
+    const { payload } = await invoke(route(h, "GET", path));
+    expect(payload?.data?.stalled).toBeDefined();
+  });
+
+  it("does not call a pause between articles stalled", async () => {
+    const sab = idle(async () => [{ name: "news.example", active: true }]);
+    const h = harness([downloading], { sab });
+    const { payload } = await invoke(route(h, "GET", path));
+    expect(payload?.data?.stalled).toBeUndefined();
+    const [entry] = payload?.data?.progress as Array<Record<string, unknown>>;
+    expect(entry!.stage).toBe("downloading");
+  });
+
+  it("asks about servers only when nothing is moving", async () => {
+    const sab = { ...live(), servers: vi.fn(async () => []) };
+    const h = harness([downloading], { sab });
+    await invoke(route(h, "GET", path));
+    expect(sab.servers).not.toHaveBeenCalled();
+  });
+
+  it("lets a paused queue be paused, whatever its servers say", async () => {
+    const sab = { ...live(true), servers: vi.fn(async () => []) };
+    const h = harness([downloading], { sab });
+    const { payload } = await invoke(route(h, "GET", path));
+    expect(sab.servers).not.toHaveBeenCalled();
+    const [entry] = payload?.data?.progress as Array<Record<string, unknown>>;
+    expect(entry!.stage).toBe("paused");
+  });
+
+  it("reports progress as before when the server read fails", async () => {
+    const sab = idle(async () => {
+      throw new Error("SABnzbd did not answer.");
+    });
+    const h = harness([downloading], { sab });
+    const { payload } = await invoke(route(h, "GET", path));
+    expect(payload?.data).toMatchObject({ reachable: true });
+    expect(payload?.data?.stalled).toBeUndefined();
   });
 
   it("reports a failed zero-byte history job as failed, never successfully done", async () => {

@@ -412,6 +412,44 @@ describe("the acquisitions page", () => {
     expect(screen.queryByText("admin.acquisitions.progress.paused")).toBeNull();
   });
 
+  it("calls a download no news server will serve stalled, and says why", async () => {
+    // The client's own slot still read "Downloading" at 94% for a day.
+    const error =
+      "Cannot connect to server news.newsdemon.com [502 Connection failure. Please contact technical support.]";
+    api.listAcquisitions.mockResolvedValue([
+      acquisition({ state: "downloading" }),
+    ]);
+    api.getDownloadProgress.mockResolvedValue({
+      reachable: true,
+      paused: false,
+      stalled: { servers: [{ name: "news.newsdemon.com", error }] },
+      remainingBytes: 1_026_000_000,
+      progress: [
+        {
+          acquisitionId: "a1",
+          stage: "stalled",
+          statusText: "Downloading",
+          percent: 94.8,
+          totalBytes: 19_812_000_000,
+          downloadedBytes: 18_786_000_000,
+          queuePosition: 1,
+        },
+      ],
+    });
+    renderPage();
+    expect(
+      await screen.findByText("admin.acquisitions.row.stalled"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("admin.acquisitions.progress.stalled"),
+    ).toBeTruthy();
+    expect(screen.getByText("admin.acquisitions.client.stalled")).toBeTruthy();
+    expect(screen.getByText(error, { exact: false })).toBeTruthy();
+    expect(
+      screen.queryByText("admin.acquisitions.state.downloading"),
+    ).toBeNull();
+  });
+
   it("names the post-processing step once the bytes are down", async () => {
     api.listAcquisitions.mockResolvedValue([
       acquisition({ state: "processing" }),

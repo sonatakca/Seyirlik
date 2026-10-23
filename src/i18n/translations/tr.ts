@@ -2331,6 +2331,7 @@ export const tr = {
   "admin.acquisitions.progress.queued": "İndirme istemcisinde bekliyor",
   "admin.acquisitions.progress.position": "sıra",
   "admin.acquisitions.progress.paused": "İndirme istemcisinde duraklatıldı",
+  "admin.acquisitions.progress.stalled": "Haber sunucusu bağlanmıyor",
   "admin.acquisitions.progress.unreachable":
     "İndirme istemcisi yanıt vermiyor; canlı ilerleme gösterilemiyor.",
   "admin.acquisitions.progress.sizeUnknown": "Boyut henüz bildirilmedi",
@@ -2346,6 +2347,7 @@ export const tr = {
   "admin.acquisitions.client.downloading": "İndiriyor",
   "admin.acquisitions.client.paused": "Duraklatıldı",
   "admin.acquisitions.client.idle": "Boşta",
+  "admin.acquisitions.client.stalled": "Durdu: haber sunucusu bağlanmıyor",
   "admin.acquisitions.client.unreachable": "İndirme istemcisi yanıt vermiyor",
   "admin.acquisitions.client.left": "{size} kaldı",
   "admin.acquisitions.client.free": "{size} boş",
@@ -2355,6 +2357,7 @@ export const tr = {
   "admin.acquisitions.row.pause": "Bu indirmeyi duraklat",
   "admin.acquisitions.row.resume": "Bu indirmeyi sürdür",
   "admin.acquisitions.row.paused": "Duraklatıldı",
+  "admin.acquisitions.row.stalled": "Durdu",
   "admin.acquisitions.row.toTop": "En üste taşı",
   "admin.acquisitions.row.handle":
     "{title} sırasını değiştir, {total} içinde {position}. Sürükleyin ya da ok tuşlarını kullanın.",

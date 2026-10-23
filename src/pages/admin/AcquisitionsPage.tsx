@@ -199,27 +199,30 @@ function ProgressLine({
     entry.stage === "paused" ||
     (live.paused &&
       (entry.stage === "queued" || entry.stage === "downloading"));
+  const stalled = !paused && entry.stage === "stalled";
 
   const status = paused
     ? t("admin.acquisitions.progress.paused")
-    : entry.stage === "processing"
-      ? [entry.statusText, entry.detail].filter(Boolean).join(" — ")
-      : entry.stage === "downloading"
-        ? [
-            entry.speedBytesPerSecond
-              ? formatSpeed(entry.speedBytesPerSecond)
-              : null,
-            entry.etaSeconds
-              ? `${durationText(entry.etaSeconds, t)} ${t("admin.acquisitions.progress.left")}`
-              : null,
-          ]
-            .filter(Boolean)
-            .join(" · ")
-        : entry.etaSeconds
-          ? formatTemplate(t("admin.acquisitions.row.doneIn"), {
-              eta: durationText(entry.etaSeconds, t),
-            })
-          : t("admin.acquisitions.progress.queued");
+    : stalled
+      ? t("admin.acquisitions.progress.stalled")
+      : entry.stage === "processing"
+        ? [entry.statusText, entry.detail].filter(Boolean).join(" — ")
+        : entry.stage === "downloading"
+          ? [
+              entry.speedBytesPerSecond
+                ? formatSpeed(entry.speedBytesPerSecond)
+                : null,
+              entry.etaSeconds
+                ? `${durationText(entry.etaSeconds, t)} ${t("admin.acquisitions.progress.left")}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")
+          : entry.etaSeconds
+            ? formatTemplate(t("admin.acquisitions.row.doneIn"), {
+                eta: durationText(entry.etaSeconds, t),
+              })
+            : t("admin.acquisitions.progress.queued");
 
   return (
     <div className="mt-2.5">
@@ -233,7 +236,11 @@ function ProgressLine({
       >
         <div
           className={`h-full rounded-full transition-[width] duration-700 ease-out motion-reduce:transition-none ${
-            paused ? "bg-white/35" : "bg-[var(--accent)]"
+            paused
+              ? "bg-white/35"
+              : stalled
+                ? "bg-amber-300/60"
+                : "bg-[var(--accent)]"
           }`}
           style={{ width: `${Math.min(100, Math.max(0, percent))}%` }}
         />
@@ -371,11 +378,19 @@ function DownloaderBar({
     ? "unreachable"
     : live.paused
       ? "paused"
-      : live.speedBytesPerSecond
-        ? "downloading"
-        : "idle";
+      : live.stalled
+        ? "stalled"
+        : live.speedBytesPerSecond
+          ? "downloading"
+          : "idle";
   const facts = live.reachable
     ? [
+        // What the news server said, which is what someone has to act on.
+        ...(tone === "stalled"
+          ? (live.stalled?.servers ?? []).map(
+              (server) => server.error ?? server.name,
+            )
+          : []),
         live.remainingBytes !== undefined && live.remainingBytes > 0
           ? formatTemplate(t("admin.acquisitions.client.left"), {
               size: formatBytes(live.remainingBytes),
@@ -405,7 +420,7 @@ function DownloaderBar({
           className={`h-2.5 w-2.5 shrink-0 rounded-full ${
             tone === "downloading"
               ? "bg-[var(--accent)]"
-              : tone === "paused"
+              : tone === "paused" || tone === "stalled"
                 ? "bg-amber-300"
                 : tone === "unreachable"
                   ? "bg-red-400"
@@ -1175,11 +1190,13 @@ export function AcquisitionsPage() {
                           row,
                           live?.paused || jobPaused
                             ? t("admin.acquisitions.row.paused")
-                            : t(
-                                entry.stage === "downloading"
-                                  ? "admin.acquisitions.state.downloading"
-                                  : "admin.acquisitions.state.queued",
-                              ),
+                            : entry.stage === "stalled"
+                              ? t("admin.acquisitions.row.stalled")
+                              : t(
+                                  entry.stage === "downloading"
+                                    ? "admin.acquisitions.state.downloading"
+                                    : "admin.acquisitions.state.queued",
+                                ),
                         )}
                         {live ? (
                           <ProgressLine entry={entry} live={live} t={t} />

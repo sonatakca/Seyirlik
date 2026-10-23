@@ -175,6 +175,8 @@ export interface AcquisitionProgress {
   readonly stage:
     | "queued"
     | "paused"
+    /** In the queue, but no news server the client can use will send it. */
+    | "stalled"
     | "downloading"
     | "processing"
     | "done"
@@ -200,6 +202,17 @@ export interface DownloadProgress {
   /** False when the download client did not answer. */
   readonly reachable: boolean;
   readonly paused: boolean;
+  /**
+   * Present when work is waiting and no news server will serve it. The
+   * client's own job statuses still say "Downloading" then.
+   */
+  readonly stalled?: {
+    readonly servers: ReadonlyArray<{
+      readonly name: string;
+      /** The client's own words, such as a refused connection. */
+      readonly error?: string;
+    }>;
+  };
   readonly speedBytesPerSecond?: number;
   /** Still to come down, across the whole queue. */
   readonly remainingBytes?: number;

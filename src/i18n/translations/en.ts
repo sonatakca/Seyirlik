@@ -2337,6 +2337,7 @@ export const en = {
   "admin.acquisitions.progress.queued": "Waiting in the download client",
   "admin.acquisitions.progress.position": "place in line",
   "admin.acquisitions.progress.paused": "Paused in the download client",
+  "admin.acquisitions.progress.stalled": "No news server will connect",
   "admin.acquisitions.progress.unreachable":
     "The download client is not answering, so live progress is unavailable.",
   "admin.acquisitions.progress.sizeUnknown": "Size not reported yet",
@@ -2352,6 +2353,7 @@ export const en = {
   "admin.acquisitions.client.downloading": "Downloading",
   "admin.acquisitions.client.paused": "Paused",
   "admin.acquisitions.client.idle": "Idle",
+  "admin.acquisitions.client.stalled": "Stalled: no news server will connect",
   "admin.acquisitions.client.unreachable":
     "The download client is not answering",
   "admin.acquisitions.client.left": "{size} left",
@@ -2362,6 +2364,7 @@ export const en = {
   "admin.acquisitions.row.pause": "Pause this download",
   "admin.acquisitions.row.resume": "Resume this download",
   "admin.acquisitions.row.paused": "Paused",
+  "admin.acquisitions.row.stalled": "Stalled",
   "admin.acquisitions.row.toTop": "Move to the top",
   "admin.acquisitions.row.handle":
     "Reorder {title}, place {position} of {total}. Drag, or use the arrow keys.",
