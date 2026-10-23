@@ -85,6 +85,27 @@ describe("fetching the payload for a release", () => {
     expect(Array.from(payload.bytes)).toEqual(Array.from(bytes));
   });
 
+  it("accepts the NZB of a release far larger than a search page", async () => {
+    // A 2160p Blu-ray season pack's NZB runs to tens of megabytes; the
+    // search page's ceiling refused one as "implausibly large".
+    const bytes = new Uint8Array(24 * 1024 * 1024).fill(0x20);
+    const fetchImpl = vi.fn(
+      async () => new Response(bytes, { status: 200 }),
+    ) as unknown as typeof fetch;
+    const payload = await provider(fetchImpl).fetchRelease("abc");
+    expect(payload.bytes.byteLength).toBe(bytes.byteLength);
+  });
+
+  it("still refuses an NZB no release could need", async () => {
+    const bytes = new Uint8Array(65 * 1024 * 1024);
+    const fetchImpl = vi.fn(
+      async () => new Response(bytes, { status: 200 }),
+    ) as unknown as typeof fetch;
+    await expect(provider(fetchImpl).fetchRelease("abc")).rejects.toMatchObject(
+      { kind: "malformed-response" },
+    );
+  });
+
   it("reads the filename the provider suggested", async () => {
     const fetchImpl = vi.fn(
       async () =>
@@ -147,18 +168,6 @@ describe("fetching the payload for a release", () => {
     await expect(provider(fetchImpl).fetchRelease("abc")).rejects.toMatchObject(
       {
         kind: "not-found",
-      },
-    );
-  });
-
-  it("refuses an implausibly large payload", async () => {
-    const fetchImpl = vi.fn(
-      async () =>
-        new Response(new Uint8Array(9 * 1024 * 1024), { status: 200 }),
-    ) as unknown as typeof fetch;
-    await expect(provider(fetchImpl).fetchRelease("abc")).rejects.toMatchObject(
-      {
-        kind: "malformed-response",
       },
     );
   });
