@@ -180,21 +180,34 @@ export const TRICKPLAY_NOTHING_TO_SAMPLE =
  */
 export function trickplayFailureMessage(stderr: string): string {
   if (/No such file or directory/i.test(stderr)) {
-    return "Trickplay generation failed: FFmpeg could not find a file it needed.";
+    return TRICKPLAY_FFMPEG_FAILURES.fileMissing;
   }
   if (/Permission denied|Operation not permitted/i.test(stderr)) {
-    return "Trickplay generation failed: FFmpeg was refused access to a file.";
+    return TRICKPLAY_FFMPEG_FAILURES.accessDenied;
   }
   if (/No space left on device/i.test(stderr)) {
-    return "Trickplay generation failed: the volume is full.";
+    return TRICKPLAY_FFMPEG_FAILURES.volumeFull;
   }
   if (
     /Invalid data found when processing input|moov atom not found/i.test(stderr)
   ) {
-    return "Trickplay generation failed: FFmpeg could not read the video.";
+    return TRICKPLAY_FFMPEG_FAILURES.unreadable;
   }
   return "Trickplay generation failed.";
 }
+
+/**
+ * The sentences `trickplayFailureMessage` stores, named so the task views can
+ * key their codes on the very strings stored rather than on copies of them.
+ */
+export const TRICKPLAY_FFMPEG_FAILURES = {
+  fileMissing:
+    "Trickplay generation failed: FFmpeg could not find a file it needed.",
+  accessDenied:
+    "Trickplay generation failed: FFmpeg was refused access to a file.",
+  volumeFull: "Trickplay generation failed: the volume is full.",
+  unreadable: "Trickplay generation failed: FFmpeg could not read the video.",
+} as const;
 
 export interface TrickplayFilterSource {
   colorTransfer: string | null;

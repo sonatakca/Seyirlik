@@ -1821,6 +1821,15 @@ export const tr = {
     "Bu içerik HDR. HDR trickplay'i için zscale filtresi (libzimg) ile derlenmiş bir FFmpeg gerekir; SDR içerikler etkilenmez.",
   "tasks.error.unavailable":
     "Bu hizmet kullanılamıyor. Yeniden denemeden önce sunucu yapılandırmasını kontrol edin.",
+  "tasks.error.source-gone":
+    "Kaynak dosya artık yok ve yerine kullanılacak hazır bir paket bulunamadı. Yeniden denemeden önce içeriğin paketini kontrol edin.",
+  "tasks.error.file-missing":
+    "FFmpeg gereken bir dosyayı bulamadı. Yeniden denemeden önce içeriğin dosyalarının medya biriminde olduğunu kontrol edin.",
+  "tasks.error.access-denied":
+    "FFmpeg'in bir dosyaya erişimi reddedildi. Yeniden denemeden önce medya biriminin izinlerini kontrol edin.",
+  "tasks.error.volume-full": "Birim dolu. Yeniden denemeden önce yer açın.",
+  "tasks.error.unreadable":
+    "FFmpeg videoyu okuyamadı. Dosya hasarlı olabilir; yeniden denemeden önce kontrol edin.",
   "tasks.encodedClock": "{count} / {total}",
   "tasks.libraryScan": "Kütüphane taraması",
   "tasks.libraryOrganize": "Klasör düzenleme",
@@ -2086,6 +2095,13 @@ export const tr = {
   "maintenance.error.payload-invalid":
     "Görev, gereken her şey olmadan kuyruğa alınmış.",
   "maintenance.error.lease-expired": "Görev, kirası dolmadan bitmedi.",
+  "maintenance.error.source-gone":
+    "Kaynak artık yok ve hazır bir paket bulunamadı.",
+  "maintenance.error.file-missing": "FFmpeg gereken bir dosyayı bulamadı.",
+  "maintenance.error.access-denied":
+    "FFmpeg'in bir dosyaya erişimi reddedildi.",
+  "maintenance.error.volume-full": "Birim dolu.",
+  "maintenance.error.unreadable": "FFmpeg videoyu okuyamadı.",
   "maintenance.error.unknown": "Görev başarısız oldu.",
   "maintenance.reason.source-missing": "Kaynak yok",
   "maintenance.reason.permission-denied": "İzin verilmedi",

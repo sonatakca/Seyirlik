@@ -12,10 +12,18 @@ import path from "node:path";
  * local playlist's URIs as literal file names and never decodes them, so it
  * looked for a file called `2160p%20HDR.mp4` and failed. The copy names every
  * file by its decoded, absolute path; byte ranges and tags are unchanged.
+ *
+ * Absolute paths are written with forward slashes on every platform. FFmpeg's
+ * HLS demuxer on Windows opens `C:/…` and `//server/share/…` but not the same
+ * paths spelled with backslashes: on MSI, FFmpeg 8.1 reported "No such file or
+ * directory" for `\\seyirlik\drive\media\…\2160p HDR.mp4` and opened it in
+ * a fifth of a second once the separators were turned round.
  */
 export function localPackagePlaylist(
   playlist: string,
   playlistDirectory: string,
+  /** The platform's path rules; a parameter only so Windows can be tested anywhere. */
+  paths: typeof path.posix = path,
 ): string {
   const localPath = (uri: string): string => {
     // Anything with a scheme is not a file beside the playlist.
@@ -26,7 +34,10 @@ export function localPackagePlaylist(
     } catch {
       // A lone `%` is not an escape; the name is then exactly as written.
     }
-    return path.resolve(playlistDirectory, ...decoded.split("/"));
+    return paths
+      .resolve(playlistDirectory, ...decoded.split("/"))
+      .split(paths.sep)
+      .join("/");
   };
   return playlist
     .split("\n")

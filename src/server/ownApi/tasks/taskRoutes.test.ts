@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { toTaskDto, createTaskRoutes } from "./taskRoutes";
 import type { JobRecord, JobQueue } from "./jobQueue";
 import type { LibraryRepository } from "../libraries/libraryRepository";
+import { toMaintenanceTaskDto } from "./maintenanceTaskDto";
+import {
+  TRICKPLAY_FFMPEG_FAILURES,
+  TRICKPLAY_NOTHING_TO_SAMPLE,
+  trickplayFailureMessage,
+} from "../trickplay/trickplayService";
 const job: JobRecord = {
   id: "job",
   jobType: "library.scan",
@@ -104,6 +110,40 @@ describe("safe task endpoint presentation", () => {
       deleted: true,
     });
   });
+  /*
+   * Each reason trickplay stores became the same "the task failed" sentence,
+   * so a source that was gone and a playlist FFmpeg could not open looked
+   * alike on both screens.
+   */
+  it("names each reason a trickplay pass stores, on both task views", async () => {
+    const reasons: Array<[string, string]> = [
+      [TRICKPLAY_NOTHING_TO_SAMPLE, "source-gone"],
+      [TRICKPLAY_FFMPEG_FAILURES.fileMissing, "file-missing"],
+      [TRICKPLAY_FFMPEG_FAILURES.accessDenied, "access-denied"],
+      [TRICKPLAY_FFMPEG_FAILURES.volumeFull, "volume-full"],
+      [TRICKPLAY_FFMPEG_FAILURES.unreadable, "unreadable"],
+    ];
+    for (const [safeError, code] of reasons) {
+      const failed: JobRecord = {
+        ...job,
+        jobType: "trickplay.generate",
+        payload: {},
+        status: "failed",
+        safeError,
+      };
+      expect((await toTaskDto(failed, libraries)).presentation.errorCode).toBe(
+        code,
+      );
+      expect(
+        (await toMaintenanceTaskDto(failed, { libraries, libraryCount: 1 }))
+          .errorCode,
+      ).toBe(code);
+    }
+    expect(
+      trickplayFailureMessage("Error opening input: No such file or directory"),
+    ).toBe(TRICKPLAY_FFMPEG_FAILURES.fileMissing);
+  });
+
   it("resolves media labels rather than trusting payload labels", async () => {
     const dto = await toTaskDto(
       { ...job, payload: { itemId: "secret-id", title: "/private" } },

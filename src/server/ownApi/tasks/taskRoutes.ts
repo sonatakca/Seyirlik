@@ -26,6 +26,10 @@ import {
 import type { JobQueue, JobRecord, JobStatus } from "./jobQueue";
 import { JOB_TYPES } from "./jobHandlers";
 import {
+  TRICKPLAY_FFMPEG_FAILURES,
+  TRICKPLAY_NOTHING_TO_SAMPLE,
+} from "../trickplay/trickplayService";
+import {
   MAINTENANCE_EXCLUDED_JOB_TYPES,
   toMaintenanceTaskDto,
 } from "./maintenanceTaskDto";
@@ -404,6 +408,11 @@ export async function toTaskDto(
     "This title is HDR, and trickplay for HDR needs an FFmpeg built with the zscale filter (libzimg).":
       "hdr-unsupported",
     "This server is not configured to process media.": "unavailable",
+    [TRICKPLAY_NOTHING_TO_SAMPLE]: "source-gone",
+    [TRICKPLAY_FFMPEG_FAILURES.fileMissing]: "file-missing",
+    [TRICKPLAY_FFMPEG_FAILURES.accessDenied]: "access-denied",
+    [TRICKPLAY_FFMPEG_FAILURES.volumeFull]: "volume-full",
+    [TRICKPLAY_FFMPEG_FAILURES.unreadable]: "unreadable",
   };
   presentation.errorCode = errors[job.safeError ?? ""];
   if (typeof job.payload.libraryId === "string") {

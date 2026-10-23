@@ -142,7 +142,16 @@ export interface TaskPresentation {
   remainingSeconds?: number;
   /** Further titles waiting behind this one, when a card speaks for a queue. */
   queuedCount?: number;
-  errorCode?: "deleted" | "provider" | "unavailable" | "hdr-unsupported";
+  errorCode?:
+    | "deleted"
+    | "provider"
+    | "unavailable"
+    | "hdr-unsupported"
+    | "source-gone"
+    | "file-missing"
+    | "access-denied"
+    | "volume-full"
+    | "unreadable";
   /**
    * The current phase's own fraction, in the things it counts.
    *

@@ -52,6 +52,41 @@ describe("a package playlist FFmpeg can open", () => {
   });
 });
 
+/*
+ * MSI's worker, as it was on 2026-10-23: FFmpeg 8.1's HLS demuxer refused the
+ * backslash spellings of these paths with "No such file or directory" and
+ * opened the forward-slash ones.
+ */
+describe("a package playlist FFmpeg can open on Windows", () => {
+  it("writes a share path with forward slashes", () => {
+    expect(
+      localPackagePlaylist(
+        [
+          '#EXT-X-MAP:URI="../../video/2160p%20HDR.mp4",BYTERANGE="994@0"',
+          "../../video/2160p%20HDR.mp4",
+        ].join("\n"),
+        "\\\\seyirlik\\drive\\media\\Series\\House of the Dragon\\Season 1\\House of the Dragon - S01E09\\.seyirlik\\video",
+        path.win32,
+      ),
+    ).toBe(
+      [
+        '#EXT-X-MAP:URI="//seyirlik/drive/media/Series/House of the Dragon/Season 1/House of the Dragon - S01E09/video/2160p HDR.mp4",BYTERANGE="994@0"',
+        "//seyirlik/drive/media/Series/House of the Dragon/Season 1/House of the Dragon - S01E09/video/2160p HDR.mp4",
+      ].join("\n"),
+    );
+  });
+
+  it("writes a drive-letter path with forward slashes", () => {
+    expect(
+      localPackagePlaylist(
+        "../../audio/english%20(original).m4a",
+        "D:\\media\\Movies\\Film (2024)\\.seyirlik\\audio",
+        path.win32,
+      ),
+    ).toBe("D:/media/Movies/Film (2024)/audio/english (original).m4a");
+  });
+});
+
 describe("writing the copy", () => {
   const roots: string[] = [];
   afterEach(async () => {
@@ -78,7 +113,10 @@ describe("writing the copy", () => {
     expect(path.basename(copy.path)).toBe("english (original).m3u8");
     expect(copy.path.startsWith(root)).toBe(false);
     expect(await readFile(copy.path, "utf8")).toBe(
-      `${path.join(root, "Show", "audio", "english (original).m4a")}\n`,
+      `${path
+        .join(root, "Show", "audio", "english (original).m4a")
+        .split(path.sep)
+        .join("/")}\n`,
     );
     await copy.remove();
     await expect(readFile(copy.path, "utf8")).rejects.toThrow();

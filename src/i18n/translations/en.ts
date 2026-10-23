@@ -1823,6 +1823,16 @@ export const en = {
     "This title is HDR. Trickplay for HDR needs an FFmpeg built with the zscale filter (libzimg); SDR titles are unaffected.",
   "tasks.error.unavailable":
     "This service is unavailable. Check the server configuration before retrying.",
+  "tasks.error.source-gone":
+    "The source file is gone and no ready package was found to use instead. Check the title's package before retrying.",
+  "tasks.error.file-missing":
+    "FFmpeg could not find a file it needed. Check that the title's files are on the media volume before retrying.",
+  "tasks.error.access-denied":
+    "FFmpeg was refused access to a file. Check the media volume's permissions before retrying.",
+  "tasks.error.volume-full":
+    "The volume is full. Free some space before retrying.",
+  "tasks.error.unreadable":
+    "FFmpeg could not read the video. The file may be damaged; check it before retrying.",
   "tasks.encodedClock": "{count} / {total}",
   "tasks.libraryScan": "Library scan",
   "tasks.libraryOrganize": "Folder organisation",
@@ -2088,6 +2098,12 @@ export const en = {
     "The task was queued without everything it needed.",
   "maintenance.error.lease-expired":
     "The task did not finish before its lease expired.",
+  "maintenance.error.source-gone":
+    "The source is gone and no ready package was found.",
+  "maintenance.error.file-missing": "FFmpeg could not find a file it needed.",
+  "maintenance.error.access-denied": "FFmpeg was refused access to a file.",
+  "maintenance.error.volume-full": "The volume is full.",
+  "maintenance.error.unreadable": "FFmpeg could not read the video.",
   "maintenance.error.unknown": "The task failed.",
   "maintenance.reason.source-missing": "Source missing",
   "maintenance.reason.permission-denied": "Permission denied",
