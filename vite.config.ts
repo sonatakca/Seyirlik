@@ -191,6 +191,9 @@ export default defineConfig(({ mode }) => {
             // Everything the server owns lives under the versioned namespace, so
             // one rule replaces the per-endpoint list this used to carry.
             /^\/ownAPI\//,
+            // A redirect Vercel answers (vercel.json), not an app route: served
+            // from the precache it would open the app's not-found page instead.
+            /^\/control\/?$/,
             /\.(?:m3u8|ts|mp4|mkv|webm|vtt|srt|ass)$/i,
           ],
           runtimeCaching: [],
