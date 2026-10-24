@@ -399,6 +399,15 @@ export const PROCESSING_ERROR_CODES = {
    */
   mediaProgressTimeout: "MEDIA_PROGRESS_TIMEOUT",
   /**
+   * A network volume stopped answering mid-read and waiting did not bring it
+   * back.
+   *
+   * Requeued, unlike the two above: a cloud mount that was slow for a few
+   * minutes is usually quick again by the queue's next attempt, and nothing
+   * about the media or the encode is in doubt.
+   */
+  sourceReadStalled: "SOURCE_READ_STALLED",
+  /**
    * The package was built correctly but the folder it was told to publish into
    * belongs to a different title.
    *
@@ -2169,7 +2178,14 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
                     processingJobId: job.id,
                     stage: "video",
                     level: "warning",
-                    message: `Epoch ${event.index + 1} could not be read (attempt ${event.attempt} of ${event.maxAttempts}); the volume was re-checked and is still available, so the read is being retried.`,
+                    message:
+                      event.verdict === "network-stall"
+                        ? `Epoch ${event.index + 1} stalled on the network volume and a bounded read of the same stretch timed out (attempt ${event.attempt} of ${event.maxAttempts}). This is read as a slow connection, not damage, so ${
+                            event.attempt < event.maxAttempts
+                              ? "the read will be tried again after a wait."
+                              : "the queue will try the job again later."
+                          }`
+                        : `Epoch ${event.index + 1} could not be read (attempt ${event.attempt} of ${event.maxAttempts}); the volume was re-checked and is still available, so the read is being retried.`,
                     detail: {
                       epochIndex: event.index,
                       attempt: event.attempt,
@@ -2659,7 +2675,9 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
           ? PROCESSING_ERROR_CODES.sourceUnreadable
           : result.failureKind === "media-progress-timeout"
             ? PROCESSING_ERROR_CODES.mediaProgressTimeout
-            : PROCESSING_ERROR_CODES.encodeFailed;
+            : result.failureKind === "network-read-stall"
+              ? PROCESSING_ERROR_CODES.sourceReadStalled
+              : PROCESSING_ERROR_CODES.encodeFailed;
       return fail(
         code,
         result.error ?? "The package could not be produced.",

@@ -682,6 +682,34 @@ describe("what the queue is told", () => {
     expect(outcome.errorCode).toBe("MEDIA_PROGRESS_TIMEOUT");
   });
 
+  it("asks for a retry of a network read that stalled", async () => {
+    /*
+     * A cloud mount that went quiet for longer than the engine would wait.
+     * Nothing about the media or the encode is in doubt, so the queue's own
+     * backoff is the right answer, and the code says what actually happened.
+     */
+    const fake = fakeStore();
+    const stalled = vi.fn(
+      async (_request: never, _paths: never, options: never) => {
+        const emit = (options as { onEvent: (event: unknown) => void }).onEvent;
+        emit({ type: "build-stage", mediaId: "m", stage: "encoding" });
+        await vi.advanceTimersByTimeAsync(300);
+        return {
+          status: "failed",
+          mediaId: "m",
+          relativePath: "Movies/Damaged/Damaged.mkv",
+          error: "The network volume stopped answering.",
+          failureKind: "network-read-stall",
+        };
+      },
+    );
+
+    const outcome = await runJob(stalled, fake);
+    expect(outcome.status).toBe("failed");
+    expect(outcome.retryable).toBe(true);
+    expect(outcome.errorCode).toBe("SOURCE_READ_STALLED");
+  });
+
   it("still asks for a retry when another attempt merely held the lock", async () => {
     /*
      * The one condition that genuinely deserves another pass, and the reason

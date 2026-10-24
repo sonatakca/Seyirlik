@@ -221,11 +221,15 @@ export function probeSaysUnreadable(
  *    killed, but the source reads perfectly. That is an encoder or pipeline
  *    fault, and turning it into black picture would be replacing film to work
  *    around a bug.
+ *  - `network-stall` — the encoder went quiet and the probe timed out too, but
+ *    the source sits on a network volume. There, silence is a slow fetch rather
+ *    than a platter's retry storm, so the read is waited for and tried again.
  */
 export type SourceReadVerdict =
   | "transient"
   | "source-damage"
-  | "media-progress-timeout";
+  | "media-progress-timeout"
+  | "network-stall";
 
 export interface SourceReadAssessment {
   verdict: SourceReadVerdict;
@@ -249,6 +253,8 @@ export function assessSourceRead({
   watchdogAborted,
   probe,
   transientBudget,
+  networkVolume = false,
+  networkStallBudget = transientBudget,
 }: {
   evidence: SourceIoEvidence;
   /** True when the media-progress watchdog had to stop the encoder. */
@@ -257,6 +263,10 @@ export function assessSourceRead({
   probe?: SourceProbeOutcome;
   /** Attempts the transient path is allowed, from the existing backoff policy. */
   transientBudget: number;
+  /** True when the source is read over the network, such as a Drive mount. */
+  networkVolume?: boolean;
+  /** Reads a quiet network volume is allowed, from its own backoff policy. */
+  networkStallBudget?: number;
 }): SourceReadAssessment {
   /*
    * The output side settles it before anything else. A destination volume
@@ -273,6 +283,28 @@ export function assessSourceRead({
   }
 
   const indicted = evidenceIndictsSource(evidence);
+
+  /*
+   * Silence on a network volume is not evidence against the media. The rule
+   * below was written for a local disk, where a read that does not answer in
+   * fifteen seconds is the kernel retrying a bad sector. Over a cloud mount it
+   * is a fetch that has not come back yet, and quarantining for it took a
+   * healthy library offline. An explicit error still goes the other way: only
+   * a probe that *timed out* is excused, never one that failed.
+   */
+  if (
+    networkVolume &&
+    watchdogAborted &&
+    !indicted &&
+    probe?.verdict === "timeout"
+  ) {
+    return {
+      verdict: "network-stall",
+      fullReadBudget: networkStallBudget,
+      because:
+        "the network volume stopped answering, and a bounded read of the same stretch timed out too",
+    };
+  }
 
   if (probeSaysUnreadable(probe) && (indicted || watchdogAborted)) {
     return {

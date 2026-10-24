@@ -586,6 +586,13 @@ export function observationForFailure(
         : { kind: "hard-io-fault", detail };
     case "media-progress-timeout":
       return { kind: "encoder-stall", detail };
+    case "network-read-stall":
+      /*
+       * A cloud mount that was slow to fetch. Counting it as a fault, even a
+       * soft one, would let two busy evenings quarantine a library whose
+       * storage never lost a byte.
+       */
+      return { kind: "ok" };
     case "source-missing":
       return { kind: "absent", roots: [] };
     case "out-of-space":

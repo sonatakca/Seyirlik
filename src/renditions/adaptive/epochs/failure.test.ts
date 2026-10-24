@@ -286,4 +286,26 @@ describe("which side of the transcode failed", () => {
       }).kind,
     ).toBe("source-io");
   });
+
+  it("calls a network stall a network stall, not source I/O", () => {
+    const failure = classifyFailure({
+      message: "FFmpeg produced no media for 26s and was stopped at 1658.907s.",
+      storageAvailable: true,
+      ioRechecksExhausted: true,
+      sourceVerdict: "network-stall",
+    });
+    expect(failure.kind).toBe("network-read-stall");
+  });
+
+  it("lets a vanished network volume win over a network stall", () => {
+    expect(
+      classifyFailure({
+        message:
+          "FFmpeg produced no media for 26s and was stopped at 1658.907s.",
+        storageAvailable: false,
+        ioRechecksExhausted: true,
+        sourceVerdict: "network-stall",
+      }).kind,
+    ).toBe("storage-device-lost");
+  });
 });

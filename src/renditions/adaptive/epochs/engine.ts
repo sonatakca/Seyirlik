@@ -42,8 +42,10 @@ import {
 } from "./checkpoints";
 import {
   EPOCH_CHECKPOINT_SCHEMA_VERSION,
+  NETWORK_STALL_RETRY_BACKOFF_MS,
   SOURCE_IO_RETRY_BACKOFF_MS,
 } from "./policy";
+import { isUncNetworkPath } from "../../processing/storageIdentity";
 import { protectedSecondsAfter, type EpochPlan } from "./plan";
 import { timestampSeconds } from "./sourceTimeline";
 import {
@@ -302,6 +304,16 @@ export interface RunEpochBuildInput {
    */
   sourceIoBackoffMs?: readonly number[];
   /**
+   * Whether the source is read over the network.
+   *
+   * Defaults to whether `sourcePath` is a UNC share, which is how the Windows
+   * hosts see their Drive mount. It decides what a stall that a probe cannot
+   * answer means: damage on a local disk, a slow fetch on a network one.
+   */
+  sourceOnNetworkVolume?: boolean;
+  /** Waits between re-reads of a quiet network source. Tests shorten it. */
+  networkStallBackoffMs?: readonly number[];
+  /**
    * A bounded readability check of the stretch the encoder could not get past.
    *
    * Called between I/O retries, and decisive: with no input-side line in
@@ -552,6 +564,8 @@ export async function runEpochBuild({
   onEvent,
   attemptsPerEpoch = 2,
   sourceIoBackoffMs = SOURCE_IO_RETRY_BACKOFF_MS,
+  sourceOnNetworkVolume = isUncNetworkPath(sourcePath),
+  networkStallBackoffMs = NETWORK_STALL_RETRY_BACKOFF_MS,
   verifySourceReadable,
   sourceDamagePolicy = DEFAULT_SOURCE_DAMAGE_POLICY,
   stalls = stallThresholds(),
@@ -671,6 +685,8 @@ export async function runEpochBuild({
      */
     let sourceIoAttempts = 0;
     const sourceIoMaxAttempts = sourceIoBackoffMs.length + 1;
+    /** Waits already spent on a quiet network source, for the next one's length. */
+    let networkStallWaits = 0;
     /** How long media time had been standing still when the watchdog fired. */
     let stalledForMs = 0;
     /** What the evidence concluded, once there was enough of it to conclude. */
@@ -962,6 +978,8 @@ export async function runEpochBuild({
                 watchdogAborted,
                 ...(probe ? { probe } : {}),
                 transientBudget: sourceIoMaxAttempts,
+                networkVolume: sourceOnNetworkVolume,
+                networkStallBudget: networkStallBackoffMs.length + 1,
               });
               sourceVerdict = assessment.verdict;
               ioRechecksExhausted =
@@ -983,6 +1001,18 @@ export async function runEpochBuild({
               });
               if (!ioRechecksExhausted) {
                 await handle.discard();
+                /*
+                 * A quiet network mount is given real time before the next
+                 * read. The backoff above is sized to outlast a watchdog poll,
+                 * which tells a vanished disk from a present one; a cloud fetch
+                 * that has stalled needs minutes, not seconds, to come back.
+                 */
+                if (assessment.verdict === "network-stall") {
+                  const wait = networkStallBackoffMs[networkStallWaits] ?? 0;
+                  networkStallWaits += 1;
+                  if (wait > 0) await delay(wait, signal);
+                  if (signal?.aborted) throw abortError();
+                }
                 continue;
               }
             }
@@ -1005,12 +1035,16 @@ export async function runEpochBuild({
             await onHardStorageFault(failure);
             throw new StorageInterruptedError(failure);
           }
-          if (failure.kind === "media-progress-timeout") {
+          if (
+            failure.kind === "media-progress-timeout" ||
+            failure.kind === "network-read-stall"
+          ) {
             /*
              * Ended, and not salvaged. The source reads; something in the
              * encode stopped producing. Replacing the interval with black would
              * be destroying film to work around a bug, and every checkpoint
-             * before it stays exactly where it is.
+             * before it stays exactly where it is. A network stall ends the
+             * same way: the media is blameless and the queue tries it later.
              */
             throw new MediaProgressTimeoutError(failure, epoch.index, {
               lastMediaSeconds: lastConfirmedMediaSeconds,

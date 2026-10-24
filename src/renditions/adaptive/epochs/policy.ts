@@ -131,3 +131,17 @@ export const SOURCE_IO_RETRY_BACKOFF_MS = [1_000, 6_000, 12_000] as const;
 
 /** Reads of one epoch's source window allowed before it is called a bad source. */
 export const SOURCE_IO_MAX_ATTEMPTS = SOURCE_IO_RETRY_BACKOFF_MS.length + 1;
+
+/**
+ * Waits before re-reading a source on a network volume that went quiet.
+ *
+ * A different problem from the one above, so a different scale. A cloud mount
+ * (rclone over Google Drive) that stops answering for half a minute is slow,
+ * not broken: on 2026-10-23 a House of the Dragon epoch stalled for 26 s and
+ * the same stretch then read cleanly, if slowly. Its fetches recover in
+ * minutes, not in the seconds a watchdog poll takes, so the waits are long
+ * and the job keeps its place rather than being quarantined.
+ */
+export const NETWORK_STALL_RETRY_BACKOFF_MS = [
+  30_000, 60_000, 120_000,
+] as const;
