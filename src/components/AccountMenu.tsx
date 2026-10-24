@@ -262,8 +262,16 @@ export function AccountMenu({
               <LogOut size={16} className="shrink-0" />
               {t("nav.logout")}
             </button>
+            {/* What this release changed, then which build it is. */}
+            {RUNNING_BUILD.note ? (
+              <p className="px-3 pt-2 text-xs font-semibold text-white/70">
+                {RUNNING_BUILD.note[language]}
+              </p>
+            ) : null}
             <p
-              className="px-3 pb-1 pt-2 text-[0.6875rem] font-medium tabular-nums text-white/40"
+              className={`px-3 pb-1 text-[0.6875rem] font-medium tabular-nums text-white/40 ${
+                RUNNING_BUILD.note ? "pt-0.5" : "pt-2"
+              }`}
               title={RUNNING_BUILD.commit ?? undefined}
             >
               {t("appUpdate.version")}{" "}

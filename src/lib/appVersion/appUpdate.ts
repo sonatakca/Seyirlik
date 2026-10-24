@@ -1,4 +1,4 @@
-import type { BuildInfo } from "./buildInfo";
+import { releaseNoteProblem, type BuildInfo } from "./buildInfo";
 
 /*
  * Notices when a newer build of the site is live, and moves this tab onto it.
@@ -55,9 +55,13 @@ export async function fetchLiveBuild(): Promise<BuildInfo | null> {
     });
     if (!response.ok) return null;
     const body = (await response.json()) as Partial<BuildInfo>;
-    return typeof body.buildId === "string" && typeof body.version === "string"
-      ? (body as BuildInfo)
-      : null;
+    if (typeof body.buildId !== "string" || typeof body.version !== "string") {
+      return null;
+    }
+    // A note is only shown as written; anything else reads as none.
+    const { note, ...build } = body as BuildInfo;
+    if (note === undefined) return build;
+    return { ...build, note: releaseNoteProblem(note) === null ? note : null };
   } catch {
     // Offline, or the origin is down: neither says anything about versions.
     return null;

@@ -71,6 +71,17 @@ live=$(live_commit playback.seyirlik.org)
 git -C "$repo" cat-file -e "$live^{commit}" 2>/dev/null || die "the live commit ${live:0:7} is not in this repository"
 base=$(git -C "$repo" merge-base "$live" "$sha")
 
+# Every release says what it changes, in two to five words per language, in
+# release-note.json; the account menu shows it above the hash. See
+# docs/release-notes.md.
+note_problem=$(git -C "$repo" show "$sha:release-note.json" 2>/dev/null |
+  (cd "$repo" && node --import tsx scripts/check-release-note.ts) 2>&1) ||
+  die "release-note.json: $note_problem (see docs/release-notes.md)"
+if [ "$live" != "$sha" ] && git -C "$repo" diff --quiet "$live" "$sha" -- release-note.json; then
+  die "release-note.json still describes the live release; write two to five words for this one (see docs/release-notes.md)"
+fi
+log "note: $(git -C "$repo" show "$sha:release-note.json" | tr -d '\n' | tr -s ' ')"
+
 sequential=0
 if git -C "$repo" diff --name-only "$live" "$sha" -- src/server scripts deploy/windows package.json package-lock.json | grep -q .; then
   sequential=1
