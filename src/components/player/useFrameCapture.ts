@@ -18,6 +18,47 @@ const SHOWN_MS = {
 /** The exit animation's length, so the toast is removed after it, not during. */
 export const FRAME_CAPTURE_EXIT_MS = 280;
 
+/**
+ * Further than this from the element's own time, a presented-frame time is
+ * taken to belong to some other moment, and the element's time is used.
+ */
+const PRESENTED_FRAME_TRUST_SECONDS = 2;
+
+/** The media time of the frame each element last put on screen. */
+const presentedFrameTimes = new WeakMap<HTMLVideoElement, number>();
+
+/**
+ * Follows every frame an element presents, for as long as it lives.
+ *
+ * `currentTime` does not say which frame is on screen. Chrome and WebKit's
+ * MSE path show the last frame that began by it, but Safari has been seen
+ * paused on a frame after it and on one before it (Arcane S01E07 at 35:09 and
+ * 35:10), so a save keyed to `currentTime` came back a frame or two away — a
+ * different shot at a cut. `requestVideoFrameCallback` reports the presented
+ * frame's own timestamp, which is the one to save.
+ */
+export function followPresentedFrames(video: HTMLVideoElement): void {
+  if (presentedFrameTimes.has(video) || !video.requestVideoFrameCallback) {
+    return;
+  }
+  presentedFrameTimes.set(video, Number.NaN);
+  const onFrame: VideoFrameRequestCallback = (_now, metadata) => {
+    presentedFrameTimes.set(video, metadata.mediaTime);
+    video.requestVideoFrameCallback(onFrame);
+  };
+  video.requestVideoFrameCallback(onFrame);
+}
+
+/** Where the frame on screen sits in the media, as exactly as the browser says. */
+export function onScreenFrameTime(video: HTMLVideoElement): number {
+  const presented = presentedFrameTimes.get(video);
+  return presented !== undefined &&
+    Number.isFinite(presented) &&
+    Math.abs(presented - video.currentTime) <= PRESENTED_FRAME_TRUST_SECONDS
+    ? presented
+    : video.currentTime;
+}
+
 /** Finder and Explorer both refuse these characters in a file name. */
 function toFileSafeName(name: string | null | undefined): string {
   const safeName = (name ?? "")
@@ -126,6 +167,11 @@ export function useFrameCapture({
     [clearTimers, releaseImage],
   );
 
+  // Every render, because a quality switch can put another deck in the ref.
+  useEffect(() => {
+    if (videoRef.current) followPresentedFrames(videoRef.current);
+  });
+
   /**
    * Saves the paused frame from the original file rather than from the
    * element: the element holds whichever quality rung Auto chose, and in
@@ -144,7 +190,7 @@ export function useFrameCapture({
       return;
     }
 
-    const atSeconds = Math.max(0, video.currentTime);
+    const atSeconds = Math.max(0, onScreenFrameTime(video));
     const sessionId = playSessionId;
     if (!sessionId) {
       show({ id, status: "failed", atSeconds });

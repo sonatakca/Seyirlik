@@ -55,11 +55,13 @@ const FRAME_LOOKBACK_SECONDS = 0.5;
 const FRAME_TIME_TOLERANCE_SECONDS = 0.001;
 
 /**
- * The frame a paused player shows is the last one that began at or before its
- * current time. An input seek gives the opposite — the first frame at or after
- * it — which is the next frame whenever the pause lands between two, and so a
- * different shot at a cut (Arcane S01E07, 35:10). So decode from a little
- * before, keep the frames up to the paused time, and take the last of them.
+ * The time asked for is the on-screen frame's own timestamp where the browser
+ * reports it, else the player's time, and either way the frame wanted is the
+ * last one that began at or before it. An input seek gives the opposite — the
+ * first frame at or after it — which is the next frame whenever the time lands
+ * between two, and so a different shot at a cut (Arcane S01E07, 35:10). So
+ * decode from a little before, keep the frames up to that time, and take the
+ * last of them.
  */
 export function buildFrameCaptureArgs(
   inputPath: string,
