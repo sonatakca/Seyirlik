@@ -530,10 +530,15 @@ export function createAcquisitionRepository(
     async listReadyForImport(limit = 100) {
       // The handoff. Everything the import phase needs to find the bytes, and
       // nothing this phase is allowed to do with them.
+      //
+      // `downloaded` never changes again, so without the import check the
+      // oldest hundred downloads, long since imported, filled every page and
+      // each one finished after them was never handed off.
       const result = await pool.query<Row>(
-        `SELECT ${COLUMNS} FROM acquisitions
-          WHERE state = 'downloaded' AND download_path IS NOT NULL
-          ORDER BY completed_at
+        `SELECT ${COLUMNS} FROM acquisitions a
+          WHERE a.state = 'downloaded' AND a.download_path IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM imports i WHERE i.acquisition_id = a.id)
+          ORDER BY a.completed_at
           LIMIT $1`,
         [Math.min(Math.max(limit, 1), 500)],
       );

@@ -233,6 +233,36 @@ integration("acquisitions in PostgreSQL", () => {
     expect(ready.every((row) => row.downloadPath)).toBe(true);
   });
 
+  it("offers only finished downloads that no import has taken", async () => {
+    // Downloads stay `downloaded` for good. When imported ones were offered,
+    // the oldest filled the page and every later download waited for an
+    // import that never started.
+    const imported: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const created = await repository.create(input);
+      await repository.update(created.id, "planned", {
+        state: "downloaded",
+        downloadPath: `C:/SeyirlikDownloads/complete/seyirlik/imported-${index}`,
+      });
+      await pool.query(
+        `INSERT INTO imports (id, acquisition_id, target_kind, target_title,
+           source_root, library_root, source_relative, state, idempotency_key)
+         VALUES ($1,$2,'movie','Big Buck Bunny','/d','/l','x','complete',$3)`,
+        [randomUUID(), created.id, `k-${randomUUID()}`],
+      );
+      imported.push(created.id);
+    }
+    const waiting = await repository.create(input);
+    await repository.update(waiting.id, "planned", {
+      state: "downloaded",
+      downloadPath: "C:/SeyirlikDownloads/complete/seyirlik/waiting",
+    });
+
+    const ids = (await repository.listReadyForImport()).map((row) => row.id);
+    expect(ids).toContain(waiting.id);
+    for (const id of imported) expect(ids).not.toContain(id);
+  });
+
   it("does not offer a finished download that has no path yet", async () => {
     // Completion is observed before the path is known; a handoff without one
     // would tell the import phase to go looking for nothing.
