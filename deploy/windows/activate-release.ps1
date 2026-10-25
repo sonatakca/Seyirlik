@@ -230,6 +230,20 @@ else {
 & sc.exe stop $ServerService | Out-Null
 if (-not (Wait-Svc $ServerService 'Stopped')) { throw "$ServerService would not stop" }
 
+# The first registry cutover runs only with old encodes drained. The importer
+# preserves the source on local disk and never replaces an existing DB row.
+Push-Location $target
+try {
+  & node $settingsArg $secretsArg --import tsx scripts/seed-rendition-registry.ts $backup
+  if ($LASTEXITCODE -ne 0) { throw 'registry import failed; the previous release is retained' }
+}
+catch {
+  & sc.exe start $ServerService | Out-Null
+  if (-not $workerHandsOff) { & sc.exe start $WorkerService | Out-Null }
+  throw
+}
+finally { Pop-Location }
+
 Set-Current $target
 
 # Only needed the first time; harmless afterwards, and it keeps the services

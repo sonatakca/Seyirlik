@@ -15,6 +15,13 @@
  * mount, the source still the bytes the package was built from, today's ladder
  * satisfied — and only they unlink anything.
  *
+ * The package on Drive is not enough on its own either. Playback finds it only
+ * through the rendition registry, so a source whose registry entry is missing
+ * or not ready is the only way that title plays. On 2026-10-20 Lilyhammer
+ * S01E01 lost both: its registry save never reached Drive, its source was then
+ * removed, and playback fell back to transcoding a file that was gone. The
+ * entry playback would use must be there, ready, before anything is unlinked.
+ *
  * A refusal is recorded and final; the operator can still remove the source by
  * hand. A failure to *ask* — rclone restarting, Drive unreachable, the volume
  * guarded — records nothing, and the next start of the worker asks again.
@@ -35,6 +42,10 @@ import {
   TITLE_PACKAGE_DIRECTORY,
   TITLE_PACKAGE_MANIFEST,
 } from "../../../renditions/adaptive/titleLayout";
+import {
+  registryGapForPlayback,
+  type RenditionRegistryStore,
+} from "../../../renditions/registry";
 import { mountPrefixForAny, type DriveRcClient } from "./driveUpload";
 import type {
   SourceCleanupOutcome,
@@ -172,6 +183,7 @@ export function createSourceCleanup({
   jobs,
   enqueuer,
   store,
+  registry,
   verifyOnDrive,
   mayDelete,
   now = Date.now,
@@ -183,6 +195,8 @@ export function createSourceCleanup({
     "locateSource" | "titleRootFor" | "removeSource"
   >;
   store: SourceCleanupStore;
+  /** The registry playback reads, so its entry is checked before deleting. */
+  registry: Pick<RenditionRegistryStore, "read">;
   verifyOnDrive: (
     titleRoot: string,
     manifest: TitlePackageManifest,
@@ -229,6 +243,20 @@ export function createSourceCleanup({
     if (gaps.length > 0) {
       return kept(`Drive does not hold the whole package: ${gaps.join("; ")}.`);
     }
+
+    /*
+     * Last, closest to the unlink: the entry playback will serve this title
+     * from. Missing or not ready is not a refusal but a reason to wait, so it
+     * throws and the next worker start asks again; until then the source
+     * stays, and the title plays from it.
+     */
+    const gap = registryGapForPlayback(await registry.read(), {
+      relativePath: located.file.relativePath,
+      size: Number(located.file.sizeBytes),
+      mtimeMs: Number(located.file.mtimeMs),
+      sourceFingerprint: job.sourceFingerprint,
+    });
+    if (gap) throw new Error(`Playback cannot find this package yet: ${gap}.`);
 
     try {
       const removal = await enqueuer.removeSource(job.itemId, job.mediaFileId, {

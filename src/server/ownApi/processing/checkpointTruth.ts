@@ -9,8 +9,9 @@ import {
 import { ADAPTIVE_PROFILE_VERSION } from "../../../renditions/adaptive/profile";
 import { formatClock } from "../../../renditions/adaptive/epochs/engine";
 import {
-  loadRenditionRegistry,
+  createFileRenditionRegistryStore,
   upsertRegistrySource,
+  type RenditionRegistryStore,
 } from "../../../renditions/registry";
 import type { RenditionPaths } from "../../../renditions/analysis";
 
@@ -70,6 +71,8 @@ export interface CheckpointTruthInput {
   sourceFingerprint: string;
   sizeBytes: number;
   mtimeMs: number;
+  /** Where the registry is kept; `<stateRoot>/registry.json` when omitted. */
+  registry?: RenditionRegistryStore;
 }
 
 /**
@@ -87,6 +90,9 @@ export async function readCheckpointRecovery({
   sourceFingerprint,
   sizeBytes,
   mtimeMs,
+  registry: registryStore = createFileRenditionRegistryStore(
+    path.join(paths.stateRoot, "registry.json"),
+  ),
 }: CheckpointTruthInput): Promise<CheckpointRecovery> {
   /*
    * The media id is the registry's, because that is the id the checkpoint root
@@ -94,9 +100,7 @@ export async function readCheckpointRecovery({
    * encoder never wrote to and conclude, wrongly but confidently, that no work
    * survived.
    */
-  const registry = await loadRenditionRegistry(
-    path.join(paths.stateRoot, "registry.json"),
-  ).catch(() => null);
+  const registry = await registryStore.read().catch(() => null);
   if (!registry) {
     return {
       completedEpochs: [],

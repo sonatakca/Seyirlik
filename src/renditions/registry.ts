@@ -1,7 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import type { Stats } from "node:fs";
 import path from "node:path";
+import { ADAPTIVE_PROFILE_VERSION } from "./adaptive/profile";
 import { RENDITION_PROFILE_VERSION } from "./policy";
 
 export const RENDITION_REGISTRY_SCHEMA_VERSION = 1;
@@ -160,6 +169,10 @@ export interface LoadRenditionRegistryOptions {
   onUnreadable?: (error: RenditionRegistryUnreadableError) => void;
 }
 
+export function parseRenditionRegistry(value: unknown): RenditionRegistry {
+  return parseRegistry(value);
+}
+
 export async function loadRenditionRegistry(
   registryPath: string,
   options: LoadRenditionRegistryOptions = {},
@@ -270,6 +283,60 @@ export async function saveRenditionRegistry(
   );
 }
 
+/**
+ * Where the rendition registry is kept, and the one way to change it.
+ *
+ * Every change is a read-modify-write of the whole registry, so a writer that
+ * loads a copy, keeps it for the hours an encode takes and then saves it
+ * undoes every change made in between. `update` closes that window: it reads
+ * the current registry, applies `mutate`, and persists the result before any
+ * other writer through the same store can read. `mutate` must be synchronous
+ * and must not keep the registry it was handed.
+ */
+export interface RenditionRegistryStore {
+  /** A fresh copy; changing it changes nothing stored. */
+  read(): Promise<RenditionRegistry>;
+  update<T>(mutate: (registry: RenditionRegistry) => T): Promise<T>;
+  /** Changes whenever the registry does, and costs less than `read`. */
+  revision(): Promise<string>;
+}
+
+/**
+ * The registry as one JSON file, for the offline CLI and for tests.
+ *
+ * Updates are serialised within this process only. Two processes, or two
+ * machines sharing a network mount, can still lose each other's writes; the
+ * running services use the database store for that reason.
+ */
+export function createFileRenditionRegistryStore(
+  registryPath: string,
+): RenditionRegistryStore {
+  let queue: Promise<unknown> = Promise.resolve();
+  return {
+    read: () => loadRenditionRegistry(registryPath),
+    update<T>(mutate: (registry: RenditionRegistry) => T): Promise<T> {
+      const result = queue.then(async () => {
+        const registry = await loadRenditionRegistry(registryPath);
+        const value = mutate(registry);
+        await saveRenditionRegistry(registryPath, registry);
+        return value;
+      });
+      queue = result.catch(() => undefined);
+      return result;
+    },
+    async revision() {
+      try {
+        const stats = await stat(registryPath);
+        return `${stats.size}:${stats.mtimeMs}`;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT")
+          return "missing";
+        throw error;
+      }
+    },
+  };
+}
+
 export async function computeSourceFingerprint(
   filePath: string,
   stats: Pick<Stats, "size" | "mtimeMs">,
@@ -371,6 +438,63 @@ export function upsertRegistrySource(
   else registry.items.push(next);
   registry.updatedAt = new Date().toISOString();
   return next;
+}
+
+/**
+ * The record playback serves these source bytes from, looked up exactly as
+ * the playback service looks it up.
+ *
+ * A record that disagrees with the file describes some other version of it.
+ * Size is decisive. The modification time counts only when the record has
+ * one: a zero is an absent measurement, not evidence that the file changed.
+ */
+export function findRegistryItemForSource(
+  registry: Pick<RenditionRegistry, "items">,
+  source: { relativePath: string; size: number; mtimeMs: number },
+): RenditionRegistryItem | undefined {
+  const key = normalizeRelativePath(source.relativePath).toLowerCase();
+  const item = registry.items.find(
+    (entry) => entry.relativePath.toLowerCase() === key,
+  );
+  const registeredMtime = Math.trunc(item?.mtimeMs ?? 0);
+  if (
+    !item ||
+    item.size !== source.size ||
+    (registeredMtime > 0 && registeredMtime !== Math.trunc(source.mtimeMs))
+  ) {
+    return undefined;
+  }
+  return item;
+}
+
+/**
+ * Why playback could not yet serve these source bytes from their adaptive
+ * package, or null when it can.
+ *
+ * Asked before a source is removed: the registry entry is the only way
+ * playback finds a package, so a source removed before its entry is in place
+ * and ready leaves the title with nothing to play.
+ */
+export function registryGapForPlayback(
+  registry: Pick<RenditionRegistry, "items">,
+  source: {
+    relativePath: string;
+    size: number;
+    mtimeMs: number;
+    sourceFingerprint: string;
+  },
+): string | null {
+  const entry = findRegistryItemForSource(registry, source);
+  if (!entry)
+    return `the rendition registry has no entry for ${source.relativePath} at this size`;
+  if (entry.sourceFingerprint !== source.sourceFingerprint)
+    return `the rendition registry entry for ${source.relativePath} describes other source bytes`;
+  if (
+    entry.adaptiveStatus !== "ready" ||
+    entry.adaptiveProfileVersion !== ADAPTIVE_PROFILE_VERSION
+  )
+    return `the rendition registry entry for ${source.relativePath} is ${entry.adaptiveStatus ?? "not adaptive"} at ${entry.adaptiveProfileVersion ?? "no profile"}`;
+  return null;
 }
 
 export function findRegistryItemById(

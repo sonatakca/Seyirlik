@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import {
+  readFileSync,
+  mkdirSync,
+  mkdtempSync,
+  writeFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +14,7 @@ import { decideProcessing } from "../../../renditions/processing/decide";
 import { checkpointRoot } from "../../../renditions/adaptive/epochs/checkpoints";
 import { ADAPTIVE_PROFILE_VERSION } from "../../../renditions/adaptive/profile";
 import {
+  createFileRenditionRegistryStore,
   loadRenditionRegistry,
   saveRenditionRegistry,
   upsertRegistrySource,
@@ -322,6 +329,84 @@ describe("processing job runner", () => {
     );
   });
 
+  it.each(["removed", "replaced"])(
+    "does not mark a %s source ready after encoding",
+    async (change) => {
+      const stateRoot = mkdtempSync(
+        path.join(tmpdir(), "seyirlik-runner-source-change-"),
+      );
+      const registry = createFileRenditionRegistryStore(
+        path.join(stateRoot, "registry.json"),
+      );
+      const outcome = await createProcessingJobRunner({
+        store: fake.store,
+        paths: { ...(paths as object), stateRoot } as never,
+        registry,
+        mediaRoot: "/media",
+        detectHardwareFn: vi.fn(async () => hardware) as never,
+        probeFn: vi.fn(async () => probe()) as never,
+        packageFn: vi.fn(async () => {
+          await registry.update((current) => {
+            if (change === "removed") current.items = [];
+            else current.items[0]!.sourceFingerprint = "b".repeat(64);
+          });
+          return {
+            mediaId: "file-1",
+            relativePath: "Movies/Dune.mp4",
+            status: "ready" as const,
+            versionDirectory: "version",
+          };
+        }) as never,
+      }).run(input);
+      expect(outcome).toMatchObject({ status: "failed", retryable: true });
+      const items = (await registry.read()).items;
+      if (change === "removed") expect(items).toEqual([]);
+      else
+        expect(items[0]).toMatchObject({ sourceFingerprint: "b".repeat(64) });
+      expect(items[0]?.adaptiveStatus).not.toBe("ready");
+      rmSync(stateRoot, { recursive: true, force: true });
+    },
+  );
+
+  it("does not call the job a success until playback can find its package", async () => {
+    const stateRoot = mkdtempSync(path.join(tmpdir(), "seyirlik-runner-"));
+    const file = createFileRenditionRegistryStore(
+      path.join(stateRoot, "registry.json"),
+    );
+    let writes = 0;
+    const registry = {
+      read: file.read,
+      revision: file.revision,
+      update: <T>(mutate: Parameters<typeof file.update<T>>[0]) => {
+        writes += 1;
+        // The start-of-job registration lands; the ready write does not.
+        if (writes === 2)
+          return Promise.reject(new Error("connection terminated"));
+        return file.update(mutate);
+      },
+    };
+    const outcome = await createProcessingJobRunner({
+      store: fake.store,
+      paths: { ...(paths as object), stateRoot } as never,
+      registry,
+      mediaRoot: "/media",
+      detectHardwareFn: vi.fn(async () => hardware) as never,
+      probeFn: vi.fn(async () => probe()) as never,
+      packageFn: vi.fn(async () => ({
+        mediaId: "file-1",
+        relativePath: "Movies/Dune.mp4",
+        status: "ready" as const,
+        versionDirectory: "cmaf-hls-aligned-v2-abcdef0123456789",
+        storageBytes: 149_000_000,
+      })) as never,
+    }).run(input);
+
+    expect(outcome).toMatchObject({ status: "failed", retryable: true });
+    expect(fake.latest().state).toBe("failed");
+    expect(fake.latest().errorMessage).toContain("connection terminated");
+    expect((await file.read()).items[0]?.adaptiveStatus).toBeUndefined();
+  });
+
   it("walks the stages in order and records each one", async () => {
     const packageFn = vi.fn(async () => ({
       mediaId: "file-1",
@@ -538,7 +623,6 @@ describe("processing job runner", () => {
       detectHardwareFn: vi.fn(async () => hardware) as never,
       probeFn: vi.fn(async () => probe()) as never,
       packageFn: packageFn as never,
-      registryUnreadableWaitMs: 0,
     });
 
     try {
@@ -605,7 +689,7 @@ describe("processing job runner", () => {
     }
   });
 
-  it("still records the publish when the registry reads back empty at the end", async () => {
+  it("retries publication without overwriting an unreadable registry", async () => {
     const stateRoot = mkdtempSync(path.join(tmpdir(), "seyirlik-runner-"));
     const registryPath = path.join(stateRoot, "registry.json");
     const packageFn = vi.fn(async ({ mediaId }: { mediaId: string }) => {
@@ -624,20 +708,15 @@ describe("processing job runner", () => {
       detectHardwareFn: vi.fn(async () => hardware) as never,
       probeFn: vi.fn(async () => probe()) as never,
       packageFn: packageFn as never,
-      registryUnreadableWaitMs: 0,
     });
 
     try {
       const outcome = await localRunner.run(input);
 
-      expect(outcome.status).toBe("succeeded");
-      const { items } = await loadRenditionRegistry(registryPath);
-      expect(items).toEqual([
-        expect.objectContaining({
-          relativePath: "Movies/Dune.mp4",
-          adaptiveStatus: "ready",
-        }),
-      ]);
+      expect(outcome.status).toBe("failed");
+      expect(outcome.retryable).toBe(true);
+      expect(fake.latest().state).not.toBe("succeeded");
+      expect(readFileSync(registryPath, "utf8")).toBe("");
     } finally {
       rmSync(stateRoot, { recursive: true, force: true });
     }

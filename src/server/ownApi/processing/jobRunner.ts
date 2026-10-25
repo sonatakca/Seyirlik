@@ -25,9 +25,10 @@ import type { StorageIdentityProbe } from "../../../renditions/processing/storag
 import { probeMediaFile } from "../../../renditions/probe";
 import { RenditionLockHeldError } from "../../../renditions/locks";
 import {
-  loadRenditionRegistry,
+  createFileRenditionRegistryStore,
+  findRegistryItemById,
+  type RenditionRegistryStore,
   RenditionRegistryUnreadableError,
-  saveRenditionRegistry,
   upsertRegistrySource,
 } from "../../../renditions/registry";
 import {
@@ -171,13 +172,6 @@ export const LIVE_PUBLISH_INTERVAL_MS = 250;
 export const LIVE_HEARTBEAT_INTERVAL_MS = 2_000;
 
 /**
- * How long a job waits for a registry that reads back empty before giving the
- * attempt back to the queue. Observed outages on MSI's mount lasted about a
- * minute; the queue's own backoff covers anything longer.
- */
-export const REGISTRY_UNREADABLE_WAIT_MS = 2 * 60_000;
-
-/**
  * Runs one processing job from analysis to publication.
  *
  * Every stage transition and every progress update goes through the store, so
@@ -191,6 +185,7 @@ export interface ProcessingJobRunnerDeps {
   /** What the processing page calls this machine; see `processedBy`. */
   workerName?: string;
   paths: RenditionPaths;
+  registry?: RenditionRegistryStore;
   mediaRoot: string;
   ffmpegPath?: string;
   ffprobePath?: string;
@@ -201,8 +196,6 @@ export interface ProcessingJobRunnerDeps {
   probeFn?: typeof probeMediaFile;
   /** Free bytes on the output volume. Injected so tests can force a shortfall. */
   freeBytesFn?: typeof freeBytesOn;
-  /** Overrides `REGISTRY_UNREADABLE_WAIT_MS`; injected in tests. */
-  registryUnreadableWaitMs?: number;
   /** Whether a verified package is already on scratch. Injected in tests. */
   verifiedPackageFn?: typeof hasVerifiedScratchPackage;
   /** Bytes of an unverified scratch package a rebuild removes. Injected in tests. */
@@ -454,7 +447,6 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
     packageFn = packageAdaptiveRendition,
     probeFn = probeMediaFile,
     freeBytesFn = freeBytesOn,
-    registryUnreadableWaitMs = REGISTRY_UNREADABLE_WAIT_MS,
     verifiedPackageFn = hasVerifiedScratchPackage,
     replaceablePackageFn = replaceableScratchPackageBytes,
     storageAvailableFn,
@@ -470,6 +462,11 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
   // Keeping their work under the state root preserves the same ownership
   // checks without ever falling back to an unscoped filesystem location.
   const workRoot = paths.workRoot ?? paths.stateRoot;
+  const registryStore =
+    deps.registry ??
+    createFileRenditionRegistryStore(
+      path.join(paths.stateRoot, "registry.json"),
+    );
 
   async function enterStage(
     job: ProcessingJobRecord,
@@ -1313,35 +1310,22 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
      * under the catalogue's own file id would produce a perfectly valid
      * package in a directory nothing ever looks in.
      */
-    const registryPath = path.join(paths.stateRoot, "registry.json");
-    /*
-     * MSI reads the registry through its own rclone mount, which has reported
-     * the file as empty for a minute or more after it changed. Failing on the
-     * first empty read emptied the whole queue into ENCODE_FAILED, one title
-     * every five seconds, so the read waits it out here and, past that, the
-     * failure is retryable.
-     */
-    const registry = await loadRenditionRegistry(registryPath, {
-      unreadableWaitMs: registryUnreadableWaitMs,
-      ...(input.signal ? { signal: input.signal } : {}),
-      onUnreadable: (error) => {
-        void store
-          .appendEvent({
-            processingJobId: job.id,
-            stage: "waiting",
-            level: "warning",
-            message: `${error.message} Waiting for it to read back before encoding.`,
-          })
-          .catch(() => undefined);
-      },
-    });
-    const registryItem = upsertRegistrySource(registry, {
-      relativePath: input.relativePath,
-      size: input.sizeBytes,
-      mtimeMs: input.mtimeMs,
-      sourceFingerprint: job.sourceFingerprint,
-    });
-    await saveRenditionRegistry(registryPath, registry);
+    let registryItem: ReturnType<typeof upsertRegistrySource>;
+    try {
+      registryItem = await registryStore.update((registry) =>
+        upsertRegistrySource(registry, {
+          relativePath: input.relativePath,
+          size: input.sizeBytes,
+          mtimeMs: input.mtimeMs,
+          sourceFingerprint: job.sourceFingerprint,
+        }),
+      );
+    } catch (error) {
+      // Otherwise only the `finally` much further down stops the heartbeat,
+      // and a job that failed here kept republishing for the worker's life.
+      clearInterval(heartbeat);
+      throw error;
+    }
 
     /**
      * Cancellation has to reach FFmpeg, not just the loop around it.
@@ -2733,6 +2717,43 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
         }.`,
     );
 
+    /*
+     * Playback finds the package only through this entry, so it is written
+     * before the job is called a success, and so before its upload is followed
+     * and its source can be removed. A write that fails leaves the job failed
+     * and requeued; the next attempt finds the verified package and only
+     * publishes it again.
+     *
+     * Applied to the registry as it is now, not to the copy read when the job
+     * started: that is hours old, and writing it back would undo every change
+     * made since. A removed entry or a replacement source must not be
+     * resurrected or marked ready by an encode that started before it.
+     */
+    try {
+      await registryStore.update((registry) => {
+        const readyItem = findRegistryItemById(registry, registryItem.id);
+        if (
+          !readyItem ||
+          readyItem.sourceFingerprint !== registryItem.sourceFingerprint
+        ) {
+          throw new Error(
+            "The registry source was removed or changed while this package was encoding.",
+          );
+        }
+        readyItem.adaptiveStatus = "ready";
+        readyItem.adaptiveProfileVersion = ADAPTIVE_PROFILE_VERSION;
+        delete readyItem.adaptiveLastError;
+      });
+    } catch (error) {
+      return fail(
+        PROCESSING_ERROR_CODES.encodeFailed,
+        `The package was published, but the rendition registry could not record it, so playback cannot find it yet: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        true,
+      );
+    }
+
     await store.update(job.id, {
       state: "succeeded",
       stage: "complete",
@@ -2766,33 +2787,6 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
       etaSeconds: 0,
       finishedAt: new Date(),
     });
-    /*
-     * The copy read before encoding is hours old by now. Every title that
-     * published in the meantime is in the file but not in that copy, and
-     * saving it back erased them: Arcane S01E02-E06 kept their packages on
-     * Drive and lost their entries, so playback fell back to deleted
-     * sources. Read the file again and change only this source's entry.
-     * A registry that still reads back empty after the wait gets the old
-     * copy, which holds more than an empty file does.
-     */
-    const latest = await loadRenditionRegistry(registryPath, {
-      unreadableWaitMs: registryUnreadableWaitMs,
-    }).catch((error: unknown) => {
-      if (error instanceof RenditionRegistryUnreadableError) return registry;
-      throw error;
-    });
-    const index = latest.items.findIndex(
-      (item) => item.id === registryItem.id,
-    );
-    const published = {
-      ...(index >= 0 ? latest.items[index]! : registryItem),
-      adaptiveStatus: "ready" as const,
-      adaptiveProfileVersion: ADAPTIVE_PROFILE_VERSION,
-    };
-    delete published.adaptiveLastError;
-    if (index >= 0) latest.items.splice(index, 1, published);
-    else latest.items.push(published);
-    await saveRenditionRegistry(registryPath, latest);
 
     /*
      * Published here means written into the mount's cache. The upload to

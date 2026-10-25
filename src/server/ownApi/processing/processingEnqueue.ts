@@ -42,6 +42,10 @@ import { resolvePublishedTitleRoot } from "../../../renditions/adaptive/publishe
 import { planRetainedSidecarSubtitles } from "../../../renditions/adaptive/processor";
 import { sidecarSubtitleIsCurrent } from "../../../renditions/adaptive/sidecarSubtitles";
 import { subtitleRenditionId } from "../../../renditions/adaptive/profile";
+import {
+  registryGapForPlayback,
+  type RenditionRegistryStore,
+} from "../../../renditions/registry";
 
 /**
  * The one way a processing job is created.
@@ -78,6 +82,11 @@ export interface ProcessingEnqueueOptions {
    * planning, which is where the space is actually spent.
    */
   processingElsewhere?: boolean;
+  /**
+   * The registry playback reads. When given, a source is removed only once
+   * the entry playback would serve its package from is there and ready.
+   */
+  registry?: Pick<RenditionRegistryStore, "read">;
 }
 
 export interface LocatedSource {
@@ -241,6 +250,7 @@ export function createProcessingEnqueuer({
   hardware,
   storageGuard,
   processingElsewhere = false,
+  registry,
 }: ProcessingEnqueueOptions): ProcessingEnqueuer {
   const resolvedMediaRoot = path.resolve(mediaRoot);
 
@@ -899,6 +909,28 @@ export function createProcessingEnqueuer({
         "The source is no longer the file this package was built from.",
         409,
       );
+    }
+
+    /*
+     * Last: whether playback can find the package at all. It looks a package
+     * up only through the rendition registry, and on 2026-10-20 a lost
+     * registry write followed by this removal left Lilyhammer S01E01 with
+     * neither a package playback knew of nor a source to fall back on.
+     */
+    if (registry) {
+      const gap = registryGapForPlayback(await registry.read(), {
+        relativePath: located.file.relativePath,
+        size: Number(located.file.sizeBytes),
+        mtimeMs: Number(located.file.mtimeMs),
+        sourceFingerprint: fingerprint,
+      });
+      if (gap) {
+        throw new OwnApiError(
+          "PROCESSING_PACKAGE_INCOMPLETE",
+          `Playback cannot find this title's package yet, so its source is still what plays: ${gap}.`,
+          409,
+        );
+      }
     }
 
     await unlink(located.absolutePath);

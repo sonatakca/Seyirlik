@@ -196,6 +196,7 @@ import {
   missingEpisodePlan,
 } from "./acquisition/missingEpisodes";
 import { createLibraryAdminRoutes } from "./catalogue/libraryAdminRoutes";
+import { createDatabaseRenditionRegistryStore } from "./processing/renditionRegistryStore";
 import { createTitleRemoval } from "./catalogue/titleRemoval";
 import { createMonitoringRoutes } from "./releases/monitoringRoutes";
 import { parseSabnzbdConfig } from "./acquisition/acquisitionConfig";
@@ -566,6 +567,15 @@ export async function createNativeRuntime({
   const renditionStateRoot =
     environment.SEYIRLIK_RENDITION_STATE_ROOT?.trim() ||
     path.join(mediaRoot, ".seyirlik", "state");
+  /**
+   * The rendition registry lives in the database both machines share, not in
+   * `registry.json` on the Drive mount each of them writes through; see
+   * migration 041. Import the file explicitly before activating this release.
+   */
+  const renditionRegistry = createDatabaseRenditionRegistryStore(pool, {
+    writer: environment.SEYIRLIK_WORKER_NAME?.trim() || hostname(),
+    requireExisting: true,
+  });
   const renditionWorkRoot =
     environment.SEYIRLIK_RENDITION_WORK_ROOT?.trim() ||
     path.join(mediaRoot, ".seyirlik", "work");
@@ -782,6 +792,7 @@ export async function createNativeRuntime({
          */
         const recovery = await readCheckpointRecovery({
           paths: renditionPaths,
+          registry: renditionRegistry,
           workspaceId: job.id,
           relativePath: file.relativePath,
           sourceFingerprint: job.sourceFingerprint,
@@ -1152,6 +1163,7 @@ export async function createNativeRuntime({
           ffmpegPath ?? environment.SEYIRLIK_FFMPEG_PATH ?? "ffmpeg",
         ),
         storageGuard,
+        registry: renditionRegistry,
       })
     : null;
 
@@ -1165,6 +1177,7 @@ export async function createNativeRuntime({
           jobs: processingJobs,
           enqueuer: workerEnqueuer,
           store: createDatabaseSourceCleanupStore(pool),
+          registry: renditionRegistry,
           verifyOnDrive: (titleRoot, manifest) =>
             packageGapsOnDrive({
               client: driveRcClient,
@@ -1232,6 +1245,7 @@ export async function createNativeRuntime({
     mediaRoot,
     renditionRoot,
     stateRoot: renditionStateRoot,
+    registry: renditionRegistry,
     mediaResolver: {
       resolveMedia: () => {
         throw new Error("The native playback routes resolve media themselves.");
@@ -1728,6 +1742,7 @@ export async function createNativeRuntime({
           ...(driveUploads ? { driveUploads } : {}),
           store: processingJobs,
           paths: renditionPaths,
+          registry: renditionRegistry,
           mediaRoot,
           // Polls rather than reading the cached flag: an encode can fail
           // within the same second the volume goes, before the watchdog's
@@ -1866,6 +1881,7 @@ export async function createNativeRuntime({
     mediaRoot,
     renditionRoot,
     stateRoot: renditionStateRoot,
+    registry: renditionRegistry,
     removeImage: (storageKey) => imageStorage.remove(storageKey),
     ...(acquisition
       ? {
@@ -2105,6 +2121,7 @@ export async function createNativeRuntime({
       // A `light` worker here means encodes run on another machine, whose own
       // scratch is what a job will spend.
       processingElsewhere: workerRole === "light",
+      registry: renditionRegistry,
       packageIndex,
     }),
     ...(tmdb
