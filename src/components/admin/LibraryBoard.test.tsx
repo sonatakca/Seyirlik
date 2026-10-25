@@ -187,6 +187,57 @@ it("switches to shows and lists a show's seasons and episodes", async () => {
   ).toHaveLength(1);
 });
 
+it("syncs a show's subtitle from the episode it belongs to", async () => {
+  api.getSubtitleSyncTracks.mockResolvedValue({
+    mediaFileId: "f1",
+    subtitles: [],
+    audio: [],
+  });
+  api.getLibraryTitle.mockResolvedValue({
+    ...title({ id: "show", kind: "series", title: "Show", hasMedia: true }),
+    mediaFileId: null,
+    fileName: null,
+    catalogueComplete: true,
+    seasons: [
+      {
+        id: "s1",
+        seasonNumber: 1,
+        episodes: [
+          {
+            ...facts,
+            hasMedia: true,
+            files: 1,
+            id: "e1",
+            seasonNumber: 1,
+            episodeNumber: 1,
+            title: "Pilot",
+            airDate: null,
+            mediaFileId: "f1",
+            fileName: "Show.S01E01.mkv",
+            monitored: true,
+          },
+        ],
+      },
+    ],
+  });
+  renderBoard();
+  fireEvent.click(await screen.findByRole("tab", { name: /library\.shows/ }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: /library\.seasons/ }),
+  );
+  // The show's own row offers no sync: a subtitle is timed to one episode.
+  const sync = await screen.findAllByRole("button", {
+    name: /library\.syncSubtitle/,
+  });
+  expect(sync.map((button) => button.getAttribute("aria-label"))).toEqual([
+    "library.syncSubtitle · E01",
+  ]);
+  fireEvent.click(sync[0]!);
+  await waitFor(() =>
+    expect(api.getSubtitleSyncTracks).toHaveBeenCalledWith("e1"),
+  );
+});
+
 it("filters by colour", async () => {
   renderBoard();
   await screen.findByText("Held");
