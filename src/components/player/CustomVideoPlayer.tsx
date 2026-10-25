@@ -31,6 +31,7 @@ import type {
   QualityPreferenceMode,
 } from "../../renditions/contracts";
 import { getCachedSession } from "../../lib/authStorage";
+import { useShowPlaybackDetails } from "../../lib/playbackDetailsVisibility";
 import {
   formatTemplate,
   getDisplayTitle,
@@ -427,7 +428,14 @@ export function CustomVideoPlayer({
       ? getDisplayTitle(item, mediaFormatLabels)
       : (itemMetadata.title ?? getDisplayTitle(item, mediaFormatLabels));
 
+  const showPlaybackDetails = useShowPlaybackDetails();
   const [isPlaybackInfoOpen, setIsPlaybackInfoOpen] = useState(false);
+
+  // Hidden from the administration menu while open (another tab): close it, so
+  // the controls are not held for a panel nobody can see.
+  useEffect(() => {
+    if (!showPlaybackDetails) setIsPlaybackInfoOpen(false);
+  }, [showPlaybackDetails]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [isPartyWatchOpen, setIsPartyWatchOpen] = useState(false);
@@ -5591,13 +5599,15 @@ export function CustomVideoPlayer({
                 data-party-watch-root
               >
                 <div className="seyirlik-player-top-actions-row flex items-center gap-2">
-                  <PlaybackInfoButton
-                    source={sourceWithLiveTranscodingReasons}
-                    onClick={() => {
-                      setIsPlaybackInfoOpen(true);
-                      setIsQueueOpen(false);
-                    }}
-                  />
+                  {showPlaybackDetails ? (
+                    <PlaybackInfoButton
+                      source={sourceWithLiveTranscodingReasons}
+                      onClick={() => {
+                        setIsPlaybackInfoOpen(true);
+                        setIsQueueOpen(false);
+                      }}
+                    />
+                  ) : null}
 
                   <Tooltip
                     content={t("player.enterViewMode")}
@@ -5873,7 +5883,7 @@ export function CustomVideoPlayer({
         />
       ) : null}
 
-      {!isViewModeEnabled && isPlaybackInfoOpen ? (
+      {!isViewModeEnabled && showPlaybackDetails && isPlaybackInfoOpen ? (
         <PlaybackInfoPanel
           source={sourceWithLiveTranscodingReasons}
           videoError={lastVideoError}
