@@ -759,7 +759,21 @@ export function createProcessingJobStore(
                FROM processing_jobs AS job
                LEFT JOIN jobs AS attempt
                  ON attempt.id = job.job_id AND attempt.status = 'queued'
-              ORDER BY job.created_at DESC LIMIT $1`,
+              -- Apply the limit after choosing active work. Otherwise newer
+              -- history and bulk-enqueued jobs hide an older running encode.
+              ORDER BY CASE job.state
+                         WHEN 'running' THEN 0
+                         WHEN 'paused' THEN 1
+                         WHEN 'pending' THEN 2
+                         WHEN 'queued' THEN 2
+                         ELSE 3
+                       END,
+                       CASE WHEN job.state IN ('pending', 'queued')
+                         THEN attempt.priority END ASC NULLS LAST,
+                       CASE WHEN job.state IN ('pending', 'queued')
+                         THEN job.created_at END ASC,
+                       job.created_at DESC
+              LIMIT $1`,
             [limit],
           );
       return result.rows.map(toRecord);
