@@ -716,6 +716,30 @@ describe("re-timing a subtitle", () => {
         audio: [],
       })),
       sync: vi.fn(),
+      revisions: vi.fn(async () => ({
+        relativePath: "movies/Film (2020)/Film (2020).tur.srt",
+        fileName: "Film (2020).tur.srt",
+        revisions: [
+          {
+            id: "55555555-6666-4777-8888-999999999999",
+            mediaFileId: MEDIA,
+            relativePath: "movies/Film (2020)/Film (2020).tur.srt",
+            revision: 1,
+            origin: "original" as const,
+            state: "committed" as const,
+            sha256: "a".repeat(64),
+            sizeBytes: 10,
+            parentId: null,
+            provenance: {},
+            failure: null,
+            createdAt: new Date(0),
+            settledAt: new Date(0),
+          },
+        ],
+      })),
+      restore: vi.fn(),
+      compare: vi.fn(async () => null),
+      settlePending: vi.fn(async () => 0),
     } satisfies SubtitleSyncService;
     return {
       routes: createSubtitleRoutes(
@@ -839,6 +863,144 @@ describe("re-timing a subtitle", () => {
       message: "Listening to the audio",
       result: null,
     });
+  });
+
+  const PREVIEW = {
+    status: "succeeded" as const,
+    payload: {
+      mediaFileId: MEDIA,
+      targetStreamIndex: 3,
+      reference: { kind: "audio", streamIndex: 1 },
+      dryRun: true,
+    },
+    result: {
+      outcome: "analysed",
+      subtitleSha256: "b".repeat(64),
+      alignment: {
+        verdict: "partial",
+        cues: [
+          {
+            index: 0,
+            disposition: "corrected",
+            sourceStartSeconds: 10,
+            sourceEndSeconds: 12,
+            startSeconds: 2,
+            endSeconds: 4,
+            text: "Merhaba",
+          },
+        ],
+      },
+    },
+  };
+
+  it("applies a reviewed proposal from the preview's own result, not the request's", async () => {
+    const h = syncHarness(PREVIEW);
+    await invoke(route(h.routes, "POST", "/subtitles/items/:itemId/sync"), {
+      params: { itemId: SYNC_ITEM },
+      body: { previewTaskId: TASK, unmatched: "exclude" },
+    });
+    expect(h.enqueued).toEqual([
+      {
+        jobType: SUBTITLE_JOB_TYPES.sync,
+        payload: {
+          mediaFileId: MEDIA,
+          targetStreamIndex: 3,
+          reference: { kind: "audio", streamIndex: 1 },
+          reviewed: {
+            subtitleSha256: "b".repeat(64),
+            previewTaskId: TASK,
+            unmatched: "exclude",
+            verdict: "partial",
+            placements: [
+              {
+                index: 0,
+                disposition: "corrected",
+                startSeconds: 2,
+                endSeconds: 4,
+              },
+            ],
+          },
+        },
+        dedupeKey: `subtitle-sync:${MEDIA}:3`,
+      },
+    ]);
+  });
+
+  it("refuses to apply a preview of another title, or one with nothing to apply", async () => {
+    for (const job of [
+      {
+        ...PREVIEW,
+        payload: {
+          ...PREVIEW.payload,
+          mediaFileId: "99999999-9999-4999-8999-999999999999",
+        },
+      },
+      { ...PREVIEW, result: { ...PREVIEW.result, outcome: "applied" } },
+      { ...PREVIEW, status: "running" as const },
+    ]) {
+      const h = syncHarness(job);
+      await expect(
+        invoke(route(h.routes, "POST", "/subtitles/items/:itemId/sync"), {
+          params: { itemId: SYNC_ITEM },
+          body: { previewTaskId: TASK },
+        }),
+      ).rejects.toMatchObject({ statusCode: 404 });
+      expect(h.enqueued).toEqual([]);
+    }
+  });
+
+  it("refuses a reviewed apply mixed with a typed correction", async () => {
+    const h = syncHarness(PREVIEW);
+    await expect(
+      invoke(route(h.routes, "POST", "/subtitles/items/:itemId/sync"), {
+        params: { itemId: SYNC_ITEM },
+        body: { previewTaskId: TASK, offsetSeconds: 3 },
+      }),
+    ).rejects.toMatchObject({ statusCode: 422 });
+  });
+
+  it("lists a sidecar's versions without the library path", async () => {
+    const h = syncHarness();
+    const captured = await invoke(
+      route(h.routes, "GET", "/subtitles/items/:itemId/revisions"),
+      { params: { itemId: SYNC_ITEM }, search: "?streamIndex=1001" },
+    );
+    expect(h.sync.revisions).toHaveBeenCalledWith(MEDIA, 1001);
+    const data = captured.payload?.data as {
+      revisions: Record<string, unknown>[];
+    };
+    expect(data.revisions[0]).not.toHaveProperty("relativePath");
+    expect(data.revisions[0]).toMatchObject({
+      revision: 1,
+      origin: "original",
+    });
+  });
+
+  it("queues a restore under the same key as a correction of that track", async () => {
+    const h = syncHarness();
+    const revisionId = "55555555-6666-4777-8888-999999999999";
+    await invoke(
+      route(
+        h.routes,
+        "POST",
+        "/subtitles/items/:itemId/revisions/:revisionId/restore",
+      ),
+      {
+        params: { itemId: SYNC_ITEM, revisionId },
+        body: { targetStreamIndex: 1001 },
+      },
+    );
+    expect(h.enqueued).toEqual([
+      {
+        jobType: SUBTITLE_JOB_TYPES.sync,
+        payload: {
+          mediaFileId: MEDIA,
+          targetStreamIndex: 1001,
+          restoreRevisionId: revisionId,
+        },
+        dedupeKey: `subtitle-sync:${MEDIA}:1001`,
+      },
+    ]);
   });
 
   it("answers only for a sync task of this title", async () => {

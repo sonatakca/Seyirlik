@@ -32,6 +32,7 @@ import {
   type EnvelopeSample,
 } from "../src/server/ownApi/subtitles/audioSpeech";
 import {
+  alignmentStrength,
   alignPiecewise,
   type AlignmentCue,
   type AlignmentReference,
@@ -295,7 +296,8 @@ function piecewiseApproach(
   let best: PiecewiseAlignment | null = null;
   for (const reference of references) {
     const result = alignPiecewise(cues, reference, anchors ? { anchors } : {});
-    if (best === null || rank(result) > rank(best)) best = result;
+    if (best === null || alignmentStrength(result) > alignmentStrength(best))
+      best = result;
   }
   const result = best as PiecewiseAlignment;
   return scorePlacement(
@@ -307,21 +309,6 @@ function piecewiseApproach(
     result.segments.length,
     performance.now() - started,
   );
-}
-
-/** Which of several readings to believe: the one that explains the most of the subtitle. */
-export function rank(result: PiecewiseAlignment): number {
-  const confidence =
-    result.segments
-      .filter(
-        (segment) =>
-          segment.status === "aligned" || segment.status === "corrected",
-      )
-      .reduce(
-        (sum, segment) => sum + segment.confidence * segment.cueCount,
-        0,
-      ) / Math.max(1, result.cues.length);
-  return result.coverage + confidence;
 }
 
 async function exists(file: string) {

@@ -1981,6 +1981,9 @@ export async function createNativeRuntime({
                 catalogue: scanStore,
                 onFilesChanged: (relativePath) =>
                   libraryChanges.notifyPath(relativePath),
+                ...(subtitles.revisions
+                  ? { revisions: subtitles.revisions }
+                  : {}),
               })
             : undefined,
           subtitles.sync,

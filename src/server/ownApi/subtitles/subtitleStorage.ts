@@ -150,6 +150,18 @@ export interface SubtitleWriteIntent {
 }
 
 export interface SubtitleStorageOptions {
+  /**
+   * Keeps a subtitle's bytes before an install replaces them.
+   *
+   * Called once this writer has decided to overwrite a subtitle it owns, and
+   * before anything is written. If it fails, nothing is written: a version is
+   * never replaced unless it has been kept somewhere first.
+   */
+  readonly preserve?: (previous: {
+    mediaFileId: string;
+    relativePath: string;
+    bytes: Uint8Array;
+  }) => Promise<void>;
   /** Durable execution owner; supplied only by the server service. */
   readonly operationId?: string;
   readonly prepare?: (intent: SubtitleWriteIntent) => Promise<void>;
@@ -531,6 +543,11 @@ export function createSubtitleStorage(
               "The destination holds a subtitle this system did not install.",
             );
           }
+          await options.preserve?.({
+            mediaFileId,
+            relativePath,
+            bytes: previous,
+          });
         }
 
         temporary = `${target}.${randomUUID()}.tmp`;

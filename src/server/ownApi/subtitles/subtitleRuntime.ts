@@ -5,6 +5,7 @@ import type { SubtitleCatalogueAttachment } from "./subtitleAttachment";
 import type { SubtitleConfig } from "./subtitleConfig";
 import { readFile } from "node:fs/promises";
 import { createSubtitleFitter } from "./subtitleFit";
+import { createSubtitleRevisionStore } from "./subtitleRevisions";
 import type { TitleReferences } from "./subtitleReferences";
 import { createSubtitleExecutionRepository } from "./subtitleExecution";
 import { createSubtitleJobHandlers, SUBTITLE_JOB_TYPES } from "./subtitleJobs";
@@ -88,6 +89,7 @@ export function createSubtitleRuntime(options: {
   const sessions: ProviderSessionManager =
     options.sessions ?? unattendedSessionManager();
   const repository = createSubtitleRepository(options.pool);
+  const revisions = createSubtitleRevisionStore(options.pool);
   const config = options.config;
   const service = createSubtitleService({
     config,
@@ -96,6 +98,7 @@ export function createSubtitleRuntime(options: {
     sessions,
     playback: options.playback,
     onFilesChanged: options.onFilesChanged,
+    revisions,
     ...(options.catalogue ? { catalogue: options.catalogue } : {}),
     ...(options.references && options.sync
       ? {
@@ -131,6 +134,7 @@ export function createSubtitleRuntime(options: {
         ffmpegPath: options.sync.ffmpegPath,
         catalogue: options.sync.catalogue,
         repository,
+        revisions,
         /*
          * A writer bound to the one media file the request named. The storage
          * module resolves every destination through `resolveMedia`, so binding
@@ -155,6 +159,7 @@ export function createSubtitleRuntime(options: {
     : undefined;
   return {
     repository,
+    revisions,
     service,
     sync,
     handlers: createSubtitleJobHandlers(

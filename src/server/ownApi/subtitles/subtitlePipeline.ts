@@ -19,6 +19,8 @@ import {
 } from "./subtitleState";
 import { validateSubtitle } from "./subtitlePayload";
 import {
+  fitClass,
+  fitCorrection,
   fitNeedsRetiming,
   retimeToFit,
   type SubtitleFit,
@@ -50,6 +52,13 @@ export interface SubtitleFitSummary {
   readonly trusted: boolean;
   /** True when the cues were moved onto the audio before installing. */
   readonly retimed: boolean;
+  /** The piecewise verdict, and how much of the subtitle it placed. */
+  readonly verdict: string;
+  readonly coverage: number;
+  /** Corrected regions; more than one means the subtitle was for another cut. */
+  readonly regions: number;
+  readonly unresolved: number;
+  readonly unmatched: number;
 }
 export type SubtitlePipelineResult =
   | (SubtitleInstallOutcome & {
@@ -115,23 +124,23 @@ async function bounded<T>(
 }
 
 /**
- * Within this much confidence two fits are the same fit. The same translation
- * timed for several releases scores identically against the audio (The
- * Sopranos S02E05: three packs at 0.772), and confidence alone would then pick
- * by download order, not by which one is already on time.
+ * Within this much coverage two fits explain the episode equally well. The
+ * same translation timed for several releases scores identically against the
+ * audio (The Sopranos S02E05: three packs alike), and coverage alone would then
+ * pick by download order, not by which one is already on time.
  */
-const CONFIDENCE_TIE = 0.01;
+const COVERAGE_TIE = 0.02;
 
-/** More confident, or as confident and needing less correction. */
+/**
+ * Better class first (in sync, then correctable unreviewed, then needing
+ * review), then more of the episode matched, then less correction needed.
+ */
 function fitsBetter(candidate: SubtitleFit, incumbent: SubtitleFit): boolean {
-  const difference =
-    candidate.proposal.confidence - incumbent.proposal.confidence;
-  if (Math.abs(difference) > CONFIDENCE_TIE) return difference > 0;
-  // A rate error, expressed as the seconds it drifts by over an hour.
-  const correction = (fit: SubtitleFit) =>
-    Math.abs(fit.proposal.offsetSeconds) +
-    Math.abs(fit.proposal.rate - 1) * 3600;
-  return correction(candidate) < correction(incumbent);
+  const classes = fitClass(candidate) - fitClass(incumbent);
+  if (classes !== 0) return classes > 0;
+  const coverage = candidate.alignment.coverage - incumbent.alignment.coverage;
+  if (Math.abs(coverage) > COVERAGE_TIE) return coverage > 0;
+  return fitCorrection(candidate) < fitCorrection(incumbent);
 }
 
 function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
@@ -171,6 +180,19 @@ export async function runSubtitlePipeline(input: {
   fit?: SubtitleFitter;
   /** How many valid downloads to measure before choosing. */
   fitCandidates?: number;
+  /**
+   * Keeps what was installed, and the provider's own bytes when they were
+   * retimed first, so the version a person downloaded is never only in
+   * memory. Called after the install commits; its failure is the caller's to
+   * report and cannot un-install anything.
+   */
+  preserve?: (installed: {
+    relativePath: string;
+    downloaded: Uint8Array;
+    installed: Uint8Array;
+    retimed: boolean;
+    provenance: Record<string, unknown>;
+  }) => Promise<void>;
 }): Promise<SubtitlePipelineResult> {
   if (
     !Number.isFinite(input.timeoutMs) ||
@@ -426,6 +448,27 @@ export async function runSubtitlePipeline(input: {
         installed.outcome !== "duplicate"
       )
         return installed;
+      if (installed.outcome === "installed")
+        await input
+          .preserve?.({
+            relativePath: installed.relativePath,
+            downloaded: chosen.payload.bytes,
+            installed: payload.bytes,
+            retimed,
+            provenance: {
+              providerId: chosen.selected.candidate.providerId,
+              candidateId: chosen.selected.candidate.candidateId,
+              ...(chosen.fit
+                ? {
+                    verdict: chosen.fit.alignment.verdict,
+                    coverage: chosen.fit.alignment.coverage,
+                    aligner: chosen.fit.alignment.version,
+                    segments: chosen.fit.alignment.segments.length,
+                  }
+                : {}),
+            },
+          })
+          .catch(() => undefined);
       await phase("installing", 1, 1);
       return {
         ...installed,
@@ -435,11 +478,18 @@ export async function runSubtitlePipeline(input: {
               fit: {
                 measured: downloaded.filter((entry) => entry.fit !== null)
                   .length,
-                confidence: chosen.fit.proposal.confidence,
-                rate: chosen.fit.proposal.rate,
-                offsetSeconds: chosen.fit.proposal.offsetSeconds,
+                confidence: chosen.fit.confidence,
+                rate: chosen.fit.rate,
+                offsetSeconds: chosen.fit.offsetSeconds,
                 trusted: chosen.fit.trusted,
                 retimed,
+                verdict: chosen.fit.alignment.verdict,
+                coverage: chosen.fit.alignment.coverage,
+                regions: chosen.fit.alignment.segments.filter(
+                  (segment) => segment.status === "corrected",
+                ).length,
+                unresolved: chosen.fit.alignment.counts.unresolved,
+                unmatched: chosen.fit.alignment.counts.unmatched,
               },
             }
           : {}),

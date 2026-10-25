@@ -1447,3 +1447,24 @@ function emptyResult(
     version: PIECEWISE_ALIGNER_VERSION,
   };
 }
+
+/**
+ * Which of several readings of one reference to believe.
+ *
+ * An audio track is read at several speech thresholds, because the right one
+ * is a property of the mix; each gives its own alignment. The one that places
+ * the most of the subtitle on strong evidence wins — coverage, plus each
+ * supported region's confidence weighted by its size — never the one that
+ * moves the most.
+ */
+export function alignmentStrength(result: PiecewiseAlignment): number {
+  const supported = result.segments.filter(
+    (segment) => segment.status === "aligned" || segment.status === "corrected",
+  );
+  const confidence =
+    supported.reduce(
+      (sum, segment) => sum + segment.confidence * segment.cueCount,
+      0,
+    ) / Math.max(1, result.cues.length);
+  return result.coverage + confidence;
+}
