@@ -168,6 +168,7 @@ import {
   type VideoFit,
 } from "./useVideoFit";
 import { usePartyEventToast } from "./usePartyEventToast";
+import { FrameCaptureToast } from "./FrameCaptureToast";
 import { QualityChangeToast } from "./QualityChangeToast";
 import { useQualityChangeToast } from "./useQualityChangeToast";
 import { formatQualityHeight, type PlayingQuality } from "./qualityToastModel";
@@ -3486,12 +3487,16 @@ export function CustomVideoPlayer({
     [revealPlayerChrome],
   );
 
-  const { frameNotice, isSavingFrame, handleSaveFrame } = useFrameCapture({
+  const {
+    capture: frameCapture,
+    leaving: isFrameCaptureLeaving,
+    isSavingFrame,
+    handleSaveFrame,
+  } = useFrameCapture({
     videoRef,
     playSessionId: activeSource.playSessionId,
     itemName: item.Name,
     revealPlayerChrome,
-    t,
   });
 
   useEffect(() => {
@@ -5588,7 +5593,7 @@ export function CustomVideoPlayer({
             isPlaying={progress.isPlaying}
             isPlayPausePending={partyWatch.isStartPending}
             isPlayPauseLoading={isCenterPlayPauseLoading}
-            notice={frameNotice ?? notice}
+            notice={notice}
             onTogglePlay={partyWatch.togglePlay}
             onControlsHoverStart={keepControlsVisible}
             onControlsHoverEnd={releaseControlsHover}
@@ -5872,6 +5877,17 @@ export function CustomVideoPlayer({
             </div>
           </div>
         </div>
+      ) : null}
+
+      {frameCapture ? (
+        <FrameCaptureToast
+          capture={frameCapture}
+          leaving={isFrameCaptureLeaving}
+          onRetry={() => {
+            void handleSaveFrame();
+          }}
+          t={t}
+        />
       ) : null}
 
       {shownQualityChange ? (
