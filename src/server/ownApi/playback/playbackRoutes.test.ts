@@ -1,4 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -701,6 +707,186 @@ describe("session reads after the session goes idle", () => {
         ),
       ).toBe("VALIDATION_FAILED");
     }
+  });
+});
+
+describe("saving a frame of a title whose source is gone", () => {
+  const VIEWER = "11111111-1111-4111-8111-111111111111";
+  const FILE = "22222222-2222-4222-8222-222222222222";
+  const SESSION = "66666666-6666-4666-8666-666666666666";
+
+  /**
+   * An FFmpeg stand-in that records the playlist it was handed and answers
+   * with a few bytes, so the route's choice of input is what is under test.
+   */
+  function fakeFfmpeg(directory: string) {
+    const record = path.join(directory, "input.m3u8");
+    const script = path.join(directory, "ffmpeg");
+    writeFileSync(
+      script,
+      [
+        "#!/bin/sh",
+        'while [ "$1" != "-i" ]; do shift; done',
+        `cp "$2" "${record}"`,
+        "printf PNG",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    return { script, record };
+  }
+
+  function buildFrameRouter(options: {
+    ffmpegPath: string;
+    packaged: { playlistPath: string; colorTransfer: string | null } | null;
+    asked: unknown[];
+  }) {
+    const catalogue = {
+      getFileById: async () => ({
+        id: FILE,
+        itemId: "item-visible",
+        relativePath: "Show/Season 01/Show S01E01.mkv",
+        sizeBytes: "1000",
+        mtimeMs: "2000",
+        missingSince: null,
+      }),
+      listStreams: async () => {
+        throw new Error("a source that is gone has no streams to read");
+      },
+      canUserAccessItem: async () => true,
+    } as unknown as Parameters<typeof createPlaybackRoutes>[0]["catalogue"];
+
+    const sessions = {
+      get: async () => ({
+        id: SESSION,
+        userId: VIEWER,
+        status: "ended",
+        itemId: "item-visible",
+        mediaFileId: FILE,
+      }),
+      touch: async () => {},
+    } as unknown as Parameters<typeof createPlaybackRoutes>[0]["sessions"];
+
+    return createOwnApiRouter({
+      csrfSecret: "s".repeat(32),
+      csrfCookieName: "seyirlik_csrf",
+      publicOrigin: "https://seyirlik.test",
+      resolveSession: async () => ({
+        userId: VIEWER,
+        username: "viewer",
+        displayName: "Viewer",
+        isAdministrator: false,
+        sessionId: "44444444-4444-4444-8444-444444444444",
+        sessionTokenHash: Buffer.alloc(32),
+      }),
+      routes: createPlaybackRoutes({
+        catalogue,
+        sessions,
+        sessionManager: {} as never,
+        mediaRoot: "/nonexistent-media-root",
+        renditions: {
+          findPackagedVideo: async (media: unknown) => {
+            options.asked.push(media);
+            return options.packaged
+              ? {
+                  path: "unused.mp4",
+                  width: 1920,
+                  height: 1080,
+                  durationSeconds: 3600,
+                  colorPrimaries: null,
+                  ...options.packaged,
+                }
+              : null;
+          },
+        } as never,
+        ffmpegPath: options.ffmpegPath,
+      }),
+    });
+  }
+
+  async function requestFrame(router: ReturnType<typeof buildFrameRouter>) {
+    const pathname = `/ownAPI/v1/playback/sessions/${SESSION}/frame.png?at=1013.2`;
+    let body: Buffer | undefined;
+    try {
+      await router.handler(
+        {
+          method: "GET",
+          url: pathname,
+          headers: { host: "seyirlik.test" },
+          socket: { remoteAddress: "127.0.0.1" },
+        } as unknown as IncomingMessage,
+        {
+          statusCode: 200,
+          setHeader() {},
+          getHeader() {
+            return undefined;
+          },
+          end(chunk?: Buffer) {
+            body = chunk;
+          },
+        } as unknown as ServerResponse,
+        { requestId: "req-1", url: new URL(pathname, "https://seyirlik.test") },
+      );
+    } catch (caught) {
+      return { code: (caught as OwnApiError).code };
+    }
+    return { code: "served", body: body?.toString() };
+  }
+
+  it("captures from the package's playlist, read from a local copy", async () => {
+    // Sopranos S01E01: the source was deleted once Drive held its package,
+    // and every save answered "the frame could not be saved".
+    const directory = mkdtempSync(path.join(tmpdir(), "seyirlik-frame-"));
+    try {
+      const packageDirectory = path.join(directory, ".seyirlik", "video");
+      mkdirSync(packageDirectory, { recursive: true });
+      const playlistPath = path.join(packageDirectory, "1080p.m3u8");
+      writeFileSync(
+        playlistPath,
+        [
+          "#EXTM3U",
+          '#EXT-X-MAP:URI="../../video/1080p.mp4",BYTERANGE="800@0"',
+          "#EXTINF:2.0,",
+          "#EXT-X-BYTERANGE:1000@800",
+          "../../video/1080p.mp4",
+          "",
+        ].join("\n"),
+      );
+      const ffmpeg = fakeFfmpeg(directory);
+      const asked: unknown[] = [];
+
+      const outcome = await requestFrame(
+        buildFrameRouter({
+          ffmpegPath: ffmpeg.script,
+          packaged: { playlistPath, colorTransfer: null },
+          asked,
+        }),
+      );
+
+      expect(outcome).toEqual({ code: "served", body: "PNG" });
+      expect(asked).toEqual([
+        expect.objectContaining({ mediaId: FILE, size: 1000, mtimeMs: 2000 }),
+      ]);
+      // The copy names the rendition by its absolute path, so FFmpeg can
+      // open it from temp storage.
+      const handed = readFileSync(ffmpeg.record, "utf8");
+      expect(handed).toContain(`${path.join(directory, "video", "1080p.mp4")}`);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("says the frame is unavailable when there is neither a source nor a package", async () => {
+    const asked: unknown[] = [];
+    expect(
+      await requestFrame(
+        buildFrameRouter({
+          ffmpegPath: "/nonexistent/ffmpeg",
+          packaged: null,
+          asked,
+        }),
+      ),
+    ).toEqual({ code: "FRAME_UNAVAILABLE" });
+    expect(asked).toHaveLength(1);
   });
 });
 

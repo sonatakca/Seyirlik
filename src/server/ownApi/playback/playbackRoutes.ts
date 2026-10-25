@@ -1,5 +1,5 @@
 import path from "node:path";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { OwnApiError } from "../ownApiHandler";
 import { serveFile } from "../api/fileDelivery";
 import { sendData, sendNoContent } from "../api/envelope";
@@ -38,6 +38,10 @@ import {
   withPackagedSubtitles,
 } from "./subtitleDelivery";
 import { captureFrameAsPng, isHdrTransfer } from "./frameCapture";
+import {
+  writeLocalPackagePlaylist,
+  type LocalPlaylistCopy,
+} from "../../../renditions/adaptive/localPlaylist";
 import {
   applyAdaptiveMasterSelection,
   parseAdaptiveMasterSelection,
@@ -970,31 +974,74 @@ export function createPlaybackRoutes({
           );
         }
 
-        const streams = await catalogue.listStreams(file.id);
-        const toneMap = streams.some(
-          (stream) =>
-            stream.kind === "video" && isHdrTransfer(stream.colorTransfer),
+        const frameUnavailable = () =>
+          new OwnApiError(
+            "FRAME_UNAVAILABLE",
+            "The frame could not be captured.",
+            422,
+          );
+
+        /*
+         * A fully processed title keeps only its package: the source was
+         * removed once Drive held every rendition. Its frames then come from
+         * the package's highest video rendition, opened through its playlist
+         * for the reason `PackagedVideo.playlistPath` gives — the MP4 behind it
+         * takes minutes to open on the Drive mount. The rung is the source's
+         * own resolution for anything packaged at full size.
+         */
+        const sourcePresent = await stat(absolutePath).then(
+          (stats) => stats.isFile(),
+          () => false,
         );
+        let inputPath = absolutePath;
+        let toneMap: boolean;
+        let localPlaylist: LocalPlaylistCopy | null = null;
+        if (sourcePresent) {
+          const streams = await catalogue.listStreams(file.id);
+          toneMap = streams.some(
+            (stream) =>
+              stream.kind === "video" && isHdrTransfer(stream.colorTransfer),
+          );
+        } else {
+          const packaged = renditions?.findPackagedVideo
+            ? await renditions
+                .findPackagedVideo({
+                  mediaId: file.id,
+                  filePath: absolutePath,
+                  size: Number(file.sizeBytes),
+                  mtimeMs: Number(file.mtimeMs),
+                })
+                .catch(() => null)
+            : null;
+          if (!packaged) {
+            throw frameUnavailable();
+          }
+          toneMap = isHdrTransfer(packaged.colorTransfer);
+          try {
+            localPlaylist = await writeLocalPackagePlaylist(
+              packaged.playlistPath,
+            );
+          } catch {
+            throw frameUnavailable();
+          }
+          inputPath = localPlaylist.path;
+        }
 
         let png: Buffer;
         try {
           png = await captureFrameAsPng(
-            absolutePath,
+            inputPath,
             atSeconds,
             { toneMap },
             ffmpegPath,
           );
         } catch {
           png = Buffer.alloc(0);
+        } finally {
+          await localPlaylist?.remove();
         }
         // Empty also means `at` was past the last frame.
-        if (png.length === 0) {
-          throw new OwnApiError(
-            "FRAME_UNAVAILABLE",
-            "The frame could not be captured.",
-            422,
-          );
-        }
+        if (png.length === 0) throw frameUnavailable();
 
         await sessions.touch(session.id);
         context.response.statusCode = 200;
