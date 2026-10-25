@@ -5,9 +5,10 @@ fingerprint) to the id its packages are stored under, and records whether its
 adaptive package is ready. Playback finds every package through it.
 
 Until migration 041 it was one JSON file, `media/.seyirlik/state/registry.json`.
-Since Seyirlik moved onto Google Drive, two machines write that file through
-two independent rclone mounts (`--vfs-cache-mode full`): the server removes
-titles, and MSI registers every title it encodes and marks it ready. On
+The server removes titles from it, and MSI registers each encode and marks it
+ready. Historically they wrote through independent rclone Drive caches; MSI
+now also reaches the server mount through SMB. In-place writes keep the name
+present but expose a truncated or partial file to concurrent readers. On
 2026-10-20 one of MSI's saves (temp file, then rename) left a 0-byte object on
 Drive, and every encode then failed at video start with "Unexpected end of
 JSON input". After the restore, two more MSI saves never reached Drive at all.
@@ -63,15 +64,15 @@ trick (in-place writes, read-back checks, retries) changes that.
 
 Writers and readers after the change:
 
-| Where                                         | What                                                     | Machine      |
-| --------------------------------------------- | -------------------------------------------------------- | ------------ |
-| `jobRunner` start                             | `update`: register the source                            | MSI (heavy)  |
-| `jobRunner` publish                           | `update`: mark ready, restoring the entry if it has gone | MSI (heavy)  |
-| `titleRemoval`                                | `update`: drop the title's entries                       | server (API) |
-| `renditionService`                            | `revision` + `read`, last good copy                      | server (API) |
-| `removeSource`, `sourceCleanup`               | `read`: playback's entry must be ready before an unlink  | both         |
-| `checkpointTruth`                             | `read`, for the id a checkpoint root is named after      | both workers |
-| `media:renditions:*` CLI, merge/adopt scripts | file store, offline only                                 | —            |
+| Where                                         | What                                                    | Machine      |
+| --------------------------------------------- | ------------------------------------------------------- | ------------ |
+| `jobRunner` start                             | `update`: register the source                           | MSI (heavy)  |
+| `jobRunner` publish                           | `update`: mark the unchanged source ready               | MSI (heavy)  |
+| `titleRemoval`                                | `update`: drop the title's entries                      | server (API) |
+| `renditionService`                            | `revision` + `read`, last good copy                     | server (API) |
+| `removeSource`, `sourceCleanup`               | `read`: playback's entry must be ready before an unlink | both         |
+| `checkpointTruth`                             | `read`, for the id a checkpoint root is named after     | both workers |
+| `media:renditions:*` CLI, merge/adopt scripts | file store, offline only                                | —            |
 
 ## Moving over
 
