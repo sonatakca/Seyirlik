@@ -7,6 +7,11 @@ import type { HardwareReport } from "../../../renditions/hardware/detect";
 import { decideProcessing } from "../../../renditions/processing/decide";
 import { checkpointRoot } from "../../../renditions/adaptive/epochs/checkpoints";
 import { ADAPTIVE_PROFILE_VERSION } from "../../../renditions/adaptive/profile";
+import {
+  loadRenditionRegistry,
+  saveRenditionRegistry,
+  upsertRegistrySource,
+} from "../../../renditions/registry";
 import { createProcessingJobRunner } from "./jobRunner";
 import type { ProcessingJobRecord, ProcessingJobStore } from "./jobStore";
 import type { PauseController } from "../../../renditions/processing/pauseController";
@@ -543,6 +548,96 @@ describe("processing job runner", () => {
       expect(outcome.retryable).toBe(true);
       expect(outcome.errorMessage).toContain("could not be read");
       expect(packageFn).not.toHaveBeenCalled();
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * The job saved the copy it read before encoding, so every title that
+   * published during those hours lost its entry (Arcane S01E02-E06).
+   */
+  it("keeps entries other jobs published while this one encoded", async () => {
+    const stateRoot = mkdtempSync(path.join(tmpdir(), "seyirlik-runner-"));
+    const registryPath = path.join(stateRoot, "registry.json");
+    const packageFn = vi.fn(async ({ mediaId }: { mediaId: string }) => {
+      const other = await loadRenditionRegistry(registryPath);
+      const item = upsertRegistrySource(other, {
+        relativePath: "Movies/Arrival.mkv",
+        size: 1,
+        mtimeMs: 1,
+        sourceFingerprint: "a".repeat(64),
+      });
+      item.adaptiveStatus = "ready";
+      await saveRenditionRegistry(registryPath, other);
+      return {
+        mediaId,
+        relativePath: input.relativePath,
+        status: "ready" as const,
+        versionDirectory: "cmaf-hls-aligned-v3-abcdef0123456789",
+      };
+    });
+    const localRunner = createProcessingJobRunner({
+      store: fake.store,
+      paths: { ...(paths as object), stateRoot } as never,
+      mediaRoot: "/media",
+      detectHardwareFn: vi.fn(async () => hardware) as never,
+      probeFn: vi.fn(async () => probe()) as never,
+      packageFn: packageFn as never,
+    });
+
+    try {
+      const outcome = await localRunner.run(input);
+
+      expect(outcome.status).toBe("succeeded");
+      const { items } = await loadRenditionRegistry(registryPath);
+      expect(
+        items.map((item) => [item.relativePath, item.adaptiveStatus]),
+      ).toEqual(
+        expect.arrayContaining([
+          ["Movies/Dune.mp4", "ready"],
+          ["Movies/Arrival.mkv", "ready"],
+        ]),
+      );
+      expect(items).toHaveLength(2);
+    } finally {
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("still records the publish when the registry reads back empty at the end", async () => {
+    const stateRoot = mkdtempSync(path.join(tmpdir(), "seyirlik-runner-"));
+    const registryPath = path.join(stateRoot, "registry.json");
+    const packageFn = vi.fn(async ({ mediaId }: { mediaId: string }) => {
+      writeFileSync(registryPath, "");
+      return {
+        mediaId,
+        relativePath: input.relativePath,
+        status: "ready" as const,
+        versionDirectory: "cmaf-hls-aligned-v3-abcdef0123456789",
+      };
+    });
+    const localRunner = createProcessingJobRunner({
+      store: fake.store,
+      paths: { ...(paths as object), stateRoot } as never,
+      mediaRoot: "/media",
+      detectHardwareFn: vi.fn(async () => hardware) as never,
+      probeFn: vi.fn(async () => probe()) as never,
+      packageFn: packageFn as never,
+      registryUnreadableWaitMs: 0,
+    });
+
+    try {
+      const outcome = await localRunner.run(input);
+
+      expect(outcome.status).toBe("succeeded");
+      const { items } = await loadRenditionRegistry(registryPath);
+      expect(items).toEqual([
+        expect.objectContaining({
+          relativePath: "Movies/Dune.mp4",
+          adaptiveStatus: "ready",
+        }),
+      ]);
     } finally {
       rmSync(stateRoot, { recursive: true, force: true });
     }

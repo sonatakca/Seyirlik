@@ -2766,10 +2766,33 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
       etaSeconds: 0,
       finishedAt: new Date(),
     });
-    registryItem.adaptiveStatus = "ready";
-    registryItem.adaptiveProfileVersion = ADAPTIVE_PROFILE_VERSION;
-    delete registryItem.adaptiveLastError;
-    await saveRenditionRegistry(registryPath, registry);
+    /*
+     * The copy read before encoding is hours old by now. Every title that
+     * published in the meantime is in the file but not in that copy, and
+     * saving it back erased them: Arcane S01E02-E06 kept their packages on
+     * Drive and lost their entries, so playback fell back to deleted
+     * sources. Read the file again and change only this source's entry.
+     * A registry that still reads back empty after the wait gets the old
+     * copy, which holds more than an empty file does.
+     */
+    const latest = await loadRenditionRegistry(registryPath, {
+      unreadableWaitMs: registryUnreadableWaitMs,
+    }).catch((error: unknown) => {
+      if (error instanceof RenditionRegistryUnreadableError) return registry;
+      throw error;
+    });
+    const index = latest.items.findIndex(
+      (item) => item.id === registryItem.id,
+    );
+    const published = {
+      ...(index >= 0 ? latest.items[index]! : registryItem),
+      adaptiveStatus: "ready" as const,
+      adaptiveProfileVersion: ADAPTIVE_PROFILE_VERSION,
+    };
+    delete published.adaptiveLastError;
+    if (index >= 0) latest.items.splice(index, 1, published);
+    else latest.items.push(published);
+    await saveRenditionRegistry(registryPath, latest);
 
     /*
      * Published here means written into the mount's cache. The upload to
