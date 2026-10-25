@@ -41,6 +41,7 @@ function isFinished(status: SubtitleSyncTask["status"]): boolean {
 function describeOutcome(
   finished: SubtitleSyncTask,
   t: (key: TranslationKey) => string,
+  byHand: boolean,
 ): Notice {
   const result = finished.result;
   if (finished.status === "cancelled")
@@ -61,9 +62,24 @@ function describeOutcome(
     Math.abs(result.rate - 1) > 0.0005
       ? `${t("library.syncSpeed")}${result.rate.toFixed(4)}`
       : null,
-    `${t("library.syncConfidence")} ${Math.round(result.confidence * 100)}%`,
+    // A shift typed by hand was not measured, so it has no confidence to show.
+    byHand
+      ? null
+      : `${t("library.syncConfidence")} ${Math.round(result.confidence * 100)}%`,
   ].filter(Boolean);
   return { tone: "ok", text: parts.join(" · ") };
+}
+
+/**
+ * The shift typed into the panel, in seconds, or null when the field is empty
+ * and the shift is to be worked out instead. A comma is a decimal point, since
+ * that is how a Turkish keyboard writes one.
+ */
+function parseManualShift(text: string): number | null | "invalid" {
+  const trimmed = text.trim().replace(",", ".");
+  if (trimmed === "") return null;
+  const value = Number(trimmed);
+  return Number.isFinite(value) && value !== 0 ? value : "invalid";
 }
 
 /**
@@ -122,7 +138,7 @@ export function SubtitleSyncPanel({
   initiallyOpen?: boolean;
 }) {
   const { t } = useLanguage();
-  const ids = { target: useId(), reference: useId() };
+  const ids = { target: useId(), reference: useId(), shift: useId() };
   const [open, setOpen] = useState(initiallyOpen);
   const [tracks, setTracks] = useState<SubtitleSyncTracks | null>(null);
   const [target, setTarget] = useState<number | null>(null);
@@ -131,6 +147,13 @@ export function SubtitleSyncPanel({
   const [submitting, setSubmitting] = useState(false);
   const [task, setTask] = useState<SubtitleSyncTask | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
+  /*
+   * The escape hatch for a film the aligner cannot hear — a score so dense
+   * that speech never stands out of it — where the operator has watched it
+   * and can say how far off it is.
+   */
+  const [shiftText, setShiftText] = useState("");
+  const [byHand, setByHand] = useState(false);
 
   useEffect(() => {
     if (!open || tracks) return;
@@ -176,7 +199,7 @@ export function SubtitleSyncPanel({
           if (cancelled) return;
           setTask(next);
           if (!isFinished(next.status)) return;
-          setNotice(describeOutcome(next, t));
+          setNotice(describeOutcome(next, t, byHand));
           if (next.result?.outcome === "applied") void onSynced();
         })
         // A missed poll is not a failed sync; the next one asks again.
@@ -189,7 +212,7 @@ export function SubtitleSyncPanel({
       clearTimeout(timer);
     };
     // `task` is re-set on every poll, which is what schedules the next one.
-  }, [task, taskId, running, itemId, onSynced, t]);
+  }, [task, taskId, running, itemId, onSynced, t, byHand]);
 
   const subtitleLabel = (track: SubtitleSyncTrack) =>
     [
@@ -216,15 +239,18 @@ export function SubtitleSyncPanel({
   const references =
     kind === "subtitle" ? subtitleReferences : (tracks?.audio ?? []);
   const locked = submitting || running;
+  const shift = parseManualShift(shiftText);
 
   const start = async () => {
-    if (target === null || reference === null) return;
+    if (target === null || reference === null || shift === "invalid") return;
     setSubmitting(true);
     setNotice(null);
+    setByHand(shift !== null);
     try {
       const { taskId: queued } = await syncTitleSubtitle(itemId, {
         targetStreamIndex: target,
         reference: { kind, streamIndex: reference },
+        ...(shift === null ? {} : { offsetSeconds: shift }),
       });
       signalTasksChanged();
       setTask({
@@ -382,11 +408,39 @@ export function SubtitleSyncPanel({
             ) : null}
           </div>
 
+          <div className="space-y-1">
+            <label
+              htmlFor={ids.shift}
+              className="text-[11px] font-black uppercase tracking-wide text-white/45"
+            >
+              {t("library.syncManual")}
+            </label>
+            <input
+              id={ids.shift}
+              type="text"
+              inputMode="decimal"
+              placeholder="-5"
+              className={`${selectStyle} max-w-32 tabular-nums`}
+              value={shiftText}
+              disabled={locked}
+              aria-invalid={shift === "invalid"}
+              onChange={(event) => setShiftText(event.target.value)}
+            />
+            <p className="text-xs font-semibold text-white/35">
+              {t("library.syncManualHint")}
+            </p>
+          </div>
+
           <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
               className={actionButton}
-              disabled={locked || target === null || reference === null}
+              disabled={
+                locked ||
+                target === null ||
+                reference === null ||
+                shift === "invalid"
+              }
               onClick={() => void start()}
             >
               <Timer size={13} aria-hidden="true" />

@@ -169,6 +169,59 @@ it("runs one sync at a time and reports what it did", async () => {
   expect(api.syncTitleSubtitle).toHaveBeenCalledTimes(1);
 });
 
+it("applies a shift typed by hand, with a comma, and claims no confidence", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  api.getSubtitleSyncTask.mockResolvedValue({
+    taskId: TASK,
+    status: "succeeded",
+    message: null,
+    result: {
+      outcome: "applied",
+      fileName: "Obsession (2023).tur.srt",
+      referenceKind: "subtitle",
+      referenceLabel: "a correction given by hand",
+      offsetSeconds: -5,
+      rate: 1,
+      confidence: 1,
+      matchedCues: 0,
+      consideredCues: 1388,
+      cueCount: 1388,
+      droppedCues: 0,
+      clampedCues: 0,
+    },
+  });
+  await open();
+  fireEvent.change(screen.getByLabelText("library.syncManual"), {
+    target: { value: "-5,0" },
+  });
+  const start = screen.getAllByRole("button", { name: /library.syncSubtitle/ });
+  const run = start[start.length - 1] as HTMLButtonElement;
+  fireEvent.click(run);
+  await waitFor(() =>
+    expect(api.syncTitleSubtitle).toHaveBeenCalledWith(ID, {
+      targetStreamIndex: 5,
+      reference: { kind: "subtitle", streamIndex: 2 },
+      offsetSeconds: -5,
+    }),
+  );
+  await act(() => vi.advanceTimersByTimeAsync(2_100));
+  expect(
+    await screen.findByText(
+      "library.syncApplied: Obsession (2023).tur.srt · library.syncEarlier 5.00 s",
+    ),
+  ).toBeTruthy();
+  expect(onSynced).toHaveBeenCalledTimes(1);
+});
+
+it("will not start with a shift that is not a number", async () => {
+  await open();
+  fireEvent.change(screen.getByLabelText("library.syncManual"), {
+    target: { value: "five" },
+  });
+  const start = screen.getAllByRole("button", { name: /library.syncSubtitle/ });
+  expect((start[start.length - 1] as HTMLButtonElement).disabled).toBe(true);
+});
+
 it("shows a refusal in the server's words and reloads nothing", async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   api.getSubtitleSyncTask.mockResolvedValue({

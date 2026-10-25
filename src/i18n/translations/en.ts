@@ -207,6 +207,9 @@ export const en = {
   "library.syncAgainstAudio": "Audio",
   "library.syncReference": "Reference",
   "library.syncAudioSlow": "Reading the audio takes a few minutes.",
+  "library.syncManual": "Shift by hand (seconds)",
+  "library.syncManualHint":
+    "Leave empty to work the shift out. A negative number moves the subtitle earlier; it is applied as typed, without checking.",
   "library.syncNoTarget":
     "There is no subtitle file beside the video to correct. Subtitles inside the video can only be used as a reference.",
   "library.syncNoReference": "There is nothing of this kind to sync against.",

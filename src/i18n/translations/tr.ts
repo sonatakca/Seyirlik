@@ -208,6 +208,9 @@ export const tr = {
   "library.syncAgainstAudio": "Ses",
   "library.syncReference": "Referans",
   "library.syncAudioSlow": "Sesin okunması birkaç dakika sürer.",
+  "library.syncManual": "Elle kaydır (saniye)",
+  "library.syncManualHint":
+    "Boş bırakılırsa kayma hesaplanır. Eksi değer altyazıyı öne alır; yazılan değer denetlenmeden uygulanır.",
   "library.syncNoTarget":
     "Videonun yanında düzeltilecek bir altyazı dosyası yok. Videonun içindeki altyazılar yalnızca referans olarak kullanılabilir.",
   "library.syncNoReference": "Bu türde senkronize edilecek bir şey yok.",
