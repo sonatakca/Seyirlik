@@ -630,7 +630,10 @@ export function AcquisitionsPage() {
         continue;
       }
       const entry = liveById.get(row.id);
-      if (entry?.queuePosition !== undefined) queue.push({ row, entry });
+      // A live failure arrives before the reconciler updates the stored row.
+      // It needs attention immediately; it is no longer unpacking or queued.
+      if (entry?.stage === "failed") attention.push(row);
+      else if (entry?.queuePosition !== undefined) queue.push({ row, entry });
       else if (entry) unpacking.push(row);
       else preparing.push(row);
     }
@@ -959,6 +962,11 @@ export function AcquisitionsPage() {
     );
     const isBusy = busyId === row.id;
     const entry = liveById.get(row.id);
+    const state =
+      bucketOf(row.state) === "active" &&
+      (entry?.stage === "processing" || entry?.stage === "failed")
+        ? entry.stage
+        : row.state;
     return (
       <li key={row.id} className={ROW}>
         <div className="flex items-start gap-3">
@@ -971,11 +979,9 @@ export function AcquisitionsPage() {
                * written by the reconciler every half-minute, and a download
                * that has just started unpacking is still "queued" there.
                */
-              entry?.stage === "processing"
-                ? t("admin.acquisitions.state.processing")
-                : t(
-                    `admin.acquisitions.state.${row.state}` as "admin.acquisitions.state.queued",
-                  ),
+              t(
+                `admin.acquisitions.state.${state}` as "admin.acquisitions.state.queued",
+              ),
             )}
             {withProgress && entry && live ? (
               <ProgressLine entry={entry} live={live} t={t} />
