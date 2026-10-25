@@ -8,6 +8,8 @@ import { getCuratedList } from "../lib/mediaApi";
 
 export interface HomeCuratedLists {
   hero: CuratedList | null;
+  /** Settled even when the request fails, allowing the default order. */
+  heroLoaded: boolean;
   /** The film library's order, shared with the film grid. */
   movies: CuratedList | null;
   shows: CuratedList | null;
@@ -16,6 +18,7 @@ export interface HomeCuratedLists {
 
 const NO_HOME_CURATION: HomeCuratedLists = {
   hero: null,
+  heroLoaded: false,
   movies: null,
   shows: null,
   books: null,
@@ -44,19 +47,28 @@ export function useHomeCuratedLists(): HomeCuratedLists {
   useEffect(() => {
     let isMounted = true;
 
+    // Hero ordering has no library dependency. Publish it as soon as it
+    // settles, without waiting for discovery or any shelf ordering.
+    void getCuratedList("home-hero")
+      .catch(() => null)
+      .then((hero) => {
+        if (isMounted) {
+          setLists((current) => ({ ...current, hero, heroLoaded: true }));
+        }
+      });
+
     async function load(): Promise<void> {
       const libraries: LibraryRouteRegistry =
         await refreshLibraryRoutes().catch(() => ({}));
 
-      const [hero, movies, shows, books] = await Promise.all([
-        getCuratedList("home-hero").catch(() => null),
+      const [movies, shows, books] = await Promise.all([
         loadForLibrary(libraries.movies?.id),
         loadForLibrary(libraries.shows?.id),
         loadForLibrary(libraries.books?.id),
       ]);
 
       if (!isMounted) return;
-      setLists({ hero, movies, shows, books });
+      setLists((current) => ({ ...current, movies, shows, books }));
     }
 
     void load();

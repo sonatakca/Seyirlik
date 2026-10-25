@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyCuration,
+  canOpenHomeCarousel,
   buildHomeCarouselPool,
   curatedEntriesFrom,
   emptyCuratedList,
@@ -129,5 +130,42 @@ describe("buildHomeCarouselPool", () => {
     ]);
 
     expect(pool.map((entry) => entry.Id)).toEqual(["movie"]);
+  });
+});
+
+describe("home carousel opening", () => {
+  it("waits for a saved opener absent from the partial catalogue", () => {
+    expect(
+      canOpenHomeCarousel(
+        [item("ford")],
+        listOf([["sopranos"], ["ford"]]),
+        false,
+      ),
+    ).toBe(false);
+  });
+  it("opens as soon as the saved opener is available", () => {
+    expect(
+      canOpenHomeCarousel([item("sopranos")], listOf([["sopranos"]]), false),
+    ).toBe(true);
+  });
+  it("ignores hidden entries when choosing the opener", () => {
+    expect(
+      canOpenHomeCarousel(
+        [item("ford")],
+        listOf([["hidden", true], ["ford"]]),
+        false,
+      ),
+    ).toBe(true);
+  });
+  it("allows fallback when the full catalogue cannot supply the opener", () => {
+    expect(
+      canOpenHomeCarousel([item("ford")], listOf([["missing"]]), true),
+    ).toBe(true);
+  });
+  it("allows an empty or failed saved ordering", () => {
+    expect(canOpenHomeCarousel([item("ford")], null, false)).toBe(true);
+    expect(
+      canOpenHomeCarousel([item("ford")], emptyCuratedList("home-hero"), false),
+    ).toBe(true);
   });
 });

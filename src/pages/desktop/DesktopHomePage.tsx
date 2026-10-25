@@ -7,7 +7,11 @@ import { HomeSkeleton } from "../../components/Skeletons";
 import { useLanguage } from "../../i18n/LanguageContext";
 import { getFavouriteItems, getLatestMediaItems } from "../../lib/mediaApi";
 import { FAVOURITE_CHANGED_EVENT } from "../../lib/favouriteActions";
-import { applyCuration, buildHomeCarouselPool } from "../../lib/curation";
+import {
+  applyCuration,
+  buildHomeCarouselPool,
+  canOpenHomeCarousel,
+} from "../../lib/curation";
 import { buildLatestRow } from "../../lib/homeShelves";
 import { useCataloguePools } from "../../hooks/useCataloguePools";
 import { useHomeCuratedLists } from "../../hooks/useCuratedList";
@@ -209,7 +213,11 @@ export function DesktopHomePage() {
     return <ErrorMessage title={t("home.couldNotLoad")} message={error} />;
   }
 
-  if (!data) {
+  if (
+    !data ||
+    !curatedLists.heroLoaded ||
+    !canOpenHomeCarousel(featuredPool, curatedLists.hero, pools.loaded)
+  ) {
     return <HomeSkeleton />;
   }
 
