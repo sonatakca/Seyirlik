@@ -23,6 +23,10 @@ import {
   requireBodyString,
   requireUuid,
 } from "../api/validation";
+import {
+  combineDriveUploads,
+  type DriveUploadStatus,
+} from "../processing/driveUploadStatus";
 import type { JobQueue } from "../tasks/jobQueue";
 import { IMPORT_JOB_TYPES } from "./importJobs";
 import type {
@@ -62,6 +66,8 @@ interface ImportDto {
     sizeBytes?: number;
     failureClass?: string;
   }>;
+  /** Its media files' way to Google Drive, read as one. */
+  readonly driveUpload?: DriveUploadStatus;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -75,6 +81,9 @@ interface ImportDto {
  * disclosure.
  */
 function toDto(record: ImportRecord, files: ImportFileRecord[]): ImportDto {
+  const driveUpload = combineDriveUploads(
+    files.map((file) => file.driveUpload),
+  );
   return {
     id: record.id,
     state: record.state,
@@ -93,6 +102,7 @@ function toDto(record: ImportRecord, files: ImportFileRecord[]): ImportDto {
       ...(file.sizeBytes === undefined ? {} : { sizeBytes: file.sizeBytes }),
       ...(file.failureClass ? { failureClass: file.failureClass } : {}),
     })),
+    ...(driveUpload ? { driveUpload } : {}),
     createdAt: new Date(record.createdAtMs).toISOString(),
     updatedAt: new Date(record.updatedAtMs).toISOString(),
   };

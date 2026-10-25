@@ -35,7 +35,10 @@ export interface DriveUploadStatus {
 
 /** What is stored: the status plus what the tracker needs to resume. */
 export interface StoredDriveUpload extends DriveUploadStatus {
-  /** Path of the title under the mount root, `/`-separated, trailing `/`. */
+  /**
+   * Path of the title under the mount root, `/`-separated, trailing `/`; for
+   * one imported file, that file's own path with no trailing `/`.
+   */
   prefix: string;
   /** Queue entries that belong to this package, fixed after the first reads. */
   members?: string[];
@@ -73,4 +76,62 @@ export function publicDriveUpload(
     ...status
   } = stored as unknown as StoredDriveUpload;
   return status;
+}
+
+/**
+ * Several files' uploads read as one, for an import that brought in a whole
+ * season: bytes and files add up, the rate is shared, and it is uploaded only
+ * when every file is. Null when none of them is uploaded this way.
+ */
+export function combineDriveUploads(
+  uploads: ReadonlyArray<DriveUploadStatus | null | undefined>,
+): DriveUploadStatus | null {
+  const present = uploads.filter(
+    (upload): upload is DriveUploadStatus => !!upload,
+  );
+  if (present.length <= 1) return present[0] ?? null;
+  const sum = (pick: (upload: DriveUploadStatus) => number | undefined) =>
+    present.reduce((total, upload) => total + (pick(upload) ?? 0), 0);
+  const uploading = present.filter((upload) => upload.state === "uploading");
+  const done = uploading.length === 0;
+  const totalBytes = sum((upload) => upload.totalBytes);
+  const uploadedBytes = sum((upload) => upload.uploadedBytes);
+  const bytesPerSecond = uploading.reduce(
+    (total, upload) => total + (upload.bytesPerSecond ?? 0),
+    0,
+  );
+  const retries = Math.max(
+    0,
+    ...uploading.map((upload) => upload.retries ?? 0),
+  );
+  return {
+    state: done ? "uploaded" : "uploading",
+    totalBytes,
+    uploadedBytes,
+    filesPending: sum((upload) => upload.filesPending),
+    filesUploading: sum((upload) => upload.filesUploading),
+    ...(bytesPerSecond > 0
+      ? {
+          bytesPerSecond,
+          etaSeconds: Math.round(
+            Math.max(0, totalBytes - uploadedBytes) / bytesPerSecond,
+          ),
+        }
+      : {}),
+    ...(retries > 0 ? { retries } : {}),
+    startedAtMs: Math.min(...present.map((upload) => upload.startedAtMs)),
+    // While uploading, the oldest reading: one file nobody is watching shows.
+    updatedAtMs: done
+      ? Math.max(...present.map((upload) => upload.updatedAtMs))
+      : Math.min(...uploading.map((upload) => upload.updatedAtMs)),
+    ...(done
+      ? {
+          finishedAtMs: Math.max(
+            ...present.map(
+              (upload) => upload.finishedAtMs ?? upload.updatedAtMs,
+            ),
+          ),
+        }
+      : {}),
+  };
 }

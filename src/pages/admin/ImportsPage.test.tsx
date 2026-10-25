@@ -140,6 +140,63 @@ describe("the import list", () => {
     expect(screen.queryByText("admin.imports.reconcile")).toBeNull();
   });
 
+  it("shows the imported file's way to Google Drive, and follows it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const now = Date.now();
+      api.listImports.mockResolvedValue([
+        row({
+          driveUpload: {
+            state: "uploading",
+            totalBytes: 7_603_618_701,
+            uploadedBytes: 3_497_664_602,
+            filesPending: 1,
+            filesUploading: 1,
+            bytesPerSecond: 2_800_000,
+            etaSeconds: 1_466,
+            startedAtMs: now - 600_000,
+            updatedAtMs: now,
+          },
+        }),
+      ]);
+      renderPage();
+      expect(await screen.findByText("processing.upload.heading")).toBeTruthy();
+      expect(screen.getByText("46.0%")).toBeTruthy();
+      expect(api.listImports).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(api.listImports).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops reading again once nothing is uploading", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      api.listImports.mockResolvedValue([
+        row({
+          driveUpload: {
+            state: "uploaded",
+            totalBytes: 100,
+            uploadedBytes: 100,
+            filesPending: 0,
+            filesUploading: 0,
+            startedAtMs: 0,
+            updatedAtMs: 60_000,
+            finishedAtMs: 60_000,
+          },
+        }),
+      ]);
+      renderPage();
+      expect(await screen.findByText("processing.upload.done")).toBeTruthy();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(api.listImports).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reports a real failure without repeating what was thrown", async () => {
     api.listImports.mockRejectedValue(
       Object.assign(new Error("fetch http://127.0.0.1:43111 failed"), {

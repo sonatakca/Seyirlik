@@ -6,6 +6,7 @@
  * operator's disks and were deliberately kept off the wire.
  */
 import { ownApiClient } from "../api/ownApi/client";
+import type { DriveUploadStatus } from "../server/ownApi/processing/driveUploadStatus";
 
 export interface ImportFile {
   readonly role: string;
@@ -26,6 +27,11 @@ export interface ImportRow {
   readonly failureClass?: string;
   readonly failureDetail?: string;
   readonly files: ImportFile[];
+  /**
+   * The media files' way to Google Drive, read as one. Absent where the
+   * importer does not write into a Drive mount.
+   */
+  readonly driveUpload?: DriveUploadStatus;
   readonly createdAt: string;
   readonly updatedAt: string;
 }

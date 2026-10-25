@@ -13,7 +13,12 @@ import {
   type RcQueueEntry,
   type RcTransfer,
 } from "./driveUpload";
-import { publicDriveUpload, type StoredDriveUpload } from "./driveUploadStatus";
+import {
+  combineDriveUploads,
+  publicDriveUpload,
+  type DriveUploadStatus,
+  type StoredDriveUpload,
+} from "./driveUploadStatus";
 
 const TITLE = "media/Movies/The Empire Strikes Back (1980)/";
 
@@ -310,6 +315,46 @@ describe("the tracker", () => {
       vi.useRealTimers();
     }
   });
+
+  /**
+   * An imported episode lands in `src/` beside the rest of its season, so a
+   * folder prefix would count every neighbour's upload as its own.
+   */
+  it("follows one imported file and none of the files beside it", async () => {
+    const folder = "media/Series/Arcane/Season 1/src/";
+    const h = harness([
+      [
+        [
+          { name: `${folder}Arcane - S01E09.mkv`, size: 7_603_618_701 },
+          { name: `${folder}Arcane - S01E09.mkv.tur.srt`, size: 25_013 },
+          { name: `${folder}Arcane - S01E08.mkv`, size: 6_939_257_801 },
+        ],
+        [
+          {
+            name: `${folder}Arcane - S01E09.mkv`,
+            bytes: 3_500_000_000,
+            size: 7_603_618_701,
+            speed: 2_800_000,
+          },
+        ],
+      ],
+    ]);
+    expect(
+      await h.tracker.track({
+        processingJobId: "import-file-1",
+        file: "D:\\media\\Series\\Arcane\\Season 1\\src\\Arcane - S01E09.mkv",
+        totalBytes: 7_603_618_701,
+      }),
+    ).toBe(true);
+    await vi.waitFor(() => expect(h.writes.length).toBeGreaterThan(1));
+    const last = h.writes.at(-1)!;
+    expect(last.prefix).toBe(`${folder}Arcane - S01E09.mkv`);
+    expect(last.members).toEqual([`${folder}Arcane - S01E09.mkv`]);
+    expect(last.filesPending).toBe(1);
+    expect(last.uploadedBytes).toBe(3_500_000_000);
+    expect(last.bytesPerSecond).toBe(2_800_000);
+    h.tracker.stop();
+  });
 });
 
 describe("configuration and the public shape", () => {
@@ -343,6 +388,68 @@ describe("configuration and the public shape", () => {
     expect(
       driveRcConfigFromEnvironment({ SEYIRLIK_DRIVE_RC: "not json" }),
     ).toBeNull();
+  });
+
+  it("reads a season's files as one upload", () => {
+    const file = (over: Partial<DriveUploadStatus>): DriveUploadStatus => ({
+      state: "uploading",
+      totalBytes: 100,
+      uploadedBytes: 0,
+      filesPending: 1,
+      filesUploading: 0,
+      startedAtMs: 1_000,
+      updatedAtMs: 9_000,
+      ...over,
+    });
+    expect(combineDriveUploads([null, undefined])).toBeNull();
+    const one = file({});
+    expect(combineDriveUploads([one, undefined])).toBe(one);
+
+    const combined = combineDriveUploads([
+      file({
+        uploadedBytes: 40,
+        filesUploading: 1,
+        bytesPerSecond: 10,
+        startedAtMs: 500,
+        updatedAtMs: 8_000,
+      }),
+      file({ uploadedBytes: 100, filesPending: 0, state: "uploaded" }),
+      file({ retries: 2 }),
+    ]);
+    expect(combined).toMatchObject({
+      state: "uploading",
+      totalBytes: 300,
+      uploadedBytes: 140,
+      filesPending: 2,
+      filesUploading: 1,
+      bytesPerSecond: 10,
+      etaSeconds: 16,
+      retries: 2,
+      startedAtMs: 500,
+      // The oldest reading of what is still uploading.
+      updatedAtMs: 8_000,
+    });
+
+    const finished = combineDriveUploads([
+      file({
+        state: "uploaded",
+        uploadedBytes: 100,
+        filesPending: 0,
+        finishedAtMs: 20_000,
+      }),
+      file({
+        state: "uploaded",
+        uploadedBytes: 100,
+        filesPending: 0,
+        finishedAtMs: 30_000,
+      }),
+    ]);
+    expect(finished).toMatchObject({
+      state: "uploaded",
+      uploadedBytes: 200,
+      finishedAtMs: 30_000,
+    });
+    expect(finished).not.toHaveProperty("bytesPerSecond");
   });
 
   it("never sends the folder path to the page", () => {

@@ -240,10 +240,14 @@ export function nextDriveUpload(
 ): { upload: StoredDriveUpload; emptyReads: number } {
   const inWindow = nowMs - previous.startedAtMs < MEMBERSHIP_WINDOW_MS;
   const known = previous.members?.length ? previous.members : null;
+  // A folder's prefix ends in `/` and takes in what is under it; a file's is
+  // the file itself.
+  const underPrefix = (name: string) =>
+    previous.prefix.endsWith("/")
+      ? name.startsWith(previous.prefix)
+      : name === previous.prefix;
   const mine = queue.filter((entry) =>
-    known && !inWindow
-      ? known.includes(entry.name)
-      : entry.name.startsWith(previous.prefix),
+    known && !inWindow ? known.includes(entry.name) : underPrefix(entry.name),
   );
   const members =
     known && !inWindow
@@ -336,16 +340,37 @@ export function createDatabaseDriveUploadStore(
   };
 }
 
+/**
+ * A file's path under the mount, as rclone names its queue entry: the same as
+ * `mountPrefixForAny` without the trailing `/`, so it matches the file itself
+ * and nothing beside it.
+ */
+export async function mountPathForAny(
+  mountRoot: string,
+  file: string,
+  resolve: (target: string) => Promise<string> = realpath,
+): Promise<string | null> {
+  const prefix = await mountPrefixForAny(mountRoot, file, resolve);
+  return prefix ? prefix.replace(/\/$/, "") : null;
+}
+
+/**
+ * The tracker is keyed by the row its store writes to: a processing job, or an
+ * imported file for the importer's own tracker. The field keeps the name it was
+ * born with.
+ */
 export interface DriveUploadTracker {
   /**
-   * Starts following a package just published into `directory`. Resolves
-   * false, and does nothing, when the directory is not on the mount.
+   * Starts following a package just published into `directory`, or one file
+   * just written to `file`. Resolves false, and does nothing, when it is not
+   * on the mount.
    */
-  track(input: {
-    processingJobId: string;
-    directory: string;
-    totalBytes: number;
-  }): Promise<boolean>;
+  track(
+    input: {
+      processingJobId: string;
+      totalBytes: number;
+    } & ({ directory: string } | { file: string }),
+  ): Promise<boolean>;
   /** Picks up uploads a previous run of this worker left unfinished. */
   resume(): Promise<number>;
   stop(): void;
@@ -454,12 +479,16 @@ export function createDriveUploadTracker({
   };
 
   return {
-    async track({ processingJobId, directory, totalBytes }) {
-      const prefix = await mountPrefixForAny(
-        config.mountRoot,
-        directory,
-        resolvePath,
-      );
+    async track(input) {
+      const { processingJobId, totalBytes } = input;
+      const prefix =
+        "file" in input
+          ? await mountPathForAny(config.mountRoot, input.file, resolvePath)
+          : await mountPrefixForAny(
+              config.mountRoot,
+              input.directory,
+              resolvePath,
+            );
       if (!prefix) return false;
       const at = now();
       const upload: StoredDriveUpload = {

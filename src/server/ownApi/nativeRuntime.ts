@@ -94,6 +94,10 @@ import {
   createImportProcessingStore,
   createImportProcessingSweep,
 } from "./imports/importProcessing";
+import {
+  createDatabaseImportUploadStore,
+  followImportUploads,
+} from "./imports/importUploads";
 import { createProcessingJobRunner } from "./processing/jobRunner";
 import {
   createDatabaseDriveUploadStore,
@@ -1204,6 +1208,19 @@ export async function createNativeRuntime({
         })
       : undefined;
   if (driveUploads) void driveUploads.resume().catch(() => undefined);
+  /*
+   * Imported files, followed the same way onto their own rows. Never marked
+   * for deletion: an imported file is the source, not something made from it.
+   */
+  const importUploads =
+    driveRc && driveRcClient
+      ? createDriveUploadTracker({
+          config: { ...driveRc, deleteSource: false },
+          client: driveRcClient,
+          store: createDatabaseImportUploadStore(pool),
+        })
+      : undefined;
+  if (importUploads) void importUploads.resume().catch(() => undefined);
   // Uploads that finished while no worker was left to decide their source.
   if (sourceCleanup) void sourceCleanup.resume().catch(() => undefined);
 
@@ -1794,7 +1811,16 @@ export async function createNativeRuntime({
             ...(handOffFinishedDownloads
               ? { handOff: handOffFinishedDownloads }
               : {}),
-            onImported: scanAfterImport,
+            onImported: async (record) => {
+              await scanAfterImport(record);
+              if (importUploads) {
+                await followImportUploads(
+                  importUploads,
+                  record,
+                  await importing.repository.listFiles(record.id),
+                );
+              }
+            },
             ...(queueImportedProcessing
               ? { queueProcessing: queueImportedProcessing }
               : {}),
