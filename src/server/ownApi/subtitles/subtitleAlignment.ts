@@ -308,7 +308,7 @@ function refine(
   return current;
 }
 
-function leastSquares(
+export function leastSquares(
   xs: readonly number[],
   ys: readonly number[],
 ): CueTransform | null {
