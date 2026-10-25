@@ -296,7 +296,11 @@ export async function reconcileLibraryScan({
       if (changed) probeFileIds.push(id);
     }
 
-    if (scanned.files.length > 0 || scanned.subtitles.length > 0) {
+    if (
+      scanned.files.length > 0 ||
+      scanned.subtitles.length > 0 ||
+      scanned.renditionBacked
+    ) {
       await store.replaceExternalSubtitles(itemId, scanned.subtitles);
     }
   }

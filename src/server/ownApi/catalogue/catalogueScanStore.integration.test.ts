@@ -76,4 +76,75 @@ integration("scan upserts and episode titles", () => {
     const id = await upsert("46 Long (Director's Cut)");
     expect(await titleOf(id)).toBe("46 Long (Director's Cut)");
   });
+  async function subtitleItem() {
+    const itemId = randomUUID(),
+      fileId = randomUUID();
+    await pool.query(
+      "INSERT INTO items(id,library_id,kind,source_key,title,sort_title) VALUES ($1::uuid,$2,'episode',$1::text,'Episode','episode')",
+      [itemId, libraryId],
+    );
+    await pool.query(
+      "INSERT INTO media_files(id,item_id,relative_path,size_bytes,mtime_ms,fingerprint,is_primary) VALUES ($1::uuid,$2,$1::text,1,1,'test',true)",
+      [fileId, itemId],
+    );
+    return { itemId, fileId };
+  }
+  const subtitle = (relativePath: string) => ({
+    relativePath,
+    codec: "subrip",
+    isText: true,
+    isDefault: false,
+    isForced: false,
+    language: "tur",
+  });
+  const tracks = async (fileId: string) =>
+    (
+      await pool.query<{
+        stream_index: number;
+        external_relative_path: string;
+      }>(
+        "SELECT stream_index,external_relative_path FROM media_streams WHERE media_file_id=$1 ORDER BY stream_index",
+        [fileId],
+      )
+    ).rows;
+  it("keeps a sidecar's index when a scan reorders the list or adds another", async () => {
+    const { itemId, fileId } = await subtitleItem();
+    await store.replaceExternalSubtitles(itemId, [
+      subtitle("Film.tr.srt"),
+      subtitle("Film.en.srt"),
+    ]);
+    const before = await tracks(fileId);
+    await store.replaceExternalSubtitles(itemId, [
+      subtitle("Film.fr.srt"),
+      subtitle("Film.en.srt"),
+      subtitle("Film.tr.srt"),
+      subtitle("Film.tr.srt"),
+    ]);
+    const after = await tracks(fileId);
+    for (const track of before)
+      expect(
+        after.find(
+          (row) => row.external_relative_path === track.external_relative_path,
+        )?.stream_index,
+      ).toBe(track.stream_index);
+    expect(after).toHaveLength(3);
+    await store.replaceExternalSubtitles(itemId, [subtitle("Film.tr.srt")]);
+    expect(await tracks(fileId)).toEqual([before[0]]);
+  });
+  it("serializes concurrent uploads so no track loses its index", async () => {
+    const { fileId } = await subtitleItem();
+    await Promise.all(
+      ["Film.tr.srt", "Film.en.srt", "Film.fr.srt"].map((relativePath) =>
+        store.attachExternalSubtitle({
+          mediaFileId: fileId,
+          relativePath,
+          codec: "subrip",
+          isText: true,
+          language: "tur",
+          isForced: false,
+        }),
+      ),
+    );
+    expect(await tracks(fileId)).toHaveLength(3);
+  });
 });

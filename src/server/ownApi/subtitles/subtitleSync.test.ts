@@ -146,7 +146,9 @@ function harness(
       };
     },
   };
+  const onFilesChanged = vi.fn(async () => {});
   const service = createSubtitleSyncService({
+    onFilesChanged,
     libraryRoot: "/library",
     ffmpegPath: "ffmpeg",
     catalogue: {
@@ -161,7 +163,7 @@ function harness(
     storageFactory: () => storage,
     ...(references ? { references } : {}),
   });
-  return { service, storage, written, recordRetiming, files };
+  return { service, storage, written, recordRetiming, files, onFilesChanged };
 }
 
 const request = {
@@ -216,6 +218,17 @@ describe("sync", () => {
         format: "srt",
       }),
     );
+  });
+
+  it("requests a library refresh only after a successful correction", async () => {
+    const { service, onFilesChanged } = harness();
+    await service.sync({ ...request, dryRun: true });
+    expect(onFilesChanged).not.toHaveBeenCalled();
+    await service.sync({
+      ...request,
+      transform: { offsetSeconds: -5, rate: 1 },
+    });
+    expect(onFilesChanged).toHaveBeenCalledWith(TURKISH);
   });
 
   it("writes nothing for a dry run", async () => {

@@ -251,91 +251,130 @@ export function createCatalogueScanStore(
       language: string | null;
       isForced: boolean;
     }) => {
-      const existing = await pool.query(
-        `SELECT 1 FROM media_streams
-          WHERE media_file_id = $1 AND is_external = true
-            AND external_relative_path = $2`,
-        [input.mediaFileId, input.relativePath],
-      );
-      if ((existing.rowCount ?? 0) > 0) return;
-      /*
-       * The next index above whatever is already there, in the range the scan
-       * reserves for sidecars, so a synthetic index can never collide with a
-       * real stream's.
-       */
-      const used = await pool.query<{ next: number | null }>(
-        `SELECT MAX(stream_index) + 1 AS next FROM media_streams
-          WHERE media_file_id = $1 AND is_external = true`,
-        [input.mediaFileId],
-      );
-      const streamIndex = Math.max(10_000, used.rows[0]?.next ?? 10_000);
-      await pool.query(
-        `INSERT INTO media_streams (
-           media_file_id, stream_index, kind, codec, language, is_default, is_forced,
-           is_external, is_text_subtitle, external_relative_path
-         )
-         VALUES ($1, $2, 'subtitle', $3, $4, false, $5, true, $6, $7)
-         ON CONFLICT (media_file_id, stream_index) DO NOTHING`,
-        [
-          input.mediaFileId,
-          streamIndex,
-          input.codec,
-          input.language,
-          input.isForced,
-          input.isText,
-          input.relativePath,
-        ],
-      );
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(
+          "SELECT id FROM media_files WHERE id=$1 FOR UPDATE",
+          [input.mediaFileId],
+        );
+        const existing = await client.query(
+          `SELECT stream_index FROM media_streams WHERE media_file_id=$1
+           AND is_external=true AND external_relative_path=$2`,
+          [input.mediaFileId, input.relativePath],
+        );
+        if (existing.rows.length === 0) {
+          const used = await client.query<{ next: number | null }>(
+            "SELECT MAX(stream_index)+1 AS next FROM media_streams WHERE media_file_id=$1",
+            [input.mediaFileId],
+          );
+          await client.query(
+            `INSERT INTO media_streams
+             (media_file_id,stream_index,kind,codec,language,is_default,is_forced,is_external,is_text_subtitle,external_relative_path)
+             VALUES ($1,$2,'subtitle',$3,$4,false,$5,true,$6,$7)`,
+            [
+              input.mediaFileId,
+              Math.max(10000, used.rows[0]?.next ?? 10000),
+              input.codec,
+              input.language,
+              input.isForced,
+              input.isText,
+              input.relativePath,
+            ],
+          );
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
     },
 
     replaceExternalSubtitles: async (
       itemId: string,
       subtitles: ScannedSubtitle[],
     ) => {
-      const fileResult = await pool.query<{ id: string }>(
-        `SELECT id FROM media_files
-         WHERE item_id = $1 AND missing_since IS NULL
-         ORDER BY is_primary DESC, size_bytes DESC, id
-         LIMIT 1`,
-        [itemId],
-      );
-      const mediaFileId = fileResult.rows[0]?.id;
-      if (!mediaFileId) return;
-
-      // A replacement file can leave the former primary row around during the
-      // missing-file grace period. Remove sidecars from every cut before
-      // attaching them to the currently playable primary; otherwise a rescan
-      // can strand a valid subtitle on a file that no longer exists.
-      await pool.query(
-        `DELETE FROM media_streams
-         WHERE is_external = true
-           AND media_file_id IN (SELECT id FROM media_files WHERE item_id = $1)`,
-        [itemId],
-      );
-
-      // External subtitles occupy a high index range so they cannot collide with
-      // the container's own stream indexes.
-      let externalIndex = 10_000;
-      for (const subtitle of subtitles) {
-        await pool.query(
-          `INSERT INTO media_streams (
-             media_file_id, stream_index, kind, codec, language, is_default, is_forced,
-             is_external, is_text_subtitle, external_relative_path
-           )
-           VALUES ($1, $2, 'subtitle', $3, $4, $5, $6, true, $7, $8)
-           ON CONFLICT (media_file_id, stream_index) DO NOTHING`,
-          [
-            mediaFileId,
-            externalIndex,
-            subtitle.codec,
-            subtitle.language ?? null,
-            subtitle.isDefault,
-            subtitle.isForced,
-            subtitle.isText,
-            subtitle.relativePath,
-          ],
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        // The same file locks as uploads: a scan cannot delete a track while
+        // another writer is assigning its index. Readers see one committed set.
+        const files = await client.query<{ id: string }>(
+          `SELECT id FROM media_files WHERE item_id=$1 AND missing_since IS NULL
+           ORDER BY is_primary DESC,size_bytes DESC,id FOR UPDATE`,
+          [itemId],
         );
-        externalIndex += 1;
+        const mediaFileId = files.rows[0]?.id;
+        if (mediaFileId) {
+          const previous = await client.query<{
+            stream_index: number;
+            external_relative_path: string | null;
+          }>(
+            "SELECT stream_index,external_relative_path FROM media_streams WHERE media_file_id=$1 ORDER BY stream_index",
+            [mediaFileId],
+          );
+          const indices = new Map<string, number>();
+          for (const row of previous.rows) {
+            if (
+              row.external_relative_path &&
+              !indices.has(row.external_relative_path)
+            ) {
+              indices.set(row.external_relative_path, row.stream_index);
+            }
+          }
+          const unique = [
+            ...new Map(
+              subtitles.map((subtitle) => [subtitle.relativePath, subtitle]),
+            ).values(),
+          ];
+          let nextIndex = Math.max(
+            10000,
+            ...previous.rows.map((row) => row.stream_index + 1),
+          );
+          await client.query(
+            `DELETE FROM media_streams WHERE is_external=true
+             AND media_file_id IN (SELECT id FROM media_files WHERE item_id=$1)
+             AND (media_file_id<>$2 OR NOT (stream_index=ANY($3::int[])))`,
+            [
+              itemId,
+              mediaFileId,
+              unique.flatMap((subtitle) =>
+                indices.has(subtitle.relativePath)
+                  ? [indices.get(subtitle.relativePath)!]
+                  : [],
+              ),
+            ],
+          );
+          for (const subtitle of unique) {
+            const index = indices.get(subtitle.relativePath) ?? nextIndex++;
+            await client.query(
+              `INSERT INTO media_streams
+               (media_file_id,stream_index,kind,codec,language,is_default,is_forced,is_external,is_text_subtitle,external_relative_path)
+               VALUES ($1,$2,'subtitle',$3,$4,$5,$6,true,$7,$8)
+               ON CONFLICT (media_file_id,stream_index) DO UPDATE SET
+               codec=EXCLUDED.codec,language=EXCLUDED.language,is_default=EXCLUDED.is_default,
+               is_forced=EXCLUDED.is_forced,is_text_subtitle=EXCLUDED.is_text_subtitle`,
+              [
+                mediaFileId,
+                index,
+                subtitle.codec,
+                subtitle.language ?? null,
+                subtitle.isDefault,
+                subtitle.isForced,
+                subtitle.isText,
+                subtitle.relativePath,
+              ],
+            );
+          }
+        }
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
       }
     },
 

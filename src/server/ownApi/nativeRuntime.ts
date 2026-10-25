@@ -74,6 +74,7 @@ import {
   parseWorkerRole,
   workerLanes,
 } from "./tasks/workerRole";
+import { createLibraryChangeMonitor } from "./scanner/libraryChanges";
 import { parseDeleteMissing, parseRescanMinutes } from "./scanner/scanSettings";
 import {
   deviceLossEvidence,
@@ -506,6 +507,13 @@ export async function createNativeRuntime({
     : null;
   const playbackSessions = createPlaybackSessionStore(pool);
   const queue = createJobQueue(pool);
+  const libraryChanges = createLibraryChangeMonitor({
+    mediaRoot,
+    libraries,
+    queue,
+    fileSystem: createNodeScannerFileSystem(mediaRoot),
+    onError: (message) => console.warn(`[Seyirlik Library] ${message}`),
+  });
 
   const imageStorage = createImageStorage({
     imageRoot: path.join(generatedStoragePath, "images"),
@@ -1445,6 +1453,7 @@ export async function createNativeRuntime({
     sessions: subtitleSessions ?? subtitleVault?.manager,
     playback: playbackRefresh,
     catalogue: scanStore,
+    onFilesChanged: (relativePath) => libraryChanges.notifyPath(relativePath),
     /*
      * Re-timing an existing subtitle needs two things searching for one does
      * not: the catalogue's own list of a file's tracks, which is what an
@@ -1652,11 +1661,7 @@ export async function createNativeRuntime({
       ),
     );
     if (!library) return;
-    await queue.enqueue({
-      jobType: JOB_TYPES.libraryScan,
-      payload: { libraryId: library.id },
-      dedupeKey: `${JOB_TYPES.libraryScan}:${library.id}`,
-    });
+    await libraryChanges.notifyPath(library.roots[0]!);
   };
 
   /*
@@ -1845,6 +1850,7 @@ export async function createNativeRuntime({
     logger: console,
   });
   if (runWorker) worker.start();
+  libraryChanges.start(libraryWorker);
   startup?.complete("processing");
 
   /**
@@ -1969,6 +1975,7 @@ export async function createNativeRuntime({
                 // Recorded against the file at once, so an uploaded subtitle is
                 // offered by the player without waiting for a library scan.
                 catalogue: scanStore,
+                onFilesChanged: (relativePath) => libraryChanges.notifyPath(relativePath),
               })
             : undefined,
           subtitles.sync,
@@ -2368,6 +2375,7 @@ export async function createNativeRuntime({
       if (garbageTimer) clearInterval(garbageTimer);
       storageWatchdog.stop();
       if (releaseTimer) clearInterval(releaseTimer);
+      await libraryChanges.close();
       await worker.stop();
       await pool.end();
     },

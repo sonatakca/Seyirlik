@@ -296,6 +296,7 @@ describe("custom playback API request deduplication", () => {
             index: 4,
             codecName: "mov_text",
             language: "tur",
+            isExternal: true,
             isImageBased: false,
           },
           {
@@ -328,6 +329,7 @@ describe("custom playback API request deduplication", () => {
       [3, "eng"],
       [4, "tur"],
     ]);
+    expect(streams.find((stream) => stream.Index === 4)?.IsExternal).toBe(true);
     expect(candidate?.mediaSource.DefaultAudioStreamIndex).toBe(1);
   });
 

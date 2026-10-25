@@ -96,6 +96,7 @@ export function createSubtitleService(dependencies: {
   providers: readonly SubtitleProvider[];
   sessions: ProviderSessionManager;
   playback?: PlaybackRefreshBoundary;
+  onFilesChanged?: (relativePath: string) => Promise<void>;
   /**
    * Where an installed sidecar is recorded so the player lists it at once.
    * Without it a title whose source was removed never lists the subtitle: the
@@ -245,6 +246,9 @@ export function createSubtitleService(dependencies: {
                 .event("catalogue-attached", { attached })
                 .catch(() => undefined);
             }
+            await dependencies
+              .onFilesChanged?.(outcome.relativePath)
+              .catch(() => undefined);
             const refreshed = await playback.request({
               mediaFileId: work.want.mediaFileId,
               kind: "subtitles",

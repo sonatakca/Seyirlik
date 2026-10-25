@@ -198,6 +198,7 @@ export function createSubtitleSyncService(dependencies: {
     mediaFileId: string,
   ) => SubtitleStorage;
   playback?: PlaybackRefreshBoundary;
+  onFilesChanged?: (relativePath: string) => Promise<void>;
   /**
    * The package's audio and its copies of the video's own subtitles. Preferred
    * to the source even while it exists (the same print, a fraction of the
@@ -500,6 +501,8 @@ export function createSubtitleSyncService(dependencies: {
         cueCount:
           written.outcome === "installed" ? written.cueCount : cues.length,
       });
+
+      await dependencies.onFilesChanged?.(relativePath).catch(() => undefined);
 
       // Observational, and after the commit: a player that will not refresh
       // does not un-write a correct subtitle.

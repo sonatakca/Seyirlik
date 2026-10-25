@@ -32,9 +32,9 @@ import {
   open,
   readFile,
   realpath,
-  rename,
   unlink,
 } from "node:fs/promises";
+import { replaceSubtitleFile, SubtitleCommitError } from "./subtitleCommit";
 import path from "node:path";
 import { isPathInsideRoot } from "../../pathSecurity";
 import { classifyFsError } from "../imports/importOperations";
@@ -202,9 +202,9 @@ export class StorageFailure extends Error {
  * The fallback keeps both properties the link was chosen for. `wx` is an
  * exclusive create, which is as atomic on exFAT as it is anywhere: whoever
  * gets it owns the name, and the loser sees `EEXIST` rather than a torn file.
- * The rename then puts the complete bytes over this writer's own empty
- * reservation, so no reader ever sees a partial subtitle at a name that was
- * not already ours.
+ * Write through that exclusive handle: network mounts cannot be trusted to
+ * rename over the reservation. The caller verifies the bytes before publishing
+ * a catalogue row or a successful result.
  */
 async function claim(temporary: string, target: string): Promise<void> {
   try {
@@ -213,8 +213,9 @@ async function claim(temporary: string, target: string): Promise<void> {
   } catch (error) {
     if (classifyFsError(error).failure !== "hardlink-unsupported") throw error;
   }
+  let reservation;
   try {
-    await (await open(target, "wx", 0o644)).close();
+    reservation = await open(target, "wx", 0o644);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") {
       throw new StorageFailure(
@@ -224,7 +225,12 @@ async function claim(temporary: string, target: string): Promise<void> {
     }
     throw error;
   }
-  await rename(temporary, target);
+  try {
+    await reservation.writeFile(await readFile(temporary));
+    await reservation.sync();
+  } finally {
+    await reservation.close();
+  }
 }
 
 export function createSubtitleStorage(
@@ -580,7 +586,18 @@ export function createSubtitleStorage(
           // No-clobber: two workers racing produce one file and one loser.
           await claim(temporary, target);
         } else {
-          await rename(temporary, target);
+          await replaceSubtitleFile({
+            root: await rootPath(),
+            target,
+            temporary,
+            previous,
+            bytes: validated.bytes,
+          });
+        }
+        if (subtitleDigest(await readFile(target)) !== sha256) {
+          throw new SubtitleCommitError(
+            "The saved subtitle did not match the requested bytes.",
+          );
         }
         // A cancellation arriving now cannot un-commit what is on the disk.
         return {
@@ -590,6 +607,13 @@ export function createSubtitleStorage(
           cueCount: validated.cueCount,
         };
       } catch (error) {
+        if (error instanceof SubtitleCommitError) {
+          return {
+            outcome: "error",
+            failure: "commit-ambiguous",
+            reason: error.message,
+          };
+        }
         if (error instanceof StorageFailure) {
           return {
             outcome: "error",
@@ -710,8 +734,13 @@ export function createSubtitleStorage(
             "The subtitle changed while it was being rewritten.",
           );
         }
-        await rename(temporary, target);
-        temporary = undefined;
+        await replaceSubtitleFile({
+          root: await rootPath(),
+          target,
+          temporary,
+          previous,
+          bytes: validated.bytes,
+        });
         return {
           outcome: "installed",
           relativePath,
@@ -719,6 +748,13 @@ export function createSubtitleStorage(
           cueCount: validated.cueCount,
         };
       } catch (error) {
+        if (error instanceof SubtitleCommitError) {
+          return {
+            outcome: "error",
+            failure: "commit-ambiguous",
+            reason: error.message,
+          };
+        }
         if (error instanceof StorageFailure) {
           return {
             outcome: "error",

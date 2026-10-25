@@ -74,6 +74,7 @@ export function createSubtitleUploader(dependencies: {
     mediaFileRelativePath(mediaFileId: string): Promise<string | null>;
   };
   catalogue?: SubtitleCatalogueAttachment;
+  onFilesChanged?: (relativePath: string) => Promise<void>;
   storageFactory?: (options: SubtitleStorageOptions) => SubtitleStorage;
   discover?: typeof discoverSidecarSubtitles;
 }): SubtitleUploader {
@@ -205,6 +206,10 @@ export function createSubtitleUploader(dependencies: {
         relativeMedia,
         installed.relativePath,
       );
+
+      await dependencies
+        .onFilesChanged?.(installed.relativePath)
+        .catch(() => undefined);
 
       return {
         outcome: installed.outcome,

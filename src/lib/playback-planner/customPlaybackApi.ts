@@ -176,7 +176,7 @@ function buildSyntheticMediaSource(plan: PlaybackPlan): MediaSource {
             Title: stream.title,
             IsDefault: stream.isDefault,
             IsForced: stream.isForced,
-            IsExternal: false,
+            IsExternal: stream.isExternal ?? false,
             IsTextSubtitleStream: true,
           })),
       ]

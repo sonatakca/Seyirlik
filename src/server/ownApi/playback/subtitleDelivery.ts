@@ -149,7 +149,7 @@ export function packagedSubtitleFor(
     (stream) => stream.streamIndex === streamIndex,
   );
   if (!catalogued) return subtitle;
-  if (catalogued.kind !== "subtitle") return null;
+  if (catalogued.kind !== "subtitle" || catalogued.isExternal) return null;
   return !catalogued.language ||
     !subtitle.language ||
     catalogued.language === subtitle.language

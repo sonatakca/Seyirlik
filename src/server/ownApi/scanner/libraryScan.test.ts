@@ -568,6 +568,7 @@ describe("scanLibraryTree — series", () => {
         "Shows/Andor": ["Season 1/"],
         "Shows/Andor/Season 1": [
           "Andor - S01E01 - Kassa/",
+          "Andor - S01E01 - Kassa.tr.srt",
           "Andor - S01E02 - That Would Be Me.mp4",
         ],
         [packageDirectory]: ["video/", "audio/", ".seyirlik/"],
@@ -599,6 +600,12 @@ describe("scanLibraryTree — series", () => {
     expect(orphan?.packageDirectory).toBe(
       "Shows/Andor/Season 1/Andor - S01E01 - Kassa",
     );
+    expect(orphan?.subtitles).toEqual([
+      expect.objectContaining({
+        relativePath: "Shows/Andor/Season 1/Andor - S01E01 - Kassa.tr.srt",
+        language: "tr",
+      }),
+    ]);
     // The one that still has its source is an ordinary episode.
     expect(
       episodes.find((episode) => episode.indexNumber === 2)?.renditionBacked,

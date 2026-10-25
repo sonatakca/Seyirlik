@@ -57,6 +57,7 @@ export function createSubtitleRuntime(options: {
   providers?: readonly SubtitleProvider[];
   sessions?: ProviderSessionManager;
   playback?: PlaybackRefreshBoundary;
+  onFilesChanged?: (relativePath: string) => Promise<void>;
   /** Records an installed sidecar so the player lists it without a scan. */
   catalogue?: SubtitleCatalogueAttachment;
   /**
@@ -94,6 +95,7 @@ export function createSubtitleRuntime(options: {
     providers,
     sessions,
     playback: options.playback,
+    onFilesChanged: options.onFilesChanged,
     ...(options.catalogue ? { catalogue: options.catalogue } : {}),
     ...(options.references && options.sync
       ? {
@@ -147,6 +149,7 @@ export function createSubtitleRuntime(options: {
               repository.managedDigest(id, relative),
           }),
         ...(options.playback ? { playback: options.playback } : {}),
+        onFilesChanged: options.onFilesChanged,
         ...(options.references ? { references: options.references } : {}),
       })
     : undefined;

@@ -333,7 +333,10 @@ export function createPlaybackRoutes({
             durationSeconds: packaged.durationSeconds,
             videoStreams: [packaged.video],
             audioStreams: packaged.audio,
-            subtitleStreams: packaged.subtitles,
+            subtitleStreams: [
+              ...packaged.subtitles.filter(subtitle => !catalogued.some(stream => stream.isExternal && stream.streamIndex === subtitle.index)),
+              ...analysis.subtitleStreams.filter(subtitle => catalogued.some(stream => stream.isExternal && stream.streamIndex === subtitle.index)),
+            ],
           }
         : analysis,
     };
@@ -922,7 +925,7 @@ export function createPlaybackRoutes({
         context.response.statusCode = 200;
         context.response.setHeader("Content-Type", "text/vtt; charset=utf-8");
         context.response.setHeader("Content-Length", String(webVtt.length));
-        context.response.setHeader("Cache-Control", "private, max-age=300");
+        context.response.setHeader("Cache-Control", "private, no-store");
         context.response.setHeader("X-Content-Type-Options", "nosniff");
         context.response.end(context.method === "HEAD" ? undefined : webVtt);
       },

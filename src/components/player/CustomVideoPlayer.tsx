@@ -173,6 +173,7 @@ import { QualityChangeToast } from "./QualityChangeToast";
 import { useQualityChangeToast } from "./useQualityChangeToast";
 import { formatQualityHeight, type PlayingQuality } from "./qualityToastModel";
 import { useMediaSessionControls } from "./useMediaSessionControls";
+import { watchSubtitleText } from "./watchSubtitleText";
 import { useSubtitleEditor } from "./useSubtitleEditor";
 import { useTouchSeek } from "./useTouchSeek";
 import {
@@ -4742,7 +4743,6 @@ export function CustomVideoPlayer({
       return undefined;
     }
 
-    const abortController = new AbortController();
     const subtitleUrl = activeSource.offline
       ? offlineSubtitleUrl(activeSource.itemId, selectedSubtitleStreamIndex)
       : buildSubtitleStreamUrl(
@@ -4750,37 +4750,14 @@ export function CustomVideoPlayer({
           selectedSubtitleStreamIndex,
         );
 
-    const loadSubtitleCues = async () => {
-      try {
-        const response = await fetch(subtitleUrl, {
-          credentials: "include",
-          signal: abortController.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error(`Subtitle request failed with ${response.status}`);
-        }
-
-        const subtitleText = await response.text();
-
-        if (!abortController.signal.aborted) {
-          setSubtitleCues(parseSubtitleCues(subtitleText));
-        }
-      } catch (subtitleError) {
-        if (!abortController.signal.aborted) {
-          console.warn(
-            "[Seyirlik Subtitles] Could not load subtitle stream",
-            subtitleError,
-          );
-        }
-      }
-    };
-
-    void loadSubtitleCues();
-
-    return () => {
-      abortController.abort();
-    };
+    return watchSubtitleText({
+      url: subtitleUrl,
+      refresh: !activeSource.offline && subtitleStream.IsExternal === true,
+      onText: (text) => setSubtitleCues(parseSubtitleCues(text)),
+      onError: (error) => console.warn(
+        "[Seyirlik Subtitles] Could not load subtitle stream", error,
+      ),
+    });
   }, [
     activeSource.itemId,
     activeSource.mediaSource,
