@@ -118,6 +118,9 @@ export function createMetadataService({
       ...(details.originalTitle
         ? { originalTitle: details.originalTitle }
         : {}),
+      ...(details.originalLanguage
+        ? { originalLanguage: details.originalLanguage }
+        : {}),
       ...(details.overview ? { overview: details.overview } : {}),
       ...(details.tagline ? { tagline: details.tagline } : {}),
       ...(details.releaseDate ? { premiereDate: details.releaseDate } : {}),

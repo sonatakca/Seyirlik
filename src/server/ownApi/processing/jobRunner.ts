@@ -104,6 +104,7 @@ import {
   overallProgress,
   type ProcessingStage,
 } from "./stages";
+import type { OriginalLanguageLookup } from "./originalLanguage";
 
 /**
  * Which durable stage each build phase belongs to.
@@ -254,6 +255,8 @@ export interface ProcessingJobRunnerDeps {
    */
   stalls?: StallThresholds;
   now?: () => number;
+  /** The title's original language, which leads the kept audio when known. */
+  originalLanguageFor?: OriginalLanguageLookup;
 }
 
 /**
@@ -457,6 +460,7 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
     driveUploads,
     sourceDamagePolicy = sourceDamagePolicyFromEnvironment(),
     stalls = stallThresholds(),
+    originalLanguageFor,
   } = deps;
   // Older callers and isolated tests predate the dedicated scratch root.
   // Keeping their work under the state root preserves the same ownership
@@ -923,6 +927,12 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
         return checkpoints + replaceable;
       })
       .catch(() => 0);
+    // Read now rather than at enqueue, so work queued before the language was
+    // recorded still gets it. Unreadable is only "not known": the policy then
+    // keeps the source default, as it always has.
+    const originalLanguage = await originalLanguageFor?.(job.itemId).catch(
+      () => undefined,
+    );
     const decision = decideProcessing({
       inheritedBytes,
       probe,
@@ -930,6 +940,7 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
       sizeBytes: input.sizeBytes,
       hardware,
       ...(freeBytes === undefined ? {} : { freeBytes }),
+      ...(originalLanguage ? { policy: { originalLanguage } } : {}),
     });
 
     /*

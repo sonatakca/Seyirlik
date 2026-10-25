@@ -725,6 +725,8 @@ export const en = {
   "player.returnToAutoQuality": "Return to Auto quality",
   "processing.audio.keep.source-default":
     "Keeping {language} {format} — the source's own default track",
+  "processing.audio.keep.original-language":
+    "Keeping {language} {format} — the title's original language",
   "processing.audio.keep.only-track":
     "Keeping {language} {format} — the only programme track",
   "processing.audio.keep.preferred-language":

@@ -26,11 +26,22 @@ export interface StreamPolicyOptions {
   includeHearingImpaired?: boolean;
   /** Keep every audio language rather than applying the retention list. */
   keepAllLanguages?: boolean;
+  /**
+   * The language the title was made in, as its metadata provider records it.
+   *
+   * A release can flag a dub as the container default — a Brazilian Rick and
+   * Morty whose first and default track is Portuguese — and "the source's own
+   * default" then means a language nobody here asked for. When the original
+   * language is known and the source carries it, that track takes the default's
+   * place: it is kept, it leads, and the dub is judged like any other language.
+   */
+  originalLanguage?: string;
 }
 
 export const DEFAULT_PREFERRED_LANGUAGES = ["eng", "tur"] as const;
 
 export type AudioKeepReason =
+  | "original-language"
   | "source-default"
   | "preferred-language"
   | "only-track";
@@ -182,10 +193,27 @@ export function decideAudioStreams(
       programme.find((track) => track.isDefault) ??
       programme.find((track) => track.isOriginal) ??
       programme[0]!;
-    keptIndexes.add(sourceDefault.streamIndex);
+    const original = normalizeLanguage(options.originalLanguage);
+    // Only a default in some other language is overruled; a default already in
+    // the original language stays the track the author chose.
+    const originalTrack =
+      original === UNKNOWN_LANGUAGE ||
+      normalizeLanguage(sourceDefault.language) === original
+        ? undefined
+        : bestOf(
+            programme.filter(
+              (track) => normalizeLanguage(track.language) === original,
+            ),
+          );
+    const lead = originalTrack ?? sourceDefault;
+    keptIndexes.add(lead.streamIndex);
     keepReasons.set(
-      sourceDefault.streamIndex,
-      programme.length === 1 ? "only-track" : "source-default",
+      lead.streamIndex,
+      programme.length === 1
+        ? "only-track"
+        : originalTrack
+          ? "original-language"
+          : "source-default",
     );
 
     if (!options.keepAllLanguages) {
@@ -249,9 +277,11 @@ export function decideAudioStreams(
           ? `Keeping ${describeAudio(track)} — commentary, which was asked for`
           : reason === "source-default"
             ? `Keeping ${describeAudio(track)} — the source's own default track`
-            : reason === "only-track"
-              ? `Keeping ${describeAudio(track)} — the only programme track`
-              : `Keeping ${describeAudio(track)} — a retained language`,
+            : reason === "original-language"
+              ? `Keeping ${describeAudio(track)} — the title's original language`
+              : reason === "only-track"
+                ? `Keeping ${describeAudio(track)} — the only programme track`
+                : `Keeping ${describeAudio(track)} — a retained language`,
       };
     }
 
@@ -390,6 +420,28 @@ export function decideSubtitleStreams(
   });
 }
 
+/**
+ * The kept audio, leading track first, the rest in container order.
+ *
+ * The packager makes the first index it is given the package default, so the
+ * track the policy chose to lead — the original language, or failing that the
+ * source default — has to come first even when the container stores it second.
+ */
+export function keptAudioStreamIndexes(
+  decisions: readonly AudioDecision[],
+): number[] {
+  const kept = decisions.filter((decision) => decision.keep);
+  const leads = (decision: AudioDecision) =>
+    !decision.isCommentary &&
+    (decision.reason === "original-language" ||
+      decision.reason === "source-default" ||
+      decision.reason === "only-track");
+  return [
+    ...kept.filter(leads),
+    ...kept.filter((decision) => !leads(decision)),
+  ].map((decision) => decision.streamIndex);
+}
+
 export function applyStreamPolicy(
   probe: Pick<RenditionMediaProbe, "audioTracks" | "subtitleTracks">,
   options: StreamPolicyOptions = {},
@@ -424,9 +476,7 @@ export function applyStreamPolicy(
   return {
     audio,
     subtitles,
-    keptAudioStreamIndexes: audio
-      .filter((d) => d.keep)
-      .map((d) => d.streamIndex),
+    keptAudioStreamIndexes: keptAudioStreamIndexes(audio),
     keptSubtitleStreamIndexes: subtitles
       .filter((d) => d.keep && d.isTextBased)
       .map((d) => d.streamIndex),

@@ -41,6 +41,8 @@ export interface TmdbTitleDetails {
   providerId: string;
   title: string;
   originalTitle?: string;
+  /** ISO 639-1, as TMDB records it (`en`, `ja`). Absent when TMDB has none. */
+  originalLanguage?: string;
   overview?: string;
   tagline?: string;
   releaseDate?: string;
@@ -486,6 +488,12 @@ export function createTmdbClient({
       title: String(title),
       ...(typeof originalTitle === "string" && originalTitle !== title
         ? { originalTitle }
+        : {}),
+      // `xx` is TMDB's "no language", which says nothing about the audio.
+      ...(typeof details.original_language === "string" &&
+      details.original_language &&
+      details.original_language !== "xx"
+        ? { originalLanguage: details.original_language }
         : {}),
       ...(typeof details.overview === "string" && details.overview
         ? { overview: details.overview }

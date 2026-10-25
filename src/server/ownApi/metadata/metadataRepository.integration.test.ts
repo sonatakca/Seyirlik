@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDatabasePool } from "../database/databasePool";
 import { runMigrations } from "../database/migrationRunner";
+import { createOriginalLanguageLookup } from "../processing/originalLanguage";
 import { createMetadataRepository } from "./metadataRepository";
 
 /* Requires a disposable database. The schema is dropped. */
@@ -69,5 +70,19 @@ integration("titles waiting for metadata, in PostgreSQL", () => {
     expect(
       episodes.find((target) => target.id === episode)?.metadataState,
     ).toBe("pending");
+  });
+
+  it("records the original language, and an episode answers with its series'", async () => {
+    const series = await item("series", "pending");
+    const episode = await item("episode", "pending", series);
+    const originalLanguageFor = createOriginalLanguageLookup(pool);
+    expect(await originalLanguageFor(episode)).toBeUndefined();
+
+    await repository.applyTitleMetadata(series, { originalLanguage: "en" });
+    // A later refresh that brings no language keeps the one already known.
+    await repository.applyTitleMetadata(series, { overview: "Again." });
+
+    expect(await originalLanguageFor(series)).toBe("en");
+    expect(await originalLanguageFor(episode)).toBe("en");
   });
 });

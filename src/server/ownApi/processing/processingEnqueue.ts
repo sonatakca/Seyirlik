@@ -46,6 +46,7 @@ import {
   registryGapForPlayback,
   type RenditionRegistryStore,
 } from "../../../renditions/registry";
+import type { OriginalLanguageLookup } from "./originalLanguage";
 
 /**
  * The one way a processing job is created.
@@ -87,6 +88,8 @@ export interface ProcessingEnqueueOptions {
    * the entry playback would serve its package from is there and ready.
    */
   registry?: Pick<RenditionRegistryStore, "read">;
+  /** The title's original language, so the queued plan matches the encode's. */
+  originalLanguageFor?: OriginalLanguageLookup;
 }
 
 export interface LocatedSource {
@@ -251,6 +254,7 @@ export function createProcessingEnqueuer({
   storageGuard,
   processingElsewhere = false,
   registry,
+  originalLanguageFor,
 }: ProcessingEnqueueOptions): ProcessingEnqueuer {
   const resolvedMediaRoot = path.resolve(mediaRoot);
 
@@ -403,12 +407,16 @@ export function createProcessingEnqueuer({
     const fingerprint = await computeSourceFingerprint(absolutePath, stats);
     const titleRoot = await titleRootFor(itemId, absolutePath);
     const existing = await existingPackage(titleRoot, fingerprint);
+    const originalLanguage = await originalLanguageFor?.(itemId).catch(
+      () => undefined,
+    );
     const plan = {
       probe,
       container: path.extname(absolutePath).replace(".", ""),
       sizeBytes: stats.size,
       hardware: report,
       ...(freeBytes === undefined ? {} : { freeBytes }),
+      ...(originalLanguage ? { policy: { originalLanguage } } : {}),
     };
 
     /*

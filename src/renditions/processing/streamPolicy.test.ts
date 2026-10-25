@@ -155,6 +155,80 @@ describe("audio retention policy", () => {
   });
 });
 
+describe("original language", () => {
+  // The Rick and Morty release in this library: a Brazilian dub flagged default.
+  const dubbedDefault = [
+    audio({ streamIndex: 1, language: "por", isDefault: true, channels: 6 }),
+    audio({ streamIndex: 2, language: "eng", channels: 6 }),
+  ];
+
+  it("drops a dubbed default when the original language is on the source", () => {
+    const decisions = decideAudioStreams(dubbedDefault, {
+      originalLanguage: "en",
+    });
+
+    expect(kept(decisions)).toEqual([2]);
+    expect(decisions[1]!.reason).toBe("original-language");
+    expect(decisions[1]!.explanation).toContain("original language");
+    expect(decisions[0]!.reason).toBe("language-not-retained");
+  });
+
+  it("keeps a dub in a retained language, but leads with the original", () => {
+    const result = applyStreamPolicy(
+      {
+        audioTracks: [
+          audio({ streamIndex: 1, language: "tur", isDefault: true }),
+          audio({ streamIndex: 2, language: "fra" }),
+        ],
+        subtitleTracks: [],
+      },
+      { originalLanguage: "fr" },
+    );
+
+    expect(result.keptAudioStreamIndexes).toEqual([2, 1]);
+  });
+
+  it("leaves a default already in the original language alone", () => {
+    const decisions = decideAudioStreams(
+      [
+        audio({
+          streamIndex: 1,
+          language: "eng",
+          isDefault: true,
+          channels: 2,
+        }),
+        audio({ streamIndex: 2, language: "eng", channels: 6 }),
+      ],
+      { originalLanguage: "en" },
+    );
+
+    expect(kept(decisions)).toEqual([1]);
+    expect(decisions[0]!.reason).toBe("source-default");
+  });
+
+  it("keeps the source default when the original language is absent or unknown", () => {
+    for (const originalLanguage of [undefined, "ja", "xx"]) {
+      const decisions = decideAudioStreams(dubbedDefault, {
+        ...(originalLanguage ? { originalLanguage } : {}),
+      });
+      expect(kept(decisions)).toEqual([1, 2]);
+      expect(decisions[0]!.reason).toBe("source-default");
+    }
+  });
+
+  it("leads the kept audio with the source default when it is stored second", () => {
+    const result = applyStreamPolicy({
+      audioTracks: [
+        audio({ streamIndex: 1, language: "tur" }),
+        audio({ streamIndex: 2, language: "eng", isDefault: true }),
+      ],
+      subtitleTracks: [],
+    });
+
+    expect(result.keptAudioStreamIndexes).toEqual([2, 1]);
+  });
+});
+
 describe("subtitle retention policy", () => {
   it("keeps other languages when all languages are requested", () => {
     const result = decideSubtitleStreams(

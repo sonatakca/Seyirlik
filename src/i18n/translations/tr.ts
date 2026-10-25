@@ -727,6 +727,8 @@ export const tr = {
   "player.returnToAutoQuality": "Otomatik kaliteye dön",
   "processing.audio.keep.source-default":
     "{language} {format} korunuyor — kaynağın kendi varsayılan parçası",
+  "processing.audio.keep.original-language":
+    "{language} {format} korunuyor — yapımın özgün dili",
   "processing.audio.keep.only-track":
     "{language} {format} korunuyor — tek program parçası",
   "processing.audio.keep.preferred-language":

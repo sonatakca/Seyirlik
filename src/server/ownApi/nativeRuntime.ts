@@ -167,6 +167,7 @@ import {
 import { parseNfoConfig, writesFiles } from "./nfo/nfoConfig";
 import { parseOrganizeMode } from "./scanner/organizeConfig";
 import { createQueuedWorkRetargeter } from "./processing/retargetQueuedWork";
+import { createOriginalLanguageLookup } from "./processing/originalLanguage";
 import { createNfoRepository } from "./nfo/nfoRepository";
 import { createNfoWriter } from "./nfo/nfoWriter";
 import { createNfoService } from "./nfo/nfoService";
@@ -457,6 +458,7 @@ export async function createNativeRuntime({
   });
 
   const libraries = createLibraryRepository(pool);
+  const originalLanguageFor = createOriginalLanguageLookup(pool);
   const definitions = parseLibraryDefinitions(environment.SEYIRLIK_LIBRARIES);
 
   /*
@@ -1172,6 +1174,7 @@ export async function createNativeRuntime({
         ),
         storageGuard,
         registry: renditionRegistry,
+        originalLanguageFor,
       })
     : null;
 
@@ -1778,6 +1781,7 @@ export async function createNativeRuntime({
           ...(softwareTranscodeThreads === undefined
             ? {}
             : { softwareThreads: softwareTranscodeThreads }),
+          originalLanguageFor,
         }),
         scanStore,
         catalogue,
@@ -1975,7 +1979,8 @@ export async function createNativeRuntime({
                 // Recorded against the file at once, so an uploaded subtitle is
                 // offered by the player without waiting for a library scan.
                 catalogue: scanStore,
-                onFilesChanged: (relativePath) => libraryChanges.notifyPath(relativePath),
+                onFilesChanged: (relativePath) =>
+                  libraryChanges.notifyPath(relativePath),
               })
             : undefined,
           subtitles.sync,
@@ -2129,6 +2134,7 @@ export async function createNativeRuntime({
       // scratch is what a job will spend.
       processingElsewhere: workerRole === "light",
       registry: renditionRegistry,
+      originalLanguageFor,
       packageIndex,
     }),
     ...(tmdb
