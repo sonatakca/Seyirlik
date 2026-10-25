@@ -221,6 +221,69 @@ describe("reconcileLibraryScan", () => {
     expect(store.packaged).toEqual([fordFile?.id]);
   });
 
+  /**
+   * Arcane S02: each episode kept the old `.mp4` row beside the `src/*.mkv`
+   * that was encoded. Reviving both brought the larger `.mp4` back as the
+   * file playback chose, and it has no package.
+   */
+  it("revives only the row whose folder holds the package", async () => {
+    const store = createStore();
+    const start = new Date("2026-10-23T00:00:00Z");
+    const season = "Series/Arcane/Season 2";
+    const oldCopy = `${season}/Arcane - S02E01 - Heavy Is the Crown.mp4`;
+    const encoded = `${season}/src/Arcane - S02E01.mkv`;
+    const episode = (
+      files: ScannedItem["files"],
+      extra: Partial<ScannedItem> = {},
+    ): ScannedItem => ({
+      sourceKey: "episode:series:arcane:2:1",
+      kind: "episode",
+      title: "Heavy Is the Crown",
+      sortTitle: "0002-00001",
+      files,
+      subtitles: [],
+      ...extra,
+    });
+    const file = (relativePath: string) => ({
+      relativePath,
+      container: relativePath.endsWith(".mkv") ? "mkv" : "mp4",
+      size: 1_000,
+      mtimeMs: 1,
+      fingerprint: relativePath,
+    });
+
+    await reconcileLibraryScan({
+      store,
+      libraryId: LIBRARY,
+      scan: scan([episode([file(oldCopy), file(encoded)])]),
+      now: () => start,
+    });
+    await reconcileLibraryScan({
+      store,
+      libraryId: LIBRARY,
+      scan: scan([episode([file(encoded)])]),
+      now: () => start,
+    });
+    await reconcileLibraryScan({
+      store,
+      libraryId: LIBRARY,
+      scan: scan([
+        episode([], {
+          renditionBacked: true,
+          packageDirectory: `${season}/Arcane - S02E01`,
+        }),
+      ]),
+      now: () => start,
+    });
+
+    const byPath = new Map(
+      [...store.files.values()].map((row) => [row.relativePath, row]),
+    );
+    expect(byPath.get(encoded)?.missingSince).toBeNull();
+    expect(byPath.get(oldCopy)?.missingSince).toEqual(start);
+    expect(store.packaged).toEqual([byPath.get(encoded)?.id]);
+  });
+
   it("does not create an unplayable item from a package with no catalogue identity", async () => {
     const store = createStore();
     const summary = await reconcileLibraryScan({

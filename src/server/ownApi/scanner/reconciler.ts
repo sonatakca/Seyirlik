@@ -1,3 +1,8 @@
+import {
+  nestedTitleRootOf,
+  titleBaseDirectoryOf,
+  titleRootLayoutForKind,
+} from "../../../renditions/adaptive/titleRoot";
 import type { ScanResult, ScannedItem, ScannedSubtitle } from "./libraryScan";
 
 /**
@@ -152,6 +157,34 @@ function orderByDependency(items: ScannedItem[]): ScannedItem[] {
   );
 }
 
+/**
+ * The rows a rendition-backed item's package was actually built from.
+ *
+ * An item can hold rows for several copies: Arcane's episodes kept the
+ * September `.mp4` of a drive that is gone beside the `src/*.mkv` that was
+ * imported and encoded later. Reviving every row brought the `.mp4` back from
+ * missing, and being the larger file it became the one playback and the
+ * processing page chose, which has no package, so the episodes would not
+ * play. A package sits in the folder its source names (`src/` is
+ * transparent), so the rows that name that folder are its identity. When no
+ * row does, nothing tells them apart, and all of them stay.
+ */
+function packageIdentityFiles(
+  scanned: ScannedItem,
+  files: ExistingFileRow[],
+): ExistingFileRow[] {
+  const directory = scanned.packageDirectory?.toLowerCase();
+  if (!directory) return files;
+  const rootOf =
+    titleRootLayoutForKind(scanned.kind) === "nested"
+      ? nestedTitleRootOf
+      : titleBaseDirectoryOf;
+  const owners = files.filter(
+    (file) => rootOf(file.relativePath).toLowerCase() === directory,
+  );
+  return owners.length > 0 ? owners : files;
+}
+
 export async function reconcileLibraryScan({
   store,
   libraryId,
@@ -234,10 +267,11 @@ export async function reconcileLibraryScan({
       // Playback and adaptive-asset authorization resolve through the original
       // media file row. Keep that row active after the source bytes are removed;
       // the scanner has already proven the replacement package is complete.
-      seenFileIds.push(...existingIdentityFiles.map((file) => file.id));
+      const identity = packageIdentityFiles(scanned, existingIdentityFiles);
+      seenFileIds.push(...identity.map((file) => file.id));
       // And say why the file is not there, or the prober finds nothing, marks
       // it failed, and availability drops a fully playable title.
-      await store.markPackaged(existingIdentityFiles.map((file) => file.id));
+      await store.markPackaged(identity.map((file) => file.id));
     }
 
     for (const [index, file] of scanned.files.entries()) {
