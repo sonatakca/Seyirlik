@@ -9,6 +9,8 @@ vi.mock("../../i18n/LanguageContext", () => ({
     t: (key: string) =>
       ({
         "settings.settings": "Settings",
+        "settings.track.surround": "Surround",
+        "settings.track.hearing": "Hearing impaired",
         "settings.playbackOptions": "Playback options",
         "settings.quality": "Quality",
         "settings.audio": "Audio",
@@ -249,5 +251,70 @@ describe("PlayerSettingsPanel for a stored copy", () => {
     expect(
       screen.getByRole("button", { name: "Subtitles" }),
     ).toBeInTheDocument();
+  });
+});
+
+describe("plain-language track selection", () => {
+  it("shows short language names and still selects the original stream index", async () => {
+    const onAudio = vi.fn();
+    render(
+      <PlayerSettingsPanel
+        source={{
+          ...source,
+          offline: true,
+          mediaSource: {
+            ...source.mediaSource,
+            MediaStreams: [
+              {
+                Index: 4,
+                Type: "Audio",
+                Language: "eng",
+                Title: "TrueHD 5.1 eng",
+                DisplayTitle: "TrueHD 5.1",
+                Codec: "truehd",
+                Channels: 6,
+              },
+              {
+                Index: 9,
+                Type: "Audio",
+                Language: "eng",
+                Title: "AC-3 5.1 eng",
+                Codec: "ac3",
+                Channels: 6,
+              },
+              {
+                Index: 12,
+                Type: "Subtitle",
+                Language: "tur",
+                Codec: "subrip",
+                IsExternal: true,
+              },
+            ],
+          },
+        }}
+        qualityOptions={[]}
+        selectedQualityId="auto"
+        selectedSubtitleStreamIndex={-1}
+        subtitleDelaySeconds={0}
+        canSwitchAudio
+        canSwitchSubtitles
+        onSelectAutoQuality={vi.fn()}
+        onSelectQuality={vi.fn()}
+        onSelectAudioStream={onAudio}
+        onSelectSubtitleStream={vi.fn()}
+        onSubtitleDelayChange={vi.fn()}
+        compact
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /^English · Surround 5\.1 \(2\)/ }),
+    );
+    expect(onAudio).toHaveBeenCalledWith(9);
+    expect(screen.queryByText(/TrueHD|AC-3|ENG/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^Subtitles$/ }));
+    expect(
+      await screen.findByRole("button", { name: /^Turkish/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/SUBRIP|External/)).toBeNull();
   });
 });

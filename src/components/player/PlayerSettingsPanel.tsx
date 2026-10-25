@@ -36,6 +36,8 @@ import type {
   CompleteFileQualityControls,
 } from "./types";
 
+import { streamLabels } from "./streamLabels";
+
 const HIDE_QUALITY_SETTINGS = false;
 const HIDE_AUDIO_SETTINGS = false;
 const DISABLE_AUDIO_SELECTION = false;
@@ -113,30 +115,6 @@ function formatTemplate(
     (result, [key, value]) => result.split(`{${key}}`).join(String(value)),
     template,
   );
-}
-
-function getStreamLabel(
-  stream: MediaStream,
-  fallback: string,
-  t: (key: TranslationKey) => string,
-): string {
-  const parts = [
-    stream.DisplayTitle,
-    stream.Title,
-    stream.Language?.toUpperCase(),
-    stream.Codec?.toUpperCase(),
-    stream.Channels
-      ? t("details.audioChannelsShort").replace(
-          "{count}",
-          String(stream.Channels),
-        )
-      : undefined,
-    stream.IsDefault ? t("stream.default") : undefined,
-    stream.IsForced ? t("stream.forced") : undefined,
-    stream.IsExternal ? t("stream.external") : undefined,
-  ].filter(Boolean);
-
-  return parts.length > 0 ? parts.join(" · ") : fallback;
 }
 
 function normalizeFlagText(value: string): string {
@@ -569,11 +547,13 @@ export function PlayerSettingsPanel({
   onStartSubtitleEdit,
   compact = false,
 }: PlayerSettingsPanelProps) {
-  const { t } = useLanguage();
+  const { t, language = "en" } = useLanguage();
   const audioStreams = getUniqueStreams(getStreamsOfType(source, "Audio"));
   const subtitleStreams = getUniqueStreams(
     getStreamsOfType(source, "Subtitle"),
   );
+  const audioLabels = streamLabels(audioStreams, "audio", language, t);
+  const subtitleLabels = streamLabels(subtitleStreams, "subtitle", language, t);
   // A stored copy is one rung, kept as it was downloaded: there is no
   // quality to choose, so the tab is not offered at all.
   const showQuality = !HIDE_QUALITY_SETTINGS && source.offline !== true;
@@ -781,13 +761,7 @@ export function PlayerSettingsPanel({
                   <SettingsButton
                     key={`${stream.Index ?? index}-audio`}
                     leading={<StreamFlag stream={stream} />}
-                    title={getStreamLabel(
-                      stream,
-                      formatTemplate(t("settings.audioTrack"), {
-                        number: index + 1,
-                      }),
-                      t,
-                    )}
+                    title={audioLabels[index]}
                     subtitle={
                       stream.Index === selectedAudioStreamIndex
                         ? t("settings.currentAudio")
@@ -847,13 +821,7 @@ export function PlayerSettingsPanel({
                   <SettingsButton
                     key={`${stream.Index ?? index}-subtitle`}
                     leading={<StreamFlag stream={stream} />}
-                    title={getStreamLabel(
-                      stream,
-                      formatTemplate(t("settings.subtitle"), {
-                        number: index + 1,
-                      }),
-                      t,
-                    )}
+                    title={subtitleLabels[index]}
                     subtitle={
                       stream.Index === selectedSubtitleStreamIndex
                         ? t("settings.currentSubtitle")
