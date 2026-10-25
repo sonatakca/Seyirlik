@@ -77,7 +77,12 @@ describe("viewer track names", () => {
   });
   it("normalizes common three-letter aliases", () => {
     expect(
-      label([{ Language: "fre" }, { Language: "ger" }, { Language: "pt_BR" }]),
-    ).toEqual(["French", "German", "Portuguese"]);
+      label([
+        { Language: "fre" },
+        { Language: "ger" },
+        { Language: "pt_BR" },
+        { Language: "pl" },
+      ]),
+    ).toEqual(["French", "German", "Portuguese", "Polish"]);
   });
 });

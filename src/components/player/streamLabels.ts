@@ -17,7 +17,12 @@ export function streamLabels(
   });
   const seen = new Map<string, number>();
   return streams.map((stream, index) => {
-    const code = normalizeLanguage(stream.Language);
+    const normalized = normalizeLanguage(stream.Language);
+    const base = stream.Language?.trim().split(/[-_]/)[0] ?? "";
+    const code =
+      normalized === "und" && /^[a-z]{2}$/i.test(base)
+        ? base.toLowerCase()
+        : normalized;
     let name: string | undefined;
     try {
       if (code !== "und") name = names.of(code);
