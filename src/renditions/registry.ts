@@ -211,31 +211,63 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/**
+ * How a save replaces the registry file.
+ *
+ * On Windows the registry lives on the rclone Drive mount, where a rename onto
+ * a file rclone still holds open (it keeps every closed handle for 5 s, so any
+ * read just before a save counts) fails inside rclone's cache with "Access is
+ * denied" while the rename itself reports success. The new contents are then
+ * orphaned in the cache, the mount serves an empty file, and Drive either
+ * keeps the old registry or receives an empty one. Deleting the old file first
+ * is no better: the name is gone from Drive at once and its replacement
+ * uploads only after the write-back delay, and an absent registry reads as
+ * empty. Writing the file in place goes through rclone's ordinary write path
+ * and keeps the name present throughout.
+ */
+export type RegistryWriteMode = "rename" | "in-place";
+
+const DEFAULT_REGISTRY_WRITE_MODE: RegistryWriteMode =
+  process.platform === "win32" ? "in-place" : "rename";
+
 export async function saveRenditionRegistry(
   registryPath: string,
   registry: RenditionRegistry,
+  options: { writeMode?: RegistryWriteMode } = {},
 ): Promise<void> {
   registry.updatedAt = new Date().toISOString();
   const validated = parseRegistry(registry);
+  const contents = `${JSON.stringify(validated, null, 2)}\n`;
   await mkdir(path.dirname(registryPath), { recursive: true });
-  const temporaryPath = `${registryPath}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile(temporaryPath, `${JSON.stringify(validated, null, 2)}\n`, {
-    encoding: "utf8",
-    flag: "wx",
-  });
-  try {
-    await rename(temporaryPath, registryPath);
-  } catch (error) {
-    if (
-      (error as NodeJS.ErrnoException).code !== "EEXIST" &&
-      process.platform !== "win32"
-    ) {
+  if ((options.writeMode ?? DEFAULT_REGISTRY_WRITE_MODE) === "in-place") {
+    await writeFile(registryPath, contents, "utf8");
+  } else {
+    const temporaryPath = `${registryPath}.${process.pid}.${randomUUID()}.tmp`;
+    await writeFile(temporaryPath, contents, { encoding: "utf8", flag: "wx" });
+    try {
+      await rename(temporaryPath, registryPath);
+    } catch (error) {
       await rm(temporaryPath, { force: true });
       throw error;
     }
-    await rm(registryPath, { force: true });
-    await rename(temporaryPath, registryPath);
   }
+
+  /*
+   * A save that did not land must fail where it happened. Otherwise a package
+   * publishes with no registry entry pointing at it, and nothing notices until
+   * playback cannot find it.
+   */
+  let readBack: string;
+  try {
+    const written = await readFile(registryPath, "utf8");
+    if (written === contents) return;
+    readBack = `${written.length} characters`;
+  } catch (error) {
+    readBack = (error as NodeJS.ErrnoException).code ?? String(error);
+  }
+  throw new Error(
+    `Rendition registry save did not land: ${registryPath} reads back ${readBack}, expected ${contents.length} characters.`,
+  );
 }
 
 export async function computeSourceFingerprint(
