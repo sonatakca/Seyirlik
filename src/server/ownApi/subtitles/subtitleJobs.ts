@@ -6,7 +6,11 @@ import {
 } from "../tasks/worker";
 import type { SubtitleRepository } from "./subtitleRepository";
 import type { SubtitleService } from "./subtitleService";
-import type { SubtitleSyncRequest, SubtitleSyncService } from "./subtitleSync";
+import type {
+  ReviewedProposal,
+  SubtitleSyncRequest,
+  SubtitleSyncService,
+} from "./subtitleSync";
 
 export const SUBTITLE_JOB_TYPES = {
   run: "subtitle.run",
@@ -62,6 +66,14 @@ export function parseSyncPayload(
       manual.rate >= 2)
   )
     throw new PermanentJobError("That correction is not a plausible one.");
+  const reviewed =
+    payload.reviewed === undefined
+      ? undefined
+      : parseReviewed(payload.reviewed);
+  if (reviewed && manual)
+    throw new PermanentJobError(
+      "A task applies a reviewed proposal or a typed correction, not both.",
+    );
   return {
     mediaFileId: uuid,
     targetStreamIndex: targetStreamIndex as number,
@@ -70,7 +82,105 @@ export function parseSyncPayload(
       streamIndex: reference.streamIndex as number,
     },
     ...(manual ? { transform: manual } : {}),
+    ...(reviewed ? { reviewed } : {}),
     dryRun: payload.dryRun === true,
+  };
+}
+
+const DISPOSITIONS = new Set([
+  "aligned",
+  "corrected",
+  "inferred",
+  "unresolved",
+  "unmatched",
+]);
+const VERDICTS = new Set([
+  "in-sync",
+  "correctable",
+  "partial",
+  "reordered",
+  "insufficient-evidence",
+]);
+
+/**
+ * A reviewed proposal out of a payload.
+ *
+ * The route builds this from the preview task's own result, never from a
+ * request body, so a failure here is a bug or a tampered row — refused
+ * permanently either way. Every placement is checked because each one becomes
+ * a timestamp in somebody's subtitle.
+ */
+function parseReviewed(value: unknown): ReviewedProposal {
+  const reviewed = value as Record<string, unknown> | null;
+  const placements = reviewed?.placements;
+  if (
+    !reviewed ||
+    typeof reviewed.subtitleSha256 !== "string" ||
+    !/^[0-9a-f]{64}$/.test(reviewed.subtitleSha256) ||
+    typeof reviewed.previewTaskId !== "string" ||
+    !/^[0-9a-f-]{36}$/i.test(reviewed.previewTaskId) ||
+    (reviewed.unmatched !== "keep" && reviewed.unmatched !== "exclude") ||
+    !VERDICTS.has(String(reviewed.verdict)) ||
+    !Array.isArray(placements) ||
+    placements.length === 0 ||
+    placements.length > 50_000
+  )
+    throw new PermanentJobError("The reviewed proposal is not valid.");
+  const checked = placements.map((entry) => {
+    const cue = entry as Record<string, unknown>;
+    const start = cue.startSeconds;
+    const end = cue.endSeconds;
+    if (
+      !Number.isSafeInteger(cue.index) ||
+      (cue.index as number) < 0 ||
+      !DISPOSITIONS.has(String(cue.disposition)) ||
+      typeof start !== "number" ||
+      typeof end !== "number" ||
+      !Number.isFinite(start) ||
+      !Number.isFinite(end) ||
+      Math.abs(start) > 24 * 3600 ||
+      Math.abs(end) > 24 * 3600 ||
+      end < start
+    )
+      throw new PermanentJobError("The reviewed proposal is not valid.");
+    return {
+      index: cue.index as number,
+      disposition:
+        cue.disposition as ReviewedProposal["placements"][number]["disposition"],
+      startSeconds: start,
+      endSeconds: end,
+    };
+  });
+  return {
+    subtitleSha256: reviewed.subtitleSha256,
+    previewTaskId: reviewed.previewTaskId,
+    unmatched: reviewed.unmatched,
+    verdict: reviewed.verdict as ReviewedProposal["verdict"],
+    placements: checked,
+  };
+}
+
+/** A restore out of a payload, or null when the payload is not one. */
+export function parseRestorePayload(payload: Record<string, unknown>): {
+  mediaFileId: string;
+  targetStreamIndex: number;
+  revisionId: string;
+} | null {
+  if (payload.restoreRevisionId === undefined) return null;
+  const { mediaFileId, targetStreamIndex, restoreRevisionId } = payload;
+  if (
+    typeof mediaFileId !== "string" ||
+    !/^[0-9a-f-]{36}$/i.test(mediaFileId) ||
+    !Number.isSafeInteger(targetStreamIndex) ||
+    (targetStreamIndex as number) < 0 ||
+    typeof restoreRevisionId !== "string" ||
+    !/^[0-9a-f-]{36}$/i.test(restoreRevisionId)
+  )
+    throw new PermanentJobError("The task must name a subtitle and a version.");
+  return {
+    mediaFileId,
+    targetStreamIndex: targetStreamIndex as number,
+    revisionId: restoreRevisionId,
   };
 }
 
@@ -175,6 +285,14 @@ export function createSubtitleJobHandlers(
   }) => {
     if (!sync)
       throw new PermanentJobError("Subtitle syncing is not configured.");
+    const restore = parseRestorePayload(job.payload);
+    if (restore) {
+      if (await isCancelled()) return { outcome: "cancelled" };
+      return (await sync.restore(restore)) as unknown as Record<
+        string,
+        unknown
+      >;
+    }
     const request = parseSyncPayload(job.payload);
     if (await isCancelled()) return { outcome: "cancelled" };
     const controller = new AbortController();
@@ -218,6 +336,8 @@ export function createSubtitleJobHandlers(
     [SUBTITLE_JOB_TYPES.resume]: execute(true),
     [SUBTITLE_JOB_TYPES.sync]: syncHandler,
     [SUBTITLE_JOB_TYPES.reconcile]: async ({ isCancelled, reportProgress }) => {
+      // A retiming a crash left pending is settled by reading its file.
+      const settledRevisions = (await sync?.settlePending()) ?? 0;
       const uncertain = await repository.uncertainAttempts();
       let examined = 0;
       for (const record of uncertain) {
@@ -234,7 +354,7 @@ export function createSubtitleJobHandlers(
           },
         });
       }
-      return { examined };
+      return { examined, settledRevisions };
     },
   };
 }

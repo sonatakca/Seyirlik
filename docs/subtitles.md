@@ -147,29 +147,36 @@ The scorer ranks candidates by what providers say: identity, frame rate,
 release group. That metadata often cannot decide. TürkçeAltyazı carries The
 Sopranos S01 as one translation timed four ways, and nothing on the site tells
 which timing matches this file. So a search downloads up to five valid
-candidates (`fitCandidates`). It measures each against the title's own audio
-with the same `alignSpeech` that retiming uses, and installs the best fit:
+candidates (`fitCandidates`), aligns each against the title's own references
+region by region (`alignPiecewise`, see
+[subtitle-sync-engine.md](subtitle-sync-engine.md)), and installs the best fit:
 
 - The references are the package's: its default audio rendition, read through
   its playlist (about twenty seconds over the Drive mount), and its WebVTT
   copies of any text subtitles that were inside the video. A packaged sidecar
   is not a reference, because nothing says it was timed for this video. A
-  title not packaged yet uses the source's default audio track instead.
-  `confidence` compares across audio and subtitle references, so the best of
-  them decides. They are read once per search; each further candidate is
-  arithmetic.
-- A fit at or above `MINIMUM_SYNC_CONFIDENCE` that is measurably off (offset
-  over 0.15 s, or any rate change) is moved onto the audio before it is written.
-  The installation is then recorded `assumed-in-sync`.
-- Fits within 0.01 confidence of each other are a tie. The same translation
-  timed for several releases scores the same; the one needing the smallest
-  correction wins, so a file already on time is not rewritten.
+  title not packaged yet uses the source's default audio track instead. They
+  are read once per search; each further candidate is arithmetic.
+- Candidates rank by class first — already in sync, then correctable on strong
+  evidence everywhere, then needing review, then not matching — then by how
+  much of the subtitle the evidence placed (within 0.02 is a tie), then by
+  how little it would move. A file already on time beats one that needs
+  correcting, however confident the correction.
+- Only a candidate that is correctable everywhere on strong evidence is moved
+  before it is written, and is then recorded `assumed-in-sync`. A candidate
+  that needs review is installed as downloaded, recorded `unknown`, and left
+  for the sync panel. The earlier single-transform fit wrote the late half's
+  shift over a correct half of a subtitle timed to another cut.
+- Every install keeps versions (`subtitle_revisions`): the provider's bytes
+  and the retimed bytes when it was moved, and, before an upgrade replaces an
+  owned subtitle, the bytes it replaces — or nothing is written.
 - Byte-identical downloads are measured once. The checkpoint names the
   candidate that was installed, so a resumed attempt downloads that one.
 - With no audio to read, or once reading it fails, the first valid download
   wins, ranked by metadata alone. The audio never becomes the reason a search
   fails.
-- The `installed` event carries `fitMeasured`, `fitConfidence`, `fitRate`,
+- The `installed` event carries `fitMeasured`, `fitVerdict`, `fitCoverage`,
+  `fitRegions`, `fitUnresolved`, `fitUnmatched`, `fitConfidence`, `fitRate`,
   `fitOffsetSeconds` and `fitRetimed`.
 
 On S01 measured by hand, the pick this makes is pack 375975 for E01–E04, and
@@ -208,13 +215,15 @@ finishes without downloading anything again. If it does not match, the attempt
 stays in `validating` and raises an `operator-attention` event, because guessing
 is worse than asking.
 
-## The three jobs
+## The jobs
 
-| Type                   | What it is for                                     |
-| ---------------------- | -------------------------------------------------- |
-| `subtitle.run`         | One attempt, start to finish.                      |
-| `subtitle.auth-resume` | The same work, continued after somebody signed in. |
-| `subtitle.reconcile`   | Sweeps attempts a crash could have left uncertain. |
+| Type                   | What it is for                                                                                                |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `subtitle.run`         | One attempt, start to finish.                                                                                 |
+| `subtitle.auth-resume` | The same work, continued after somebody signed in.                                                            |
+| `subtitle.reconcile`   | Sweeps attempts a crash could have left uncertain, and settles retimings a crash left pending.                |
+| `subtitle.sync`        | Analyses, applies, or restores one sidecar's timing (see [subtitle-sync-engine.md](subtitle-sync-engine.md)). |
+| `subtitle.analyse`     | Transcribes a title's audio, on a host that declares a recogniser.                                            |
 
 They run on the existing leased queue. A task naming no attempt, or an attempt
 that no longer exists, is refused permanently rather than retried — no amount of

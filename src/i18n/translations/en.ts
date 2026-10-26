@@ -200,7 +200,7 @@ export const en = {
     "Upload a subtitle from the episode it belongs to, on the Episodes tab.",
   "library.syncSubtitle": "Sync subtitle",
   "library.syncHint":
-    "Re-times a subtitle file against a track that is already in time. Nothing is written unless the match is convincing.",
+    "Re-times a subtitle file, part by part, against a track that is already in time. Sync changes it only when every line can be placed; anything less is shown for you to check first.",
   "library.syncTarget": "Subtitle to correct",
   "library.syncAgainst": "Sync against",
   "library.syncAgainstSubtitle": "Existing subtitle",
@@ -227,6 +227,85 @@ export const en = {
   "library.syncFailed": "The sync could not finish.",
   "library.syncCancelled": "The sync was cancelled. Nothing was changed.",
   "library.syncTracksFailed": "The tracks of this video could not be read.",
+  "library.syncPreview": "Preview",
+  "library.syncNeedsReview":
+    "Nothing was changed: this correction needs a look before it is applied.",
+  "library.syncPreviewReady":
+    "Here is what the sync would do. Nothing was changed.",
+  "library.syncTranscriptionQueued":
+    "The audio is being transcribed on the processing machine; preview again when that finishes for evidence from what is said.",
+  "library.syncRegionsCorrected": "parts corrected separately",
+  "library.syncNoChange": "no change",
+  "library.syncEarlierShort": "earlier",
+  "library.syncLaterShort": "later",
+  "library.syncStatusAligned": "Already in time",
+  "library.syncStatusCorrected": "Corrected",
+  "library.syncStatusInferred": "Moved with its neighbours",
+  "library.syncStatusUnresolved": "Could not be checked",
+  "library.syncStatusUnmatched": "Scene not in this version",
+  "library.syncVerdictInSync": "This subtitle is already in time.",
+  "library.syncVerdictCorrectable":
+    "Every part of this subtitle can be placed.",
+  "library.syncVerdictPartial":
+    "Some parts can be corrected; others need a look.",
+  "library.syncVerdictReordered":
+    "The parts found would put lines out of order. Check before applying.",
+  "library.syncVerdictInsufficient":
+    "Too little of this subtitle matches to say anything.",
+  "library.syncLinesMove": "lines would move",
+  "library.syncLinesUnverified":
+    "lines could not be checked and stay where they are",
+  "library.syncLinesMissingScene":
+    "lines seem to belong to a scene this version does not have",
+  "library.syncLinesMatchedByMeaning": "lines matched to what is said",
+  "library.syncTimelineLabel": "The subtitle's timeline, part by part",
+  "library.syncRegionTime": "Subtitle time",
+  "library.syncRegionChange": "What happens",
+  "library.syncRegionLines": "Lines (matched)",
+  "library.syncEditRemoved": "footage missing from this version",
+  "library.syncEditInserted": "footage only in this version",
+  "library.syncPickRegion": "Choose a part to see the lines behind it.",
+  "library.syncReviewLines": "Lines to check",
+  "library.syncUnmatchedChoice": "Lines from a missing scene",
+  "library.syncUnmatchedKeep": "Keep them where they are",
+  "library.syncUnmatchedExclude":
+    "Leave them out of the subtitle (the original is kept)",
+  "library.syncApplyProposal": "Apply this correction",
+  "library.syncApplyHint":
+    "Applied exactly as shown, only if the subtitle has not changed since. The current version is kept and can be restored.",
+  "library.syncEvidenceMeaning": "Matched to what is said",
+  "library.syncEvidenceMoves": "Lines that move",
+  "library.syncEvidenceNone": "Nothing moves in this part.",
+  "library.syncReasonUnresolved":
+    "lines could not be placed and would stay where they are.",
+  "library.syncReasonUnmatched":
+    "lines may come from footage this version does not have.",
+  "library.syncReasonPlacedAtEdit":
+    "lines beside an edit were placed without direct evidence.",
+  "library.syncReasonReordered":
+    "The parts found would put lines out of order.",
+  "library.syncReasonWeak":
+    "Some corrected parts rest on weaker evidence than an automatic change needs.",
+  "library.revisions": "Versions",
+  "library.revisionsNone":
+    "No versions yet. The first change keeps the current file as the original.",
+  "library.revisionsFailed": "The versions could not be read.",
+  "library.revisionOriginal": "Original",
+  "library.revisionExternal": "Changed outside Seyirlik",
+  "library.revisionDownload": "As downloaded",
+  "library.revisionFit": "Fitted when installed",
+  "library.revisionSync": "Synced",
+  "library.revisionManual": "Shifted by hand",
+  "library.revisionRestore": "Restored",
+  "library.revisionPending": "not confirmed",
+  "library.revisionAbandoned": "not saved",
+  "library.revisionCurrent": "current",
+  "library.revisionCompare": "Compare",
+  "library.revisionRestoreAction": "Restore",
+  "library.revisionRestored": "Version restored",
+  "library.revisionMoved": "lines moved",
+  "library.revisionRemoved": "left out",
+  "library.revisionAdded": "put back",
   "library.saveFailed": "The change could not be saved. Try again.",
   "library.remove": "Remove",
   "library.removeHeading": "Remove",

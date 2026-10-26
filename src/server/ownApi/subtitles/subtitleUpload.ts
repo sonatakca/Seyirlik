@@ -28,6 +28,7 @@ import {
   type SubtitleStorage,
   type SubtitleStorageOptions,
 } from "./subtitleStorage";
+import type { SubtitleRevisionStore } from "./subtitleRevisions";
 
 /** What a caller may say about the file it is handing over. */
 export interface SubtitleUploadRequest {
@@ -77,6 +78,8 @@ export function createSubtitleUploader(dependencies: {
   onFilesChanged?: (relativePath: string) => Promise<void>;
   storageFactory?: (options: SubtitleStorageOptions) => SubtitleStorage;
   discover?: typeof discoverSidecarSubtitles;
+  /** Keeps an uploaded subtitle, and any version it replaced. */
+  revisions?: SubtitleRevisionStore;
 }): SubtitleUploader {
   const { libraryRoot, repository } = dependencies;
 
@@ -120,6 +123,16 @@ export function createSubtitleUploader(dependencies: {
           return relativeMedia;
         },
         managedDigest: (id, relative) => repository.managedDigest(id, relative),
+        ...(dependencies.revisions
+          ? {
+              preserve: async (previous) => {
+                await dependencies.revisions!.observe({
+                  ...previous,
+                  provenance: { replacedByUpload: true },
+                });
+              },
+            }
+          : {}),
       });
 
       /*
@@ -199,6 +212,15 @@ export function createSubtitleUploader(dependencies: {
           providerId: null,
           syncState: "unknown",
         });
+        // The person's own file, as the first version of this path.
+        await dependencies.revisions
+          ?.observe({
+            mediaFileId,
+            relativePath: installed.relativePath,
+            bytes,
+            provenance: { uploaded: true },
+          })
+          .catch(() => undefined);
       }
 
       const attached = await attach(

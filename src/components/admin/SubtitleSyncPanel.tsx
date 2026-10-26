@@ -1,10 +1,12 @@
 import { useEffect, useId, useState } from "react";
-import { Timer } from "lucide-react";
+import { Eye, Timer } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
 import type { TranslationKey } from "../../i18n/translations";
 import {
+  applyReviewedSubtitleSync,
   getSubtitleSyncTask,
   getSubtitleSyncTracks,
+  restoreSubtitleRevision,
   syncTitleSubtitle,
   type SubtitleSyncAudioTrack,
   type SubtitleSyncTask,
@@ -15,6 +17,8 @@ import { signalTasksChanged } from "../../lib/tasksChanged";
 import { describeErrorDetail } from "../../lib/userFacingError";
 import { NoticeLine } from "./libraryPresentation";
 import { actionButton } from "./libraryStyle";
+import { SubtitleRevisionList } from "./SubtitleRevisionList";
+import { SubtitleSyncProposal } from "./SubtitleSyncProposal";
 import type { Notice } from "./useTitleActions";
 
 type ReferenceKind = "subtitle" | "audio";
@@ -41,7 +45,6 @@ function isFinished(status: SubtitleSyncTask["status"]): boolean {
 function describeOutcome(
   finished: SubtitleSyncTask,
   t: (key: TranslationKey) => string,
-  byHand: boolean,
 ): Notice {
   const result = finished.result;
   if (finished.status === "cancelled")
@@ -52,6 +55,35 @@ function describeOutcome(
     return { tone: "error", text: result.reason };
   if (result.outcome === "unchanged")
     return { tone: "ok", text: t("library.syncUnchanged") };
+  if (result.outcome === "restored")
+    return {
+      tone: "ok",
+      text: `${t("library.revisionRestored")}: ${result.fileName}`,
+    };
+  if (result.outcome === "analysed")
+    return {
+      tone: result.needsReview ? "error" : "ok",
+      text: [
+        result.needsReview
+          ? t("library.syncNeedsReview")
+          : t("library.syncPreviewReady"),
+        result.transcriptionTaskId
+          ? t("library.syncTranscriptionQueued")
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    };
+  // Several regions moved by different amounts: one shift would misdescribe it.
+  const regions =
+    result.alignment?.segments.filter(
+      (segment) => segment.status === "corrected",
+    ).length ?? 0;
+  if (regions > 1)
+    return {
+      tone: "ok",
+      text: `${t("library.syncApplied")}: ${result.fileName} · ${regions} ${t("library.syncRegionsCorrected")}`,
+    };
   const direction =
     result.offsetSeconds < 0
       ? t("library.syncEarlier")
@@ -62,10 +94,6 @@ function describeOutcome(
     Math.abs(result.rate - 1) > 0.0005
       ? `${t("library.syncSpeed")}${result.rate.toFixed(4)}`
       : null,
-    // A shift typed by hand was not measured, so it has no confidence to show.
-    byHand
-      ? null
-      : `${t("library.syncConfidence")} ${Math.round(result.confidence * 100)}%`,
   ].filter(Boolean);
   return { tone: "ok", text: parts.join(" · ") };
 }
@@ -153,7 +181,10 @@ export function SubtitleSyncPanel({
    * and can say how far off it is.
    */
   const [shiftText, setShiftText] = useState("");
-  const [byHand, setByHand] = useState(false);
+  /** The finished preview on show, kept while its apply runs. */
+  const [proposal, setProposal] = useState<SubtitleSyncTask | null>(null);
+  /** Bumped whenever the file may have changed, so the versions list again. */
+  const [changes, setChanges] = useState(0);
 
   useEffect(() => {
     if (!open || tracks) return;
@@ -199,8 +230,18 @@ export function SubtitleSyncPanel({
           if (cancelled) return;
           setTask(next);
           if (!isFinished(next.status)) return;
-          setNotice(describeOutcome(next, t, byHand));
-          if (next.result?.outcome === "applied") void onSynced();
+          setNotice(describeOutcome(next, t));
+          const outcome = next.result?.outcome;
+          if (
+            next.result &&
+            "alignment" in next.result &&
+            next.result.alignment
+          )
+            setProposal(next);
+          if (outcome === "applied" || outcome === "restored") {
+            setChanges((count) => count + 1);
+            void onSynced();
+          }
         })
         // A missed poll is not a failed sync; the next one asks again.
         .catch(
@@ -212,7 +253,7 @@ export function SubtitleSyncPanel({
       clearTimeout(timer);
     };
     // `task` is re-set on every poll, which is what schedules the next one.
-  }, [task, taskId, running, itemId, onSynced, t, byHand]);
+  }, [task, taskId, running, itemId, onSynced, t]);
 
   const subtitleLabel = (track: SubtitleSyncTrack) =>
     [
@@ -241,17 +282,12 @@ export function SubtitleSyncPanel({
   const locked = submitting || running;
   const shift = parseManualShift(shiftText);
 
-  const start = async () => {
-    if (target === null || reference === null || shift === "invalid") return;
+  /** Queues one task and follows it, whatever it is. */
+  const follow = async (queue: () => Promise<{ taskId: string }>) => {
     setSubmitting(true);
     setNotice(null);
-    setByHand(shift !== null);
     try {
-      const { taskId: queued } = await syncTitleSubtitle(itemId, {
-        targetStreamIndex: target,
-        reference: { kind, streamIndex: reference },
-        ...(shift === null ? {} : { offsetSeconds: shift }),
-      });
+      const { taskId: queued } = await queue();
       signalTasksChanged();
       setTask({
         taskId: queued,
@@ -268,6 +304,47 @@ export function SubtitleSyncPanel({
       setSubmitting(false);
     }
   };
+
+  /**
+   * Sync applies a correction straight away only when the server finds every
+   * line placed on strong evidence; anything less comes back as a proposal.
+   * Preview never writes.
+   */
+  const start = (dryRun: boolean) => {
+    if (target === null || reference === null || shift === "invalid") return;
+    setProposal(null);
+    return follow(() =>
+      syncTitleSubtitle(itemId, {
+        targetStreamIndex: target,
+        reference: { kind, streamIndex: reference },
+        ...(shift === null ? {} : { offsetSeconds: shift }),
+        ...(dryRun ? { dryRun: true } : {}),
+      }),
+    );
+  };
+
+  const applyProposal = (unmatched: "keep" | "exclude") => {
+    if (!proposal) return;
+    return follow(() =>
+      applyReviewedSubtitleSync(itemId, {
+        previewTaskId: proposal.taskId,
+        unmatched,
+      }),
+    );
+  };
+
+  const restore = (revisionId: string) => {
+    if (target === null) return;
+    setProposal(null);
+    return follow(() => restoreSubtitleRevision(itemId, revisionId, target));
+  };
+
+  const proposed =
+    proposal?.result && "alignment" in proposal.result ? proposal.result : null;
+  const proposalApplied =
+    task !== null &&
+    task.taskId !== proposal?.taskId &&
+    task.result?.outcome === "applied";
 
   if (!open)
     return (
@@ -441,10 +518,24 @@ export function SubtitleSyncPanel({
                 reference === null ||
                 shift === "invalid"
               }
-              onClick={() => void start()}
+              onClick={() => void start(false)}
             >
               <Timer size={13} aria-hidden="true" />
               {t("library.syncSubtitle")}
+            </button>
+            <button
+              type="button"
+              className={actionButton}
+              disabled={
+                locked ||
+                target === null ||
+                reference === null ||
+                shift === "invalid"
+              }
+              onClick={() => void start(true)}
+            >
+              <Eye size={13} aria-hidden="true" />
+              {t("library.syncPreview")}
             </button>
             {running ? (
               <span
@@ -457,6 +548,35 @@ export function SubtitleSyncPanel({
               </span>
             ) : null}
           </div>
+          {proposed?.alignment ? (
+            <SubtitleSyncProposal
+              alignment={proposed.alignment}
+              canApply={
+                proposed.outcome === "analysed" &&
+                !proposalApplied &&
+                proposed.alignment.verdict !== "in-sync" &&
+                proposed.alignment.verdict !== "insufficient-evidence" &&
+                proposed.alignment.cues.some(
+                  (cue) =>
+                    (cue.disposition === "corrected" ||
+                      cue.disposition === "inferred") &&
+                    Math.abs(cue.startSeconds - cue.sourceStartSeconds) >= 0.05,
+                )
+              }
+              applying={locked}
+              onApply={(unmatched) => void applyProposal(unmatched)}
+            />
+          ) : null}
+
+          {target !== null ? (
+            <SubtitleRevisionList
+              itemId={itemId}
+              streamIndex={target}
+              refreshKey={changes}
+              disabled={locked}
+              onRestore={(revisionId) => void restore(revisionId)}
+            />
+          ) : null}
         </>
       )}
 

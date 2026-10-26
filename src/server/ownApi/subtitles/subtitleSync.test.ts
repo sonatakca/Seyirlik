@@ -3,7 +3,12 @@ import type {
   MediaFileRow,
   MediaStreamRow,
 } from "../catalogue/catalogueRepository";
-import { createSubtitleSyncService } from "./subtitleSync";
+import { compareCues, createSubtitleSyncService } from "./subtitleSync";
+import {
+  documentCues,
+  parseSubtitleDocument,
+  serialiseSubtitleDocument,
+} from "./subtitleCues";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -14,6 +19,7 @@ import {
   ffmpegAvailable,
   writeSpacedAudioPackage,
 } from "./packagedAudioTestFixture";
+import { memoryRevisionStore } from "./revisionStoreFixture";
 
 const MEDIA_FILE_ID = "11111111-2222-3333-4444-555555555555";
 const RELATIVE_MEDIA = "Movies/Film (2024)/Film.mkv";
@@ -147,8 +153,10 @@ function harness(
     },
   };
   const onFilesChanged = vi.fn(async () => {});
+  const revisions = memoryRevisionStore();
   const service = createSubtitleSyncService({
     onFilesChanged,
+    revisions,
     libraryRoot: "/library",
     ffmpegPath: "ffmpeg",
     catalogue: {
@@ -163,7 +171,15 @@ function harness(
     storageFactory: () => storage,
     ...(references ? { references } : {}),
   });
-  return { service, storage, written, recordRetiming, files, onFilesChanged };
+  return {
+    service,
+    storage,
+    written,
+    recordRetiming,
+    files,
+    onFilesChanged,
+    revisions,
+  };
 }
 
 const request = {
@@ -403,10 +419,219 @@ describe("sync", () => {
         mediaFileRelativePath: async () => RELATIVE_MEDIA,
         recordRetiming: vi.fn(async () => {}),
       },
+      revisions: memoryRevisionStore(),
       storageFactory: () => ({}) as SubtitleStorage,
     });
     void service;
     expect((await gone.sync(request)).outcome).toBe("refused");
+  });
+});
+
+/** A subtitle whose lines after `from` seconds run `by` seconds late. */
+function lateAfter(text: string, from: number, by: number): string {
+  const document = parseSubtitleDocument(text);
+  return serialiseSubtitleDocument({
+    ...document,
+    blocks: document.blocks.map((block) =>
+      block.kind === "cue" && block.startSeconds >= from
+        ? {
+            ...block,
+            startSeconds: block.startSeconds + by,
+            endSeconds: block.endSeconds + by,
+          }
+        : block,
+    ),
+  });
+}
+
+describe("sync — regions, review and history", () => {
+  it("corrects only the half that is late, and keeps the first half's bytes as they were", async () => {
+    const english = cues(400);
+    const turkish = lateAfter(english, 700, 8);
+    const { service, files } = harness({
+      [ENGLISH]: english,
+      [TURKISH]: turkish,
+    });
+
+    const result = await service.sync(request);
+
+    expect(result.outcome).toBe("applied");
+    if (result.outcome !== "applied") return;
+    expect(result.alignment?.verdict).toBe("correctable");
+    const corrected = files[TURKISH] as string;
+    // Every line now starts where the reference's does.
+    const starts = (text: string) =>
+      documentCues(parseSubtitleDocument(text)).map((cue) => cue.startSeconds);
+    const want = starts(english);
+    starts(corrected).forEach((start, index) =>
+      expect(Math.abs(start - (want[index] as number))).toBeLessThan(0.01),
+    );
+    // And the early half is byte-for-byte what it was.
+    const early = turkish.slice(0, turkish.indexOf("00:11:"));
+    expect(corrected.startsWith(early)).toBe(true);
+  });
+
+  it("keeps the original in the history and points the new version at it", async () => {
+    const { service, revisions } = harness();
+    const result = await service.sync(request);
+    expect(result.outcome).toBe("applied");
+    const history = await revisions.list(MEDIA_FILE_ID, TURKISH);
+    expect(
+      history.map((revision) => [revision.origin, revision.state]),
+    ).toEqual([
+      ["sync", "committed"],
+      ["original", "committed"],
+    ]);
+    expect(
+      new TextDecoder().decode((await revisions.get(history[1]!.id))!.content),
+    ).toBe(cues(400, 14.5));
+  });
+
+  it("writes nothing it cannot place and says what a person should look at", async () => {
+    // The reference stops a third of the way in: the rest cannot be placed.
+    const english = cues(400);
+    const partial = english.slice(0, english.indexOf("\n\n131\n") + 1);
+    const { service, written } = harness({
+      [ENGLISH]: partial,
+      [TURKISH]: lateAfter(english, 300, 6),
+    });
+
+    const result = await service.sync(request);
+
+    expect(result.outcome).toBe("analysed");
+    if (result.outcome !== "analysed") return;
+    expect(result.needsReview).toBe(true);
+    expect(result.reviewReasons.join(" ")).toMatch(/could not be placed/);
+    expect(written.size).toBe(0);
+  });
+
+  it("applies a reviewed proposal exactly as it was reviewed", async () => {
+    const english = cues(400);
+    const { service, files } = harness({
+      [ENGLISH]: english.slice(0, english.indexOf("\n\n131\n") + 1),
+      [TURKISH]: lateAfter(english, 300, 6),
+    });
+    const preview = await service.sync({ ...request, dryRun: true });
+    if (preview.outcome !== "analysed" || !preview.alignment)
+      throw new Error("no preview");
+
+    const applied = await service.sync({
+      ...request,
+      reviewed: {
+        subtitleSha256: preview.subtitleSha256,
+        placements: preview.alignment.cues,
+        unmatched: "keep",
+        previewTaskId: "11111111-0000-0000-0000-000000000000",
+        verdict: preview.alignment.verdict,
+      },
+    });
+
+    expect(applied.outcome).toBe("applied");
+    const after = documentCues(parseSubtitleDocument(files[TURKISH] as string));
+    preview.alignment.cues.forEach((cue) => {
+      expect(after[cue.index]?.startSeconds).toBeCloseTo(cue.startSeconds, 3);
+    });
+  });
+
+  it("refuses a reviewed proposal once the subtitle has changed underneath it", async () => {
+    const { service, files, written } = harness();
+    const preview = await service.sync({ ...request, dryRun: true });
+    if (preview.outcome !== "analysed" || !preview.alignment)
+      throw new Error("no preview");
+    files[TURKISH] = cues(400, 3);
+
+    const result = await service.sync({
+      ...request,
+      reviewed: {
+        subtitleSha256: preview.subtitleSha256,
+        placements: preview.alignment.cues,
+        unmatched: "keep",
+        previewTaskId: "11111111-0000-0000-0000-000000000000",
+        verdict: preview.alignment.verdict,
+      },
+    });
+
+    expect(result).toMatchObject({
+      outcome: "refused",
+      failure: "changed-since-analysis",
+    });
+    expect(written.size).toBe(0);
+  });
+
+  it("puts the original back as a new version, and the history shows both", async () => {
+    const { service, files } = harness();
+    await service.sync(request);
+    const listing = await service.revisions(MEDIA_FILE_ID, 1001);
+    const original = listing?.revisions.find(
+      (revision) => revision.origin === "original",
+    );
+    if (!original) throw new Error("no original");
+
+    const restored = await service.restore({
+      mediaFileId: MEDIA_FILE_ID,
+      targetStreamIndex: 1001,
+      revisionId: original.id,
+    });
+
+    expect(restored.outcome).toBe("restored");
+    expect(files[TURKISH]).toBe(cues(400, 14.5));
+    expect(
+      (await service.revisions(MEDIA_FILE_ID, 1001))?.revisions.map(
+        (revision) => revision.origin,
+      ),
+    ).toEqual(["restore", "sync", "original"]);
+  });
+
+  it("will not restore a version that belongs to another subtitle", async () => {
+    const { service, revisions } = harness();
+    const stray = await revisions.record({
+      mediaFileId: MEDIA_FILE_ID,
+      relativePath: ENGLISH,
+      origin: "original",
+      bytes: new TextEncoder().encode(cues(10)),
+    });
+    expect(
+      await service.restore({
+        mediaFileId: MEDIA_FILE_ID,
+        targetStreamIndex: 1001,
+        revisionId: stray.id,
+      }),
+    ).toMatchObject({ outcome: "refused", failure: "revision-missing" });
+  });
+});
+
+describe("compareCues", () => {
+  const line = (text: string, startSeconds: number) => ({
+    text,
+    startSeconds,
+    endSeconds: startSeconds + 1,
+  });
+
+  it("pairs lines by their words and lists only the ones that moved", () => {
+    const result = compareCues(
+      [line("a", 1), line("b", 2), line("c", 3)],
+      [line("a", 1), line("b", 4), line("c", 5)],
+    );
+    expect(result.moved.map((cue) => cue.text)).toEqual(["b", "c"]);
+    expect(result.removed).toEqual([]);
+    expect(result.added).toEqual([]);
+  });
+
+  it("names a line left out without unpairing everything after it", () => {
+    const result = compareCues(
+      [line("a", 1), line("cut", 2), line("b", 3), line("c", 4)],
+      [line("a", 1), line("b", 3), line("c", 4)],
+    );
+    expect(result.removed.map((cue) => cue.text)).toEqual(["cut"]);
+    expect(result.moved).toEqual([]);
+  });
+
+  it("names a line put back", () => {
+    const result = compareCues(
+      [line("a", 1), line("b", 3)],
+      [line("a", 1), line("back", 2), line("b", 3)],
+    );
+    expect(result.added.map((cue) => cue.text)).toEqual(["back"]);
   });
 });
 

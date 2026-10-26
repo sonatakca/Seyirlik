@@ -12,6 +12,7 @@ import type {
   SubtitleExecutionRepository,
   SubtitleWork,
 } from "./subtitleExecution";
+import type { SubtitleRevisionStore } from "./subtitleRevisions";
 import {
   runSubtitlePipeline,
   type SubtitleFitSummary,
@@ -114,6 +115,12 @@ export function createSubtitleService(dependencies: {
     signal: AbortSignal;
   }) => Promise<SubtitleFitter | null>;
   storageFactory?: (options: SubtitleStorageOptions) => SubtitleStorage;
+  /**
+   * Where every version of an installed subtitle is kept: what a download
+   * replaced, the provider's bytes, and what was installed. Absent, nothing
+   * is kept, which is how this behaved before revisions existed.
+   */
+  revisions?: SubtitleRevisionStore;
 }): SubtitleService {
   const playback = dependencies.playback ?? createPlaybackRefreshBoundary();
   return {
@@ -163,6 +170,16 @@ export function createSubtitleService(dependencies: {
           )({
             libraryRoot: dependencies.config.libraryRoot,
             operationId: attemptId,
+            ...(dependencies.revisions
+              ? {
+                  preserve: async (previous) => {
+                    await dependencies.revisions!.observe({
+                      ...previous,
+                      provenance: { replacedByAttempt: attemptId },
+                    });
+                  },
+                }
+              : {}),
             resolveMedia: async (id) => {
               if (id !== work.want.mediaFileId)
                 throw new Error("Unknown subtitle media ID.");
@@ -220,6 +237,11 @@ export function createSubtitleService(dependencies: {
                 // Flat, as events are: what the audio said about this file.
                 ...(outcome.fit
                   ? {
+                      fitVerdict: outcome.fit.verdict,
+                      fitCoverage: Number(outcome.fit.coverage.toFixed(3)),
+                      fitRegions: outcome.fit.regions,
+                      fitUnresolved: outcome.fit.unresolved,
+                      fitUnmatched: outcome.fit.unmatched,
                       fitMeasured: outcome.fit.measured,
                       fitConfidence: Number(outcome.fit.confidence.toFixed(3)),
                       fitRate: Number(outcome.fit.rate.toFixed(6)),
@@ -302,6 +324,42 @@ export function createSubtitleService(dependencies: {
             replace: work.replace,
             signal: work.signal,
             ...(fitter ? { fit: fitter } : {}),
+            ...(dependencies.revisions
+              ? {
+                  preserve: async (installed) => {
+                    const store = dependencies.revisions!;
+                    const base = {
+                      mediaFileId: work.want.mediaFileId,
+                      relativePath: installed.relativePath,
+                    };
+                    const provenance = {
+                      ...installed.provenance,
+                      attemptId,
+                    };
+                    if (!installed.retimed) {
+                      await store.observe({
+                        ...base,
+                        bytes: installed.installed,
+                        provenance,
+                      });
+                      return;
+                    }
+                    const downloaded = await store.record({
+                      ...base,
+                      origin: "download",
+                      bytes: installed.downloaded,
+                      provenance,
+                    });
+                    await store.record({
+                      ...base,
+                      origin: "fit",
+                      bytes: installed.installed,
+                      parentId: downloaded.id,
+                      provenance,
+                    });
+                  },
+                }
+              : {}),
             ...(work.attempt.state === "downloading" && work.selected
               ? { resumeCandidate: work.selected }
               : {}),

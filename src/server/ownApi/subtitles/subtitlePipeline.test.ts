@@ -9,6 +9,7 @@ import {
 } from "./subtitleProvider";
 import { runSubtitlePipeline } from "./subtitlePipeline";
 import type { SubtitleFit } from "./subtitleFit";
+import type { PiecewiseVerdict } from "./piecewiseAlignment";
 import { validateSubtitle } from "./subtitlePayload";
 import { assessCandidate, orderCandidates } from "./subtitleSelection";
 import { normalizeWant } from "./subtitleState";
@@ -304,20 +305,67 @@ describe("choosing by the audio", () => {
     new TextEncoder().encode(
       `1\n00:00:0${start},000 --> 00:00:0${start + 1},000\nMerhaba\n`,
     );
-  const fit = (confidence: number, offsetSeconds = 0): SubtitleFit => ({
-    proposal: {
-      rate: 1,
-      offsetSeconds,
-      confidence,
-      matchedFraction: 0.4,
-      matchedCues: 1,
-      consideredCues: 1,
-      medianErrorSeconds: 0.05,
-      coarseScore: 0.5,
-    },
-    trusted: confidence >= 0.35,
-  });
-  function measured(byStart: Record<number, SubtitleFit | null>) {
+  /**
+   * A measurement of the one-cue download that starts at `start` seconds:
+   * how much of it the audio explained, and where it would move it. In sync
+   * when it would not move, correctable when it would, or as given.
+   */
+  const fit =
+    (
+      coverage: number,
+      offsetSeconds = 0,
+      verdict: PiecewiseVerdict = offsetSeconds === 0
+        ? "in-sync"
+        : "correctable",
+    ) =>
+    (start: number): SubtitleFit => {
+      const moved = verdict === "correctable";
+      const disposition = moved
+        ? "corrected"
+        : verdict === "in-sync"
+          ? "aligned"
+          : "unresolved";
+      const shift = moved ? offsetSeconds : 0;
+      const trusted = verdict === "in-sync" || verdict === "correctable";
+      return {
+        alignment: {
+          verdict,
+          rate: 1,
+          coverage,
+          autoApplicable: verdict === "correctable",
+          placedAtEdits: 0,
+          counts: {
+            aligned: disposition === "aligned" ? 1 : 0,
+            corrected: moved ? 1 : 0,
+            inferred: 0,
+            unresolved: disposition === "unresolved" ? 1 : 0,
+            unmatched: 0,
+          },
+          segments: [],
+          breakpoints: [],
+          cues: [
+            {
+              index: 0,
+              disposition,
+              sourceStartSeconds: start,
+              sourceEndSeconds: start + 1,
+              startSeconds: start + shift,
+              endSeconds: start + 1 + shift,
+            },
+          ],
+          reference: "speech",
+          anchorCount: 0,
+          version: "test",
+        },
+        trusted,
+        rate: 1,
+        offsetSeconds,
+        confidence: coverage,
+      };
+    };
+  function measured(
+    byStart: Record<number, ((start: number) => SubtitleFit) | null>,
+  ) {
     const input = setup();
     const ids = Object.keys(byStart);
     input.providers[0]!.search = async () => ({
@@ -332,7 +380,7 @@ describe("choosing by the audio", () => {
       const start = Number(
         /00:00:0(\d)/.exec(new TextDecoder().decode(bytes))![1],
       );
-      return byStart[start] ?? null;
+      return byStart[start]?.(start) ?? null;
     });
     return { input, measure };
   }
@@ -361,7 +409,7 @@ describe("choosing by the audio", () => {
     const { input, measure } = measured({
       1: fit(0.772, 1.3),
       2: fit(0.772, 0.8),
-      3: fit(0.768, -0.1),
+      3: fit(0.768),
     });
     const result = await runSubtitlePipeline({ ...input, fit: { measure } });
     expect(input.storage.install).toHaveBeenCalledWith(
@@ -387,7 +435,7 @@ describe("choosing by the audio", () => {
   });
 
   it("leaves an untrusted fit's timing alone", async () => {
-    const { input, measure } = measured({ 1: fit(0.1, 2) });
+    const { input, measure } = measured({ 1: fit(0.5, 2, "partial") });
     await runSubtitlePipeline({ ...input, fit: { measure } });
     const written = (
       vi.mocked(input.storage.install).mock.calls[0] as unknown as [

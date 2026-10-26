@@ -275,22 +275,100 @@ export function syncTitleSubtitle(
   );
 }
 
+export type SubtitleCueDisposition =
+  | "aligned"
+  | "corrected"
+  | "inferred"
+  | "unresolved"
+  | "unmatched";
+
+/** One region of a proposal: a stretch of the subtitle moved, or not, together. */
+export interface SubtitleSyncSegment {
+  status: "aligned" | "corrected" | "inferred" | "unresolved";
+  firstCue: number;
+  lastCue: number;
+  sourceStartSeconds: number;
+  sourceEndSeconds: number;
+  rate: number;
+  offsetSeconds: number;
+  cueCount: number;
+  /** Lines that start on the reference's own onsets: a count, not a probability. */
+  matchedCues: number;
+  confidence: number;
+}
+
+export interface SubtitleSyncBreakpoint {
+  afterSourceSeconds: number;
+  beforeSourceSeconds: number;
+  /** Footage this version lacks, or has extra. */
+  kind: "removed" | "inserted";
+  seconds: number;
+}
+
+export interface SubtitleSyncCue {
+  index: number;
+  disposition: SubtitleCueDisposition;
+  sourceStartSeconds: number;
+  sourceEndSeconds: number;
+  startSeconds: number;
+  endSeconds: number;
+  text: string;
+}
+
+/** A line matched, by meaning, to what was said in the audio. */
+export interface SubtitleSyncAnchor {
+  cueIndex: number;
+  mediaSeconds: number;
+  weight: number;
+  cueText: string;
+  spokenText: string;
+  similarity: number;
+  margin: number;
+  support: number;
+}
+
+export interface SubtitleSyncAlignment {
+  verdict:
+    | "in-sync"
+    | "correctable"
+    | "partial"
+    | "reordered"
+    | "insufficient-evidence";
+  autoApplicable: boolean;
+  coverage: number;
+  counts: Record<SubtitleCueDisposition, number>;
+  placedAtEdits: number;
+  rate: number;
+  reference: "subtitle" | "speech" | "voice" | "transcript";
+  anchorCount: number;
+  segments: SubtitleSyncSegment[];
+  breakpoints: SubtitleSyncBreakpoint[];
+  cues: SubtitleSyncCue[];
+  anchors: SubtitleSyncAnchor[];
+}
+
 /** What a finished sync did, or why it did nothing. */
 export type SubtitleSyncOutcome =
   | {
-      outcome: "applied" | "analysed" | "unchanged";
+      outcome: "applied" | "analysed" | "unchanged" | "restored";
       fileName: string;
-      referenceKind: "subtitle" | "audio";
+      referenceKind: "subtitle" | "audio" | "manual" | "revision";
       referenceLabel: string;
+      cueCount: number;
+      subtitleSha256: string;
+      revisionId: string | null;
+      /** Nothing was written because a person should look first. */
+      needsReview: boolean;
+      reviewReasons: string[];
+      alignment: SubtitleSyncAlignment | null;
+      transcriptionTaskId?: string | null;
       offsetSeconds: number;
       rate: number;
-      /** How far above chance the alignment stands, 0 to 1. */
+      /** How far above chance the strongest region stands, 0 to 1. */
       confidence: number;
-      matchedCues: number;
-      consideredCues: number;
-      cueCount: number;
       droppedCues: number;
       clampedCues: number;
+      excludedCues: number;
     }
   | { outcome: "refused"; failure: string; reason: string };
 
@@ -300,6 +378,89 @@ export interface SubtitleSyncTask {
   /** What a running sync is doing now, in a sentence. */
   message: string | null;
   result: SubtitleSyncOutcome | null;
+}
+
+/**
+ * Applies a proposal an operator has looked at: the server reads it from the
+ * preview task itself, for the exact subtitle bytes it analysed.
+ */
+export function applyReviewedSubtitleSync(
+  itemId: string,
+  request: { previewTaskId: string; unmatched: "keep" | "exclude" },
+): Promise<{ taskId: string }> {
+  return ownApiClient.request(
+    `/subtitles/items/${encodeURIComponent(itemId)}/sync`,
+    { method: "POST", body: request },
+  );
+}
+
+export interface SubtitleRevision {
+  id: string;
+  revision: number;
+  origin:
+    | "original"
+    | "external"
+    | "download"
+    | "fit"
+    | "sync"
+    | "manual"
+    | "restore";
+  state: "pending" | "committed" | "abandoned";
+  sha256: string;
+  sizeBytes: number;
+  parentId: string | null;
+  failure: string | null;
+  createdAt: string;
+  settledAt: string | null;
+}
+
+/** Every version of one subtitle file, newest first. */
+export function getSubtitleRevisions(
+  itemId: string,
+  streamIndex: number,
+): Promise<{ fileName: string; revisions: SubtitleRevision[] }> {
+  return ownApiClient.request(
+    `/subtitles/items/${encodeURIComponent(itemId)}/revisions?streamIndex=${streamIndex}`,
+  );
+}
+
+export interface SubtitleRevisionComparison {
+  before: { id: string; revision: number; origin: string };
+  after: { id: string; revision: number; origin: string };
+  cueCount: { before: number; after: number };
+  moved: {
+    text: string;
+    beforeStartSeconds: number;
+    beforeEndSeconds: number;
+    afterStartSeconds: number;
+    afterEndSeconds: number;
+  }[];
+  removed: { text: string; startSeconds: number }[];
+  added: { text: string; startSeconds: number }[];
+  truncated: boolean;
+}
+
+/** What changed between a version and the one it was made from. */
+export function compareSubtitleRevisions(
+  itemId: string,
+  revisionId: string,
+  streamIndex: number,
+): Promise<SubtitleRevisionComparison> {
+  return ownApiClient.request(
+    `/subtitles/items/${encodeURIComponent(itemId)}/revisions/${encodeURIComponent(revisionId)}/compare?streamIndex=${streamIndex}`,
+  );
+}
+
+/** Puts an earlier version back, as a new version. Queued like a sync. */
+export function restoreSubtitleRevision(
+  itemId: string,
+  revisionId: string,
+  targetStreamIndex: number,
+): Promise<{ taskId: string }> {
+  return ownApiClient.request(
+    `/subtitles/items/${encodeURIComponent(itemId)}/revisions/${encodeURIComponent(revisionId)}/restore`,
+    { method: "POST", body: { targetStreamIndex } },
+  );
 }
 
 export function getSubtitleSyncTask(

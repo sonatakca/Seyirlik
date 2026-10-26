@@ -162,6 +162,190 @@ export function createSubtitleRoutes(
     return files[0] as string;
   };
 
+  /**
+   * The task that applies a proposal an operator has looked at.
+   *
+   * Built from the preview task's own result, read here on the server: the
+   * client names the preview and nothing else, so what is applied is exactly
+   * what the server proposed, for exactly the bytes it analysed, and a body
+   * cannot slip in a placement of its own.
+   */
+  const reviewedPayload = async (
+    mediaFileId: string,
+    body: Record<string, unknown>,
+  ) => {
+    if (
+      body.offsetSeconds !== undefined ||
+      body.rate !== undefined ||
+      body.dryRun !== undefined
+    )
+      throw validationError(
+        "Apply a reviewed proposal, or a correction typed by hand, not both.",
+      );
+    if (
+      body.unmatched !== undefined &&
+      body.unmatched !== "keep" &&
+      body.unmatched !== "exclude"
+    )
+      throw validationError("Unmatched lines are either kept or excluded.");
+    const previewTaskId = requireUuid(
+      typeof body.previewTaskId === "string" ? body.previewTaskId : "",
+      "previewTaskId",
+    );
+    const preview = await queue.get(previewTaskId);
+    const result = preview?.result as
+      | {
+          outcome?: unknown;
+          subtitleSha256?: unknown;
+          alignment?: { verdict?: unknown; cues?: unknown } | null;
+        }
+      | null
+      | undefined;
+    if (
+      !preview ||
+      preview.jobType !== SUBTITLE_JOB_TYPES.sync ||
+      preview.payload.mediaFileId !== mediaFileId ||
+      preview.status !== "succeeded" ||
+      result?.outcome !== "analysed" ||
+      typeof result.subtitleSha256 !== "string" ||
+      !Array.isArray(result.alignment?.cues)
+    )
+      throw new OwnApiError(
+        "TASK_NOT_FOUND",
+        "That proposal could not be found, or it has nothing to apply.",
+        404,
+      );
+    return {
+      mediaFileId,
+      targetStreamIndex: preview.payload.targetStreamIndex as number,
+      reference: preview.payload.reference as Record<string, unknown>,
+      reviewed: {
+        subtitleSha256: result.subtitleSha256,
+        previewTaskId,
+        unmatched: body.unmatched === "exclude" ? "exclude" : "keep",
+        verdict: result.alignment?.verdict,
+        placements: (result.alignment?.cues as Record<string, unknown>[]).map(
+          (cue) => ({
+            index: cue.index,
+            disposition: cue.disposition,
+            startSeconds: cue.startSeconds,
+            endSeconds: cue.endSeconds,
+          }),
+        ),
+      },
+    };
+  };
+
+  const streamIndexOf = (value: string | null | undefined | unknown) => {
+    const index = typeof value === "string" ? Number(value) : value;
+    if (!Number.isSafeInteger(index) || (index as number) < 0)
+      throw validationError("A subtitle track is required.");
+    return index as number;
+  };
+
+  const revisionRoutes: RouteDefinition[] = sync
+    ? [
+        {
+          /**
+           * Every version of one sidecar, newest first: what it was before
+           * this system touched it, every correction, every restore. Without
+           * the bytes, and without the library path.
+           */
+          method: "GET",
+          path: "/subtitles/items/:itemId/revisions",
+          access: "admin",
+          handle: async (context) => {
+            context.requirePrincipal();
+            const itemId = requireUuid(context.params.itemId, "itemId");
+            const mediaFileId = await soleMediaFile(itemId);
+            const listing = await sync.revisions(
+              mediaFileId,
+              streamIndexOf(context.url.searchParams.get("streamIndex")),
+            );
+            if (!listing)
+              throw new OwnApiError(
+                "NOT_FOUND",
+                "That subtitle cannot be corrected, so it has no versions.",
+                404,
+              );
+            sendData(context.response, context.requestId, {
+              fileName: listing.fileName,
+              revisions: listing.revisions.map(
+                ({ relativePath: _path, mediaFileId: _file, ...revision }) =>
+                  revision,
+              ),
+            });
+          },
+        },
+        {
+          /** What changed between a version and the one before it, or another. */
+          method: "GET",
+          path: "/subtitles/items/:itemId/revisions/:revisionId/compare",
+          access: "admin",
+          handle: async (context) => {
+            context.requirePrincipal();
+            const itemId = requireUuid(context.params.itemId, "itemId");
+            const revisionId = requireUuid(
+              context.params.revisionId,
+              "revisionId",
+            );
+            const against = context.url.searchParams.get("against");
+            const mediaFileId = await soleMediaFile(itemId);
+            const comparison = await sync.compare({
+              mediaFileId,
+              targetStreamIndex: streamIndexOf(
+                context.url.searchParams.get("streamIndex"),
+              ),
+              revisionId,
+              ...(against
+                ? { againstRevisionId: requireUuid(against, "against") }
+                : {}),
+            });
+            if (!comparison)
+              throw new OwnApiError(
+                "NOT_FOUND",
+                "Those versions could not be compared.",
+                404,
+              );
+            sendData(context.response, context.requestId, comparison);
+          },
+        },
+        {
+          /**
+           * Puts an earlier version back. Queued like a correction and under
+           * the same key, so it cannot race one; the restore is itself a new
+           * version, and the one it replaces stays in the history.
+           */
+          method: "POST",
+          path: "/subtitles/items/:itemId/revisions/:revisionId/restore",
+          access: "admin",
+          handle: async (context) => {
+            context.requirePrincipal();
+            const itemId = requireUuid(context.params.itemId, "itemId");
+            const revisionId = requireUuid(
+              context.params.revisionId,
+              "revisionId",
+            );
+            const body = asObjectBody(await context.readJson(), [
+              "targetStreamIndex",
+            ]);
+            const targetStreamIndex = streamIndexOf(body.targetStreamIndex);
+            const mediaFileId = await soleMediaFile(itemId);
+            const jobId = await queue.enqueue({
+              jobType: SUBTITLE_JOB_TYPES.sync,
+              payload: {
+                mediaFileId,
+                targetStreamIndex,
+                restoreRevisionId: revisionId,
+              },
+              dedupeKey: `subtitle-sync:${mediaFileId}:${targetStreamIndex}`,
+            });
+            sendAccepted(context.response, context.requestId, jobId);
+          },
+        },
+      ]
+    : [];
+
   const syncRoutes: RouteDefinition[] = sync
     ? [
         {
@@ -201,15 +385,20 @@ export function createSubtitleRoutes(
               "offsetSeconds",
               "rate",
               "dryRun",
+              "previewTaskId",
+              "unmatched",
             ]);
             const mediaFileId = await soleMediaFile(itemId);
-            const request = parseSyncBody(body);
+            const payload =
+              body.previewTaskId === undefined
+                ? { mediaFileId, ...parseSyncBody(body) }
+                : await reviewedPayload(mediaFileId, body);
             const jobId = await queue.enqueue({
               jobType: SUBTITLE_JOB_TYPES.sync,
-              payload: { mediaFileId, ...request },
+              payload,
               // One correction of one track at a time. A second press of the
               // button joins the first rather than racing it for the lock.
-              dedupeKey: `subtitle-sync:${mediaFileId}:${request.targetStreamIndex}`,
+              dedupeKey: `subtitle-sync:${mediaFileId}:${payload.targetStreamIndex}`,
             });
             sendAccepted(context.response, context.requestId, jobId);
           },
@@ -555,6 +744,7 @@ export function createSubtitleRoutes(
     ...openSubtitlesRoutes,
     ...uploadRoutes,
     ...syncRoutes,
+    ...revisionRoutes,
     {
       /**
        * Subtitles for a whole title: the film, or every episode of a show or
