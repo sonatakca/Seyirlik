@@ -264,3 +264,91 @@ describe("own API router", () => {
     expect(router.resolveTemplate("/ownAPI/v1/unknown")).toBeUndefined();
   });
 });
+
+describe("narrator routes", () => {
+  function buildNarratorRouter(
+    session: RoutePrincipal | null,
+    withResolver = true,
+  ) {
+    const calls: Array<{ narrator: unknown; principal: unknown }> = [];
+    const router = createOwnApiRouter({
+      csrfSecret: CSRF_SECRET,
+      csrfCookieName: "seyirlik_csrf",
+      publicOrigin: "https://seyirlik.test",
+      resolveSession: async () => session,
+      ...(withResolver
+        ? {
+            resolveNarrator: async (request: IncomingMessage) =>
+              request.headers.authorization === "Bearer good-key"
+                ? { keyId: "key-1", label: "MacBook Pro" }
+                : null,
+          }
+        : {}),
+      routes: [
+        {
+          method: "POST",
+          path: "/narrator/claim",
+          access: "narrator",
+          handle: async ({ response, requestId, narrator, principal }) => {
+            calls.push({ narrator, principal });
+            sendOwnApiJson(response, 200, { data: {}, requestId });
+          },
+        },
+        {
+          method: "GET",
+          path: "/items/:itemId/images/:imageType",
+          access: "authenticated",
+          handle: async ({ response, requestId }) => {
+            sendOwnApiJson(response, 200, { data: {}, requestId });
+          },
+        },
+      ],
+    });
+    return { router, calls };
+  }
+
+  it("answers only a narrator key, never a signed-in session", async () => {
+    const { router, calls } = buildNarratorRouter(principal(true));
+
+    const result = await run(router, "POST", "/ownAPI/v1/narrator/claim", {
+      origin: "https://seyirlik.test",
+    });
+    expect((result.error as OwnApiError).statusCode).toBe(401);
+    expect((result.error as OwnApiError).code).toBe("NARRATOR_KEY_REQUIRED");
+
+    const wrong = await run(router, "POST", "/ownAPI/v1/narrator/claim", {
+      authorization: "Bearer guessed-key",
+    });
+    expect((wrong.error as OwnApiError).code).toBe("NARRATOR_KEY_REQUIRED");
+    expect(calls).toEqual([]);
+  });
+
+  it("takes a key with no origin or CSRF token, and passes on who it is", async () => {
+    const { router, calls } = buildNarratorRouter(null);
+
+    const result = await run(router, "POST", "/ownAPI/v1/narrator/claim", {
+      authorization: "Bearer good-key",
+    });
+    expect(result.handled).toBe(true);
+    expect(result.sent.statusCode).toBe(200);
+    expect(calls).toEqual([
+      { narrator: { keyId: "key-1", label: "MacBook Pro" }, principal: null },
+    ]);
+  });
+
+  it("answers no narrator at all without a way to check keys", async () => {
+    const { router } = buildNarratorRouter(null, false);
+    const result = await run(router, "POST", "/ownAPI/v1/narrator/claim", {
+      authorization: "Bearer good-key",
+    });
+    expect((result.error as OwnApiError).statusCode).toBe(401);
+  });
+
+  it("gives a narrator key nothing of a person's", async () => {
+    const { router } = buildNarratorRouter(null);
+    const result = await run(router, "GET", "/ownAPI/v1/items/x/images/cover", {
+      authorization: "Bearer good-key",
+    });
+    expect((result.error as OwnApiError).code).toBe("AUTH_REQUIRED");
+  });
+});

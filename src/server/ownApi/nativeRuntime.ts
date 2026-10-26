@@ -46,6 +46,12 @@ import { createBookMarkRoutes } from "./books/bookMarkRoutes";
 import { createBookSearch } from "./books/bookSearch";
 import { createBookSearchProcess } from "./books/bookSearchProcess";
 import { createBookSearchRoutes } from "./books/bookSearchRoutes";
+import { createNarrationRepository } from "./books/narration/narrationRepository";
+import {
+  createNarrationRoutes,
+  createNarratorResolver,
+} from "./books/narration/narrationRoutes";
+import { createNarrationStore } from "./books/narration/narrationStore";
 import { startBookPreindexing } from "./books/bookPreindexing";
 import { createBookUploader } from "./books/bookUpload";
 import { createMetadataRepository } from "./metadata/metadataRepository";
@@ -509,6 +515,12 @@ export async function createNativeRuntime({
   const images = createImageRepository(pool);
   const userState = createUserStateRepository(pool);
   const bookPositions = createBookPositionRepository(pool);
+  // Books read aloud by a narrator outside the server; their audio goes to
+  // generated storage beside the book search indexes.
+  const narrations = createNarrationRepository(pool);
+  const narrationStore = createNarrationStore(
+    path.join(generatedStoragePath, "narrations"),
+  );
   const bookMarks = createBookMarkRepository(pool);
   // Nothing starts until a book is first searched: the model downloads into
   // generated storage then, and runs in its own low-priority process.
@@ -2045,6 +2057,12 @@ export async function createNativeRuntime({
         : {}),
     }),
     ...createBookSearchRoutes({ search: bookSearch, catalogue, mediaRoot }),
+    ...createNarrationRoutes({
+      narrations,
+      store: narrationStore,
+      catalogue,
+      mediaRoot,
+    }),
     ...createTrickplayRoutes({ trickplay, catalogue, queue }),
     ...createSyncplayRoutes({ runtime: syncplay, catalogue }),
     ...(subtitles
@@ -2255,6 +2273,7 @@ export async function createNativeRuntime({
   const router = createOwnApiRouter({
     routes,
     resolveSession,
+    resolveNarrator: createNarratorResolver(narrations),
     csrfSecret: authConfig.csrfSecret,
     csrfCookieName: authConfig.csrfCookieName,
     ...(publicOrigin ? { publicOrigin } : {}),

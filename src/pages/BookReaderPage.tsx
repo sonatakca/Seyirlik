@@ -131,8 +131,12 @@ import {
   getBookNarration,
   getNarrationAudioUrl,
   getNarrationTimings,
+  removeBookNarration,
+  requestBookNarration,
   type BookNarration,
 } from "../lib/bookNarrationApi";
+import { getCachedSession } from "../lib/authStorage";
+import { ReaderNarrationControl } from "./reader/ReaderNarration";
 import { ReadAlong } from "./reader/readAlong";
 import { ReaderVoice } from "./reader/ReaderVoice";
 import { findOnPage, markFoundWords } from "./reader/searchMarks";
@@ -624,6 +628,10 @@ export function BookReaderPage() {
   const [readAlong, setReadAlong] = useState<ReadAlong | null>(null);
   const [voiceEngaged, setVoiceEngaged] = useState(false);
   const readAlongRef = useRef<ReadAlong | null>(null);
+  /** The narration as last fetched, for the voice to find its sections' files. */
+  const narrationRef = useRef<BookNarration | null>(null);
+  const [narrationBusy, setNarrationBusy] = useState(false);
+  const [narrationFailed, setNarrationFailed] = useState(false);
   const voiceEngagedRef = useRef(false);
   /** Starts the voice at the reading line; set while a book is open. */
   const startVoiceRef = useRef<() => void>(() => undefined);
@@ -1024,8 +1032,20 @@ export function BookReaderPage() {
         return content ? (blocksOf.get(content.document) ?? null) : null;
       },
       show: (section, block) => showVoiceAt(section, block),
-      timings: (section) => getNarrationTimings(activeItemId, section),
-      audioUrl: (section) => getNarrationAudioUrl(activeItemId, section),
+      timings: (section) => {
+        const info = narrationRef.current?.sections.find(
+          (found) => found.section === section,
+        );
+        return info
+          ? getNarrationTimings(activeItemId, info)
+          : Promise.reject(new Error("That section has no narration."));
+      },
+      audioUrl: (section) => {
+        const info = narrationRef.current?.sections.find(
+          (found) => found.section === section,
+        );
+        return info ? getNarrationAudioUrl(activeItemId, info) : "";
+      },
       get metadata() {
         return voiceMetadataRef.current;
       },
@@ -2400,9 +2420,64 @@ export function BookReaderPage() {
   }, [format, palette, placeHighlightMenu, settings]);
 
   /* ---------------- Read-along ---------------- */
+  // Only sections uploaded can be played; a narration still on its way plays
+  // what it has.
+  const playableNarration =
+    narration && narration.sections.length > 0 ? narration : null;
+  useLayoutEffect(() => {
+    narrationRef.current = narration;
+  }, [narration]);
   useEffect(() => {
-    readAlong?.setNarration(narration);
-  }, [narration, readAlong]);
+    readAlong?.setNarration(playableNarration);
+  }, [playableNarration, readAlong]);
+
+  // While the narrator reads, its progress and new sections are fetched as
+  // they come, without the reader asking.
+  const narrationMoving =
+    narration?.state === "queued" || narration?.state === "narrating";
+  useEffect(() => {
+    if (!narrationMoving || !activeItemId) {
+      return undefined;
+    }
+    const controller = new AbortController();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      void getBookNarration(activeItemId, { signal: controller.signal })
+        .then(setNarration)
+        .catch(() => undefined);
+    }, 20_000);
+    return () => {
+      window.clearInterval(timer);
+      controller.abort();
+    };
+  }, [activeItemId, narrationMoving]);
+
+  const isAdministrator = getCachedSession()?.isAdministrator ?? false;
+  const changeNarration = useCallback(
+    async (change: "request" | "remove") => {
+      if (!activeItemId) return;
+      setNarrationBusy(true);
+      setNarrationFailed(false);
+      try {
+        if (change === "remove") {
+          readAlongRef.current?.close();
+          await removeBookNarration(activeItemId);
+          setNarration(null);
+        } else {
+          // A narration of another edition is taken away first, then asked for anew.
+          if (narrationRef.current?.state === "outdated") {
+            await removeBookNarration(activeItemId);
+          }
+          setNarration(await requestBookNarration(activeItemId));
+        }
+      } catch {
+        setNarrationFailed(true);
+      } finally {
+        setNarrationBusy(false);
+      }
+    },
+    [activeItemId],
+  );
 
   // The voice paints in the reader's own light: the page at its dimmed ink.
   const voiceFloor = SPOTLIGHT_FLOOR[settings.spotlight];
@@ -3050,7 +3125,7 @@ export function BookReaderPage() {
             className: "rd-bookmark-action",
             onClick: () => void toggleBookmark(),
           },
-          ...(narration && readAlong
+          ...(playableNarration && readAlong
             ? [
                 {
                   id: "listen",
@@ -3379,6 +3454,17 @@ export function BookReaderPage() {
           sizeLabel ? `${getFormatLabel(format)} · ${sizeLabel}` : null
         }
         onClose={closePanel}
+        narrationControl={
+          format === "epub" && isAdministrator ? (
+            <ReaderNarrationControl
+              narration={narration}
+              busy={narrationBusy}
+              failed={narrationFailed}
+              onRequest={() => void changeNarration("request")}
+              onRemove={() => void changeNarration("remove")}
+            />
+          ) : null
+        }
         finishedControl={
           <WatchedStatusButton
             scope="item"
@@ -3477,7 +3563,7 @@ export function BookReaderPage() {
         </div>
       ) : null}
 
-      {format === "epub" && narration && readAlong ? (
+      {format === "epub" && playableNarration && readAlong ? (
         <ReaderVoice voice={readAlong} />
       ) : null}
 

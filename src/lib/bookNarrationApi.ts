@@ -22,11 +22,43 @@ export interface NarrationSectionInfo {
   section: number;
   /** Seconds of audio. */
   duration: number;
+  /** Names this upload of the section, in its files' URLs. */
+  version: string;
 }
 
-/** A book's narration: the sections it has audio for, in reading order. */
+/**
+ * Queued until the narrator takes it, narrating while it reads (sections
+ * can be played as they arrive), then ready or failed. Outdated: read from
+ * another edition of the book, or a script the server no longer gives.
+ */
+export type NarrationState =
+  | "queued"
+  | "narrating"
+  | "ready"
+  | "failed"
+  | "outdated";
+
+export interface NarrationProgress {
+  /** How much of the book is read, 0 to 1. */
+  fraction: number;
+  sectionsDone: number;
+  sectionsTotal: number;
+  etaSeconds: number | null;
+  activity: string | null;
+}
+
+/** A book's narration: where it stands, and the sections there are to play, in reading order. */
 export interface BookNarration {
   version: number;
+  state: NarrationState;
+  voice: string | null;
+  /** ISO 8601. */
+  requestedAt: string;
+  finishedAt: string | null;
+  progress: NarrationProgress | null;
+  error: string | null;
+  /** When the narrator last asked for work; told to an administrator only. */
+  narratorSeenAt?: string | null;
   sections: NarrationSectionInfo[];
 }
 
@@ -48,11 +80,10 @@ export async function getBookNarration(
   options: { signal?: AbortSignal } = {},
 ): Promise<BookNarration | null> {
   try {
-    const narration = await ownApiClient.request<BookNarration>(
-      narrationPath(itemId),
-      { signal: options.signal, background: true },
-    );
-    return narration.sections.length > 0 ? narration : null;
+    return await ownApiClient.request<BookNarration>(narrationPath(itemId), {
+      signal: options.signal,
+      background: true,
+    });
   } catch (error) {
     if (error instanceof OwnApiClientError && error.status === 404) {
       return null;
@@ -61,19 +92,44 @@ export async function getBookNarration(
   }
 }
 
+/** When a narrator last asked for work, or null if none ever has (for an administrator). */
+export async function getNarratorSeenAt(): Promise<string | null> {
+  const presence = await ownApiClient.request<{ seenAt: string | null }>(
+    "/admin/narrator",
+    { background: true },
+  );
+  return presence.seenAt;
+}
+
+/** Asks the narrator to read the book (an administrator's request). */
+export function requestBookNarration(itemId: string): Promise<BookNarration> {
+  return ownApiClient.request<BookNarration>(narrationPath(itemId), {
+    method: "POST",
+  });
+}
+
+/** Takes the narration away with its audio (an administrator's request). */
+export async function removeBookNarration(itemId: string): Promise<void> {
+  await ownApiClient.request(narrationPath(itemId), { method: "DELETE" });
+}
+
 export function getNarrationTimings(
   itemId: string,
-  section: number,
+  section: NarrationSectionInfo,
   options: { signal?: AbortSignal } = {},
 ): Promise<NarrationTimings> {
   return ownApiClient.request<NarrationTimings>(
-    `${narrationPath(itemId)}/sections/${section}/words`,
+    `${narrationPath(itemId)}/sections/${section.section}/words?v=${encodeURIComponent(section.version)}`,
     { signal: options.signal, background: true },
   );
 }
 
-export function getNarrationAudioUrl(itemId: string, section: number): string {
+/** The section's audio; its URL names the upload, so a replaced section is fetched afresh. */
+export function getNarrationAudioUrl(
+  itemId: string,
+  section: NarrationSectionInfo,
+): string {
   return ownApiUrl(
-    `/ownAPI/v1${narrationPath(itemId)}/sections/${section}/audio`,
+    `/ownAPI/v1${narrationPath(itemId)}/sections/${section.section}/audio?v=${encodeURIComponent(section.version)}`,
   );
 }

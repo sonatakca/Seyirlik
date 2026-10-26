@@ -511,10 +511,20 @@ export const ReaderMoreMenu = forwardRef<
     downloadUrl: string;
     sizeLabel: string | null;
     finishedControl: ReactNode;
+    /** The audiobook, for an administrator: asking for it and following it. */
+    narrationControl?: ReactNode;
     onClose: () => void;
   }
 >(function ReaderMoreMenu(
-  { open, fileUrl, downloadUrl, sizeLabel, finishedControl, onClose },
+  {
+    open,
+    fileUrl,
+    downloadUrl,
+    sizeLabel,
+    finishedControl,
+    narrationControl,
+    onClose,
+  },
   ref,
 ) {
   const { t } = useLanguage();
@@ -551,6 +561,7 @@ export const ReaderMoreMenu = forwardRef<
         {t("reader.downloadBook")}
         {sizeLabel ? <small>{sizeLabel}</small> : null}
       </a>
+      {narrationControl}
     </div>
   );
 });

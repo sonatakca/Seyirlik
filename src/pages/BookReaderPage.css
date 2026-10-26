@@ -2068,3 +2068,88 @@ body:has(.seyirlik-reader-shell) {
     transition-duration: 0s;
   }
 }
+
+/* ---------- The audiobook, in the menu (administrators) ---------- */
+.rd-narration {
+  margin-top: 0.375rem;
+  padding: 0.625rem 0 0;
+  border-top: 1px solid var(--rd-hair);
+}
+
+.rd-narration-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 0.75rem;
+  align-items: center;
+  padding: 0 0.75rem;
+}
+
+.rd-narration-head svg {
+  grid-row: span 2;
+  color: var(--rd-ink2);
+}
+
+.rd-narration-title {
+  font-size: 0.6875rem;
+  font-weight: 900;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--rd-ink3);
+}
+
+.rd-narration-status {
+  font-size: 0.84375rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--rd-ink);
+}
+
+.rd-narration-bar {
+  position: relative;
+  height: 3px;
+  margin: 0.625rem 0.75rem 0;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--rd-ink4);
+}
+
+.rd-narration-bar > span {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--rd-ink2);
+  transform-origin: 0 50%;
+  transition: transform 0.6s var(--rd-sine);
+}
+
+.rd-narration-detail {
+  margin: 0.45rem 0 0.25rem;
+  padding: 0 0.75rem;
+  max-width: 16rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  color: var(--rd-ink3);
+  overflow-wrap: anywhere;
+}
+
+.rd-narration .rd-menu-item {
+  margin-top: 0.25rem;
+}
+
+.rd-narration .rd-menu-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.rd-narration .rd-menu-item[data-danger] {
+  color: var(--rd-ink);
+  background: var(--rd-ink4);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rd-narration-bar > span {
+    transition-duration: 0s;
+  }
+}

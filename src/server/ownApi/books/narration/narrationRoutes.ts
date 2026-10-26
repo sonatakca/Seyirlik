@@ -1,0 +1,669 @@
+import { createHash, randomBytes } from "node:crypto";
+import type { IncomingMessage } from "node:http";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { OwnApiError } from "../../ownApiHandler";
+import { sendData } from "../../api/envelope";
+import { serveFile } from "../../api/fileDelivery";
+import type {
+  RouteContext,
+  RouteDefinition,
+  RouteNarrator,
+} from "../../api/router";
+import {
+  asObjectBody,
+  requireUuid,
+  validationError,
+} from "../../api/validation";
+import type { CatalogueRepository } from "../../catalogue/catalogueRepository";
+import { BookRejectedError } from "../epubArchive";
+import { bookFilePath } from "../bookRoutes";
+import {
+  NARRATION_SCRIPT_VERSION,
+  buildNarrationScript,
+  type NarrationScript,
+} from "./narrationScript";
+import type {
+  BookNarration,
+  NarrationProgress,
+  NarrationRepository,
+  NarrationSection,
+} from "./narrationRepository";
+import {
+  MAX_NARRATION_PART_BYTES,
+  StagedAudioError,
+  StagedSizeError,
+  type NarrationStore,
+} from "./narrationStore";
+import { TimingsError, checkTimings } from "./narrationTimings";
+
+/** A narrator's key: `snk_` and 32 random bytes, of which only the SHA-256 is kept. */
+export const NARRATOR_KEY_PREFIX = "snk_";
+/** A narration whose narrator has said nothing for this long can be taken by another. */
+export const NARRATOR_STALE_SECONDS = 15 * 60;
+/** The word timings of one section, with room: a long novel's are a few MB. */
+const MAX_TIMINGS_BYTES = 32 * 1024 * 1024;
+const MAX_SECTION = 100_000;
+
+export function newNarratorKey(): string {
+  return `${NARRATOR_KEY_PREFIX}${randomBytes(32).toString("base64url")}`;
+}
+
+export function hashNarratorKey(key: string): Buffer {
+  return createHash("sha256").update(key, "utf8").digest();
+}
+
+/**
+ * The narrator a request's `Authorization: Bearer` key belongs to, or null.
+ * A key is 256 random bits, so looking it up by its hash is safe to do
+ * directly; a revoked key finds nothing.
+ */
+export function createNarratorResolver(
+  narrations: Pick<NarrationRepository, "findKey">,
+) {
+  return async (request: IncomingMessage): Promise<RouteNarrator | null> => {
+    const header = request.headers.authorization;
+    const match =
+      typeof header === "string" ? /^Bearer (\S+)$/.exec(header) : null;
+    const key = match?.[1];
+    if (!key?.startsWith(NARRATOR_KEY_PREFIX) || key.length > 200) return null;
+    const found = await narrations.findKey(hashNarratorKey(key));
+    return found ? { keyId: found.id, label: found.label } : null;
+  };
+}
+
+export interface NarrationRoutesOptions {
+  narrations: NarrationRepository;
+  store: NarrationStore;
+  catalogue: CatalogueRepository;
+  mediaRoot: string;
+}
+
+/** What the reader is told: see BookNarration in src/lib/bookNarrationApi.ts. */
+export interface BookNarrationDto {
+  version: 1;
+  state: BookNarration["state"] | "outdated";
+  voice: string | null;
+  requestedAt: string;
+  finishedAt: string | null;
+  progress: NarrationProgress | null;
+  error: string | null;
+  /** When a narrator last asked for work; for an administrator only. */
+  narratorSeenAt?: string | null;
+  sections: Array<{ section: number; duration: number; version: string }>;
+}
+
+const notFound = () =>
+  new OwnApiError("NARRATION_NOT_FOUND", "This book has no narration.", 404);
+const notHeld = () =>
+  new OwnApiError(
+    "NARRATION_NOT_HELD",
+    "This narrator is not reading that book.",
+    409,
+  );
+
+function readSection(raw: string | undefined): number {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0 || value > MAX_SECTION)
+    throw validationError("section is invalid.");
+  return value;
+}
+
+const finite = (value: unknown, min: number, max: number) =>
+  typeof value === "number" &&
+  Number.isFinite(value) &&
+  value >= min &&
+  value <= max;
+
+function readProgress(raw: unknown): NarrationProgress {
+  const body = asObjectBody(
+    raw,
+    ["fraction", "sectionsDone", "sectionsTotal", "etaSeconds", "activity"],
+    "The progress is invalid.",
+  );
+  const { fraction, sectionsDone, sectionsTotal, etaSeconds, activity } = body;
+  if (
+    !finite(fraction, 0, 1) ||
+    !Number.isInteger(sectionsDone) ||
+    !Number.isInteger(sectionsTotal) ||
+    !finite(sectionsDone, 0, MAX_SECTION) ||
+    !finite(sectionsTotal, 0, MAX_SECTION) ||
+    (etaSeconds !== null && !finite(etaSeconds, 0, 365 * 24 * 3600)) ||
+    (activity !== null &&
+      (typeof activity !== "string" || !/^[a-z][a-z-]{0,31}$/.test(activity)))
+  )
+    throw validationError("The progress is invalid.");
+  return {
+    fraction: fraction as number,
+    sectionsDone: sectionsDone as number,
+    sectionsTotal: sectionsTotal as number,
+    etaSeconds: etaSeconds === null ? null : Math.round(etaSeconds as number),
+    activity: activity as string | null,
+  };
+}
+
+export function createNarrationRoutes({
+  narrations,
+  store,
+  catalogue,
+  mediaRoot,
+}: NarrationRoutesOptions): RouteDefinition[] {
+  const resolvedMediaRoot = path.resolve(mediaRoot);
+
+  const removeFiles = (itemId: string) =>
+    store
+      .removeAll(itemId)
+      .catch((error: unknown) =>
+        console.error("narration.files.remove_failed", { itemId, error }),
+      );
+
+  /** The book a person can see, or 404 (a hidden book answers as a missing one). */
+  const visibleBook = async (context: RouteContext) => {
+    const principal = context.requirePrincipal();
+    const itemId = requireUuid(context.params.itemId, "itemId");
+    const item = await catalogue.getItem(principal.userId, itemId);
+    if (!item || item.kind !== "book")
+      throw new OwnApiError(
+        "ITEM_NOT_FOUND",
+        "The requested item could not be found.",
+        404,
+      );
+    return { itemId, principal };
+  };
+
+  /**
+   * A narration is outdated once the script it was read from is not the one
+   * the server would give now, or the book's file is another edition: its
+   * words point at text the reader no longer shows.
+   */
+  const isOutdated = async (narration: BookNarration) => {
+    if (narration.scriptVersion === null) return false;
+    if (narration.scriptVersion !== NARRATION_SCRIPT_VERSION) return true;
+    const file = await catalogue.getPrimaryFile(narration.itemId);
+    return !file || file.fingerprint !== narration.bookFingerprint;
+  };
+
+  /** The narration with sections a reader may play, or 404. */
+  const playable = async (itemId: string) => {
+    const found = await narrations.get(itemId);
+    if (!found || (await isOutdated(found.narration))) throw notFound();
+    return found;
+  };
+
+  const servedSection = (sections: NarrationSection[], section: number) => {
+    const found = sections.find((row) => row.section === section);
+    if (!found) throw notFound();
+    return found;
+  };
+
+  // Scripts are built from the book's file, which lives on the media volume;
+  // a narrator asks for one per book, and every upload is checked against it.
+  const scripts = new Map<string, Promise<NarrationScript>>();
+  const scriptOf = async (itemId: string, fingerprint: string | null) => {
+    const file = await catalogue.getPrimaryFile(itemId);
+    if (!file || file.missingSince !== null)
+      throw new OwnApiError(
+        "BOOK_FILE_MISSING",
+        "The book's file is missing.",
+        409,
+      );
+    if (fingerprint !== null && file.fingerprint !== fingerprint)
+      throw new OwnApiError(
+        "BOOK_CHANGED",
+        "The book's file changed since this narration began; ask for work again.",
+        409,
+      );
+    const key = `${file.id}:${file.fingerprint}`;
+    let script = scripts.get(key);
+    if (!script) {
+      const absolutePath = bookFilePath(resolvedMediaRoot, file);
+      if (!absolutePath)
+        throw new OwnApiError(
+          "BOOK_FILE_MISSING",
+          "The book's file is missing.",
+          409,
+        );
+      script = readFile(absolutePath).then(buildNarrationScript);
+      script.catch(() => scripts.delete(key));
+      scripts.set(key, script);
+      while (scripts.size > 4)
+        scripts.delete(scripts.keys().next().value as string);
+    }
+    try {
+      return await script;
+    } catch (error) {
+      if (error instanceof BookRejectedError)
+        throw new OwnApiError("BOOK_UNREADABLE", error.message, 422);
+      throw error;
+    }
+  };
+
+  /** The narration this narrator holds, or 409. */
+  const held = async (context: RouteContext) => {
+    const narrator = context.narrator;
+    if (!narrator) throw notHeld();
+    const itemId = requireUuid(context.params.itemId, "itemId");
+    const found = await narrations.get(itemId);
+    if (
+      !found ||
+      found.narration.state !== "narrating" ||
+      found.narration.narratorKeyId !== narrator.keyId
+    )
+      throw notHeld();
+    return { itemId, narrator, ...found };
+  };
+
+  const toDto = async (
+    narration: BookNarration,
+    sections: NarrationSection[],
+    administrator: boolean,
+  ): Promise<BookNarrationDto> => {
+    const outdated = await isOutdated(narration);
+    return {
+      version: 1,
+      state: outdated ? "outdated" : narration.state,
+      voice: narration.voice,
+      requestedAt: narration.requestedAt.toISOString(),
+      finishedAt: narration.finishedAt?.toISOString() ?? null,
+      progress: narration.progress,
+      error: narration.error,
+      ...(administrator
+        ? {
+            narratorSeenAt:
+              (await narrations.lastSeen())?.toISOString() ?? null,
+          }
+        : {}),
+      sections: outdated
+        ? []
+        : sections.map((row) => ({
+            section: row.section,
+            duration: row.durationSeconds,
+            // In the files' URLs, so a section replaced by a new upload is
+            // fetched afresh and an unchanged one comes from the cache.
+            version: row.audioSha256.slice(0, 16),
+          })),
+    };
+  };
+
+  const readerRoutes: RouteDefinition[] = [
+    {
+      method: "GET",
+      path: "/books/:itemId/narration",
+      access: "authenticated",
+      handle: async (context) => {
+        const { itemId, principal } = await visibleBook(context);
+        const found = await narrations.get(itemId);
+        if (!found) throw notFound();
+        sendData(
+          context.response,
+          context.requestId,
+          await toDto(
+            found.narration,
+            found.sections,
+            principal.isAdministrator,
+          ),
+        );
+      },
+    },
+    {
+      method: "GET",
+      path: "/books/:itemId/narration/sections/:section/words",
+      access: "authenticated",
+      handle: async (context) => {
+        const { itemId } = await visibleBook(context);
+        const section = readSection(context.params.section);
+        const row = servedSection((await playable(itemId)).sections, section);
+        const words = await readFile(
+          store.files(itemId, section, row.audioSha256).words,
+          "utf8",
+        ).catch(() => {
+          throw notFound();
+        });
+        sendData(context.response, context.requestId, JSON.parse(words));
+      },
+    },
+    {
+      method: "GET",
+      path: "/books/:itemId/narration/sections/:section/audio",
+      access: "authenticated",
+      // An <audio> element asks for it, and cannot send a CSRF header.
+      skipCsrf: true,
+      handle: async (context) => {
+        const { itemId } = await visibleBook(context);
+        const section = readSection(context.params.section);
+        const row = servedSection((await playable(itemId)).sections, section);
+        const range = context.request.headers.range;
+        await serveFile(
+          context.response,
+          store.files(itemId, section, row.audioSha256).audio,
+          typeof range === "string" ? range : undefined,
+          context.method === "HEAD",
+          // The URL names the upload (?v=), so an unchanged section is never fetched twice.
+          "private, max-age=31536000, immutable",
+        );
+      },
+    },
+  ];
+
+  const adminRoutes: RouteDefinition[] = [
+    {
+      // Whether a narrator is there to read, before a book is asked for.
+      method: "GET",
+      path: "/admin/narrator",
+      access: "admin",
+      handle: async (context) => {
+        sendData(context.response, context.requestId, {
+          seenAt: (await narrations.lastSeen())?.toISOString() ?? null,
+        });
+      },
+    },
+    {
+      method: "POST",
+      path: "/books/:itemId/narration",
+      access: "admin",
+      handle: async (context) => {
+        const { itemId, principal } = await visibleBook(context);
+        const file = await catalogue.getPrimaryFile(itemId);
+        if (!file || file.missingSince !== null)
+          throw new OwnApiError(
+            "BOOK_FILE_MISSING",
+            "The book's file is missing.",
+            409,
+          );
+        if (!(await narrations.request(itemId, principal.userId)))
+          throw new OwnApiError(
+            "NARRATION_EXISTS",
+            "This book is already narrated or on its way.",
+            409,
+          );
+        const found = await narrations.get(itemId);
+        sendData(
+          context.response,
+          context.requestId,
+          await toDto(found!.narration, found!.sections, true),
+          202,
+        );
+      },
+    },
+    {
+      method: "DELETE",
+      path: "/books/:itemId/narration",
+      access: "admin",
+      handle: async (context) => {
+        const { itemId } = await visibleBook(context);
+        if (!(await narrations.remove(itemId))) throw notFound();
+        // The rows are gone first, so nothing names the files while they go.
+        // A file still open (a listener, an upload) can keep Windows from
+        // removing the folder; the narration is gone either way.
+        await removeFiles(itemId);
+        context.response.statusCode = 204;
+        context.response.end();
+      },
+    },
+  ];
+
+  const narratorRoutes: RouteDefinition[] = [
+    {
+      method: "GET",
+      path: "/narrator/hello",
+      access: "narrator",
+      handle: async (context) => {
+        await narrations.touchKey(context.narrator!.keyId);
+        sendData(context.response, context.requestId, {
+          label: context.narrator!.label,
+          scriptVersion: NARRATION_SCRIPT_VERSION,
+        });
+      },
+    },
+    {
+      method: "POST",
+      path: "/narrator/claim",
+      access: "narrator",
+      handle: async (context) => {
+        const narrator = context.narrator!;
+        const body = asObjectBody(await context.readJson(), ["voice"]);
+        const voice = body.voice;
+        if (
+          typeof voice !== "string" ||
+          !/^[a-z0-9][a-z0-9-]{0,39}$/.test(voice)
+        )
+          throw validationError("voice is invalid.");
+        await narrations.touchKey(narrator.keyId);
+        const claim = await narrations.claim({
+          keyId: narrator.keyId,
+          voice,
+          scriptVersion: NARRATION_SCRIPT_VERSION,
+          staleSeconds: NARRATOR_STALE_SECONDS,
+          bookOf: async (itemId) => {
+            if ((await catalogue.getItemKind(itemId)) !== "book") return null;
+            const file = await catalogue.getPrimaryFile(itemId);
+            return file && file.missingSince === null
+              ? { fileId: file.id, fingerprint: file.fingerprint }
+              : null;
+          },
+        });
+        // What was uploaded for another voice, script or edition is gone.
+        if (claim?.reset) await removeFiles(claim.narration.itemId);
+        sendData(context.response, context.requestId, {
+          job: claim
+            ? {
+                itemId: claim.narration.itemId,
+                voice: claim.narration.voice,
+                scriptVersion: claim.narration.scriptVersion,
+                sections: claim.sections.map((row) => ({
+                  section: row.section,
+                  audioSha256: row.audioSha256,
+                })),
+              }
+            : null,
+        });
+      },
+    },
+    {
+      method: "GET",
+      path: "/narrator/jobs/:itemId/script",
+      access: "narrator",
+      handle: async (context) => {
+        const { itemId, narration } = await held(context);
+        sendData(
+          context.response,
+          context.requestId,
+          await scriptOf(itemId, narration.bookFingerprint),
+        );
+      },
+    },
+    {
+      method: "POST",
+      path: "/narrator/jobs/:itemId/progress",
+      access: "narrator",
+      handle: async (context) => {
+        const narrator = context.narrator!;
+        const itemId = requireUuid(context.params.itemId, "itemId");
+        const progress = readProgress(await context.readJson());
+        if (!(await narrations.heartbeat(itemId, narrator.keyId, progress)))
+          throw notHeld();
+        context.response.statusCode = 204;
+        context.response.end();
+      },
+    },
+    {
+      method: "GET",
+      path: "/narrator/jobs/:itemId/sections/:section/staged",
+      access: "narrator",
+      handle: async (context) => {
+        const { itemId } = await held(context);
+        const section = readSection(context.params.section);
+        sendData(context.response, context.requestId, {
+          size: await store.stagedSize(itemId, section),
+        });
+      },
+    },
+    {
+      method: "PUT",
+      path: "/narrator/jobs/:itemId/sections/:section/audio",
+      access: "narrator",
+      handle: async (context) => {
+        const { itemId } = await held(context);
+        const section = readSection(context.params.section);
+        const offset = Number(context.url.searchParams.get("offset"));
+        const length = Number(context.request.headers["content-length"]);
+        if (!Number.isInteger(offset) || offset < 0)
+          throw validationError("offset is invalid.");
+        if (
+          !Number.isInteger(length) ||
+          length <= 0 ||
+          length > MAX_NARRATION_PART_BYTES
+        )
+          throw new OwnApiError(
+            "NARRATION_PART_SIZE",
+            `A part must say its length and carry at most ${MAX_NARRATION_PART_BYTES} bytes.`,
+            413,
+          );
+        try {
+          const size = await store.append(
+            itemId,
+            section,
+            offset,
+            context.request,
+            length,
+          );
+          sendData(context.response, context.requestId, { size });
+        } catch (error) {
+          if (error instanceof StagedSizeError)
+            throw new OwnApiError(
+              "NARRATION_PART_OFFSET",
+              `The upload so far is ${error.size} bytes; send the next part from there.`,
+              409,
+            );
+          if (error instanceof StagedAudioError)
+            throw new OwnApiError(
+              "NARRATION_AUDIO_REJECTED",
+              error.message,
+              422,
+            );
+          throw error;
+        }
+      },
+    },
+    {
+      method: "POST",
+      path: "/narrator/jobs/:itemId/sections/:section",
+      access: "narrator",
+      handle: async (context) => {
+        const { itemId, narrator, narration } = await held(context);
+        const section = readSection(context.params.section);
+        const body = asObjectBody(await context.readJson(MAX_TIMINGS_BYTES), [
+          "sha256",
+          "duration",
+          "words",
+        ]);
+        const sha256 = body.sha256;
+        if (typeof sha256 !== "string" || !/^[0-9a-f]{64}$/.test(sha256))
+          throw validationError("sha256 is invalid.");
+        const script = await scriptOf(itemId, narration.bookFingerprint);
+        const read = script.sections.find(
+          (candidate) => candidate.section === section,
+        );
+        if (!read)
+          throw new OwnApiError(
+            "NARRATION_SECTION_UNKNOWN",
+            "The script has no such section.",
+            422,
+          );
+
+        let words;
+        try {
+          words = checkTimings(read, body.words, body.duration as number);
+        } catch (error) {
+          if (error instanceof TimingsError)
+            throw new OwnApiError(
+              "NARRATION_TIMINGS_REJECTED",
+              error.message,
+              422,
+            );
+          throw error;
+        }
+        const duration = body.duration as number;
+        let audioBytes: number;
+        try {
+          audioBytes = await store.commit(
+            itemId,
+            section,
+            sha256,
+            JSON.stringify({ version: 1, section, duration, words }),
+          );
+        } catch (error) {
+          if (error instanceof StagedAudioError)
+            throw new OwnApiError(
+              "NARRATION_AUDIO_REJECTED",
+              error.message,
+              422,
+            );
+          throw error;
+        }
+
+        const committed = await narrations.commitSection(
+          itemId,
+          narrator.keyId,
+          {
+            section,
+            audioSha256: sha256,
+            audioBytes,
+            durationSeconds: duration,
+            wordCount: words.length,
+          },
+        );
+        if (!committed) {
+          // Taken away meanwhile: these files are nobody's, unless the very
+          // same audio is what the book already serves.
+          const now = await narrations.get(itemId);
+          if (!now?.sections.some((row) => row.audioSha256 === sha256))
+            await store.removeVersion(itemId, section, sha256);
+          throw notHeld();
+        }
+        if (committed.replaced)
+          await store.removeVersion(itemId, section, committed.replaced);
+        sendData(context.response, context.requestId, { section, sha256 });
+      },
+    },
+    {
+      method: "POST",
+      path: "/narrator/jobs/:itemId/finish",
+      access: "narrator",
+      handle: async (context) => {
+        const { itemId, narrator, narration } = await held(context);
+        const body = asObjectBody(await context.readJson(), ["ready", "error"]);
+        let finished: boolean;
+        if (body.ready === true) {
+          const script = await scriptOf(itemId, narration.bookFingerprint);
+          finished = await narrations.finish(itemId, narrator.keyId, {
+            ready: true,
+            sections: script.sections.map((read) => read.section),
+          });
+          if (!finished)
+            throw new OwnApiError(
+              "NARRATION_INCOMPLETE",
+              "Not every section of the script is uploaded.",
+              409,
+            );
+        } else if (
+          body.ready === false &&
+          typeof body.error === "string" &&
+          body.error.trim()
+        ) {
+          finished = await narrations.finish(itemId, narrator.keyId, {
+            ready: false,
+            error: body.error.trim(),
+          });
+          if (!finished) throw notHeld();
+        } else {
+          throw validationError("Say ready, or not ready and why.");
+        }
+        context.response.statusCode = 204;
+        context.response.end();
+      },
+    },
+  ];
+
+  return [...readerRoutes, ...adminRoutes, ...narratorRoutes];
+}
