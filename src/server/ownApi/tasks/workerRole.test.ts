@@ -4,7 +4,9 @@ import { IMPORT_JOB_TYPES } from "../imports/importJobs";
 import { GARBAGE_JOB_TYPES } from "../maintenance/garbageCollector";
 import { SUBTITLE_JOB_TYPES } from "../subtitles/subtitleJobs";
 import { JOB_TYPES } from "./jobHandlers";
+import { SUBTITLE_ANALYSIS_JOB_TYPE } from "../subtitles/subtitleAnalysis";
 import {
+  ANALYSIS_LANE_JOB_TYPES,
   HEAVY_JOB_TYPES,
   LONG_JOB_TYPES,
   ownsLibrary,
@@ -30,6 +32,7 @@ const EVERY_TYPE = [
   ...Object.values(IMPORT_JOB_TYPES),
   ...Object.values(SUBTITLE_JOB_TYPES),
   GARBAGE_JOB_TYPES.collect,
+  SUBTITLE_ANALYSIS_JOB_TYPE,
   "nfo.export",
   "some.type-added-later",
 ];
@@ -93,7 +96,11 @@ describe("worker roles", () => {
   });
 
   it("keeps the lanes a single machine always had", () => {
-    const all = workerLanes("all", [SUBTITLE_JOB_TYPES.run]);
+    // Without a recogniser declared, as every host was before transcription.
+    const all = workerLanes("all", [
+      SUBTITLE_JOB_TYPES.run,
+      SUBTITLE_ANALYSIS_JOB_TYPE,
+    ]);
     expect(all.map((lane) => lane.name)).toEqual([
       "media",
       "trickplay",
@@ -115,6 +122,7 @@ describe("worker roles", () => {
       for (const type of EVERY_TYPE) {
         const owned =
           LONG_JOB_TYPES.includes(type) ||
+          ANALYSIS_LANE_JOB_TYPES.includes(type) ||
           type === IMPORT_JOB_TYPES.process ||
           type === GARBAGE_JOB_TYPES.collect;
         expect(claimingLane(bridge, type) !== null, `${role} ${type}`).toBe(
@@ -126,6 +134,28 @@ describe("worker roles", () => {
       workerLanes("heavy", [], { bridge: true }).map((lane) => lane.name),
     ).toEqual(["downloads"]);
     expect(LONG_JOB_TYPES).toContain(JOB_TYPES.mediaProcess);
+  });
+
+  it("transcribes one at a time, only where a recogniser is declared", () => {
+    for (const role of ["heavy", "all"] as const) {
+      expect(
+        claimingLane(workerLanes(role, []), SUBTITLE_ANALYSIS_JOB_TYPE),
+      ).toBe("analysis");
+      expect(
+        claimingLane(
+          workerLanes(role, [SUBTITLE_ANALYSIS_JOB_TYPE]),
+          SUBTITLE_ANALYSIS_JOB_TYPE,
+        ),
+      ).toBeNull();
+      expect(
+        workerLanes(role, []).find((lane) => lane.name === "analysis")
+          ?.concurrency,
+      ).toBe(1);
+    }
+    // The always-on server never transcribes, recogniser or not.
+    expect(
+      claimingLane(workerLanes("light", []), SUBTITLE_ANALYSIS_JOB_TYPE),
+    ).toBeNull();
   });
 
   it("leaves encode bookkeeping to the worker that runs the encoder", () => {

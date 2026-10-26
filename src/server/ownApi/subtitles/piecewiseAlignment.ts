@@ -51,7 +51,7 @@ import {
 export const PIECEWISE_ALIGNER_VERSION = "piecewise-1";
 
 /** What the reference intervals are, which decides how far each edge is trusted. */
-export type ReferenceKind = "subtitle" | "speech" | "transcript";
+export type ReferenceKind = "subtitle" | "speech" | "voice" | "transcript";
 
 export interface AlignmentReference {
   readonly kind: ReferenceKind;
@@ -216,6 +216,8 @@ export interface PiecewiseTuning {
   readonly negligibleShiftSeconds: number;
   /** Longest head or tail run placed from one neighbour alone, in source seconds. */
   readonly maximumInferredEdgeSeconds: number;
+  /** In sync allows at most this fraction of cues unverified (and unmoved). */
+  readonly unverifiedInSyncFraction: number;
 }
 
 export const DEFAULT_TUNING: PiecewiseTuning = {
@@ -227,6 +229,7 @@ export const DEFAULT_TUNING: PiecewiseTuning = {
   autoCoverage: 0.6,
   negligibleShiftSeconds: 0.15,
   maximumInferredEdgeSeconds: 240,
+  unverifiedInSyncFraction: 0.15,
 };
 
 /** The evidence grid, and the offset grid as a whole number of its cells. */
@@ -288,6 +291,21 @@ const PROFILES: Record<ReferenceKind, ReferenceProfile> = {
     end: 0,
     overlap: 0.5,
     onsetLagSeconds: 0.08,
+    negligibleShiftSeconds: 0.3,
+    zoneMargin: 1.5,
+  },
+  /*
+   * A neural voice detector (Silero). It almost never calls music speech —
+   * 0.97–0.99 of what it marks is inside a subtitle line, against 0.25–0.46
+   * for the energy gate — so landing on its speech is real evidence and the
+   * overlap term counts in full. Its onsets trail the cue starts by a median
+   * of 0.19–0.21 s on the same nine episodes.
+   */
+  voice: {
+    onset: 1,
+    end: 0,
+    overlap: 1,
+    onsetLagSeconds: 0.2,
     negligibleShiftSeconds: 0.3,
     zoneMargin: 1.5,
   },
@@ -761,7 +779,7 @@ export function alignPiecewise(
     return emptyResult(subtitle, reference.kind, anchorList.length);
 
   const maxOffset = options.maxOffsetSeconds ?? 300;
-  const rates = options.rates ?? candidateRates(cues, intervals);
+  const rates = options.rates ?? candidateRates(cues, intervals, anchorList);
   const lastSource = Math.max(...cues.map((cue) => cue.endSeconds));
   const lastReference = Math.max(
     ...intervals.map((interval) => interval.endSeconds),
@@ -1233,20 +1251,32 @@ export function alignPiecewise(
 
   const breakpoints = breakpointsOf(segments);
   const reordered = isReordered(placed);
+  const unmoved = placed.every(
+    (cue) =>
+      Math.abs(cue.startSeconds - cue.sourceStartSeconds) <
+      tuning.negligibleShiftSeconds,
+  );
+  /*
+   * In sync means nothing would move and almost everything was checked. A
+   * subtitle whose music-covered stretches could not be verified is still
+   * reported as in sync when those stretches are a small part of it, since
+   * every region that could be checked was right and nothing would change;
+   * past that, "nothing found to correct" is not the same as "right".
+   */
+  const verifiedEnough =
+    counts.unresolved / cues.length <= tuning.unverifiedInSyncFraction;
   const verdict: PiecewiseVerdict =
     coverage < 0.3 || supported < tuning.minimumMatchedCues
       ? "insufficient-evidence"
       : reordered
         ? "reordered"
-        : counts.unresolved > 0 || counts.unmatched > 0
-          ? "partial"
-          : counts.corrected === 0 &&
-              placed.every(
-                (cue) =>
-                  Math.abs(cue.startSeconds - cue.sourceStartSeconds) <
-                  tuning.negligibleShiftSeconds,
-              )
-            ? "in-sync"
+        : counts.unmatched === 0 &&
+            counts.corrected === 0 &&
+            unmoved &&
+            verifiedEnough
+          ? "in-sync"
+          : counts.unresolved > 0 || counts.unmatched > 0
+            ? "partial"
             : "correctable";
   /*
    * A cue placed next to an edit was placed by elimination or by a single
@@ -1280,19 +1310,71 @@ export function alignPiecewise(
 }
 
 /**
- * One, and the global aligner's rate when it differs.
+ * One, the global aligner's rate when it differs, and the anchors' rate.
  *
  * The global aligner is wrong about *offsets* whenever a subtitle has more
  * than one, but a frame-rate transfer is the same rate everywhere, and its
- * search for one is good.
+ * search for one is good — when it can hear the dialogue. Over a continuous
+ * score it cannot (Arcane), and anchors from what was said can: a robust line
+ * through them gives the rate, which is offered when it is a real transfer
+ * between two frame rates. A wrong rate costs one more program and loses it.
  */
 function candidateRates(
   cues: readonly AlignmentCue[],
   intervals: readonly SpeechInterval[],
+  anchors: readonly CueAnchor[],
 ): number[] {
+  const rates = [1];
   const global = alignSpeech(cues, intervals, { rates: CANDIDATE_RATES });
-  // At any confidence: a wrong rate only costs one more program, and loses it.
-  return Math.abs(global.rate - 1) > 0.00002 ? [1, global.rate] : [1];
+  if (Math.abs(global.rate - 1) > 0.00002) rates.push(global.rate);
+  const fromAnchors = anchorRate(cues, anchors);
+  if (
+    fromAnchors !== null &&
+    rates.every((rate) => Math.abs(rate - fromAnchors) > 0.0002)
+  )
+    rates.push(fromAnchors);
+  return rates;
+}
+
+/**
+ * The frame-rate transfer the anchors agree on, or null.
+ *
+ * Theil–Sen: the median of the slopes between pairs of anchors at least a
+ * minute apart, which a few wrong anchors and an edit or two cannot move far.
+ * Only a slope within a fifth of a percent of a known transfer is believed,
+ * and the known rate is what is returned — anything else is an edit's
+ * distortion or noise, which the regions handle on their own.
+ */
+function anchorRate(
+  cues: readonly AlignmentCue[],
+  anchors: readonly CueAnchor[],
+): number | null {
+  if (anchors.length < 20) return null;
+  const startOf = new Map(cues.map((cue) => [cue.index, cue.startSeconds]));
+  const points = anchors
+    .filter((anchor) => anchor.weight >= 0.5 && startOf.has(anchor.cueIndex))
+    .map((anchor) => ({
+      x: startOf.get(anchor.cueIndex) as number,
+      y: anchor.mediaSeconds,
+    }))
+    .sort((left, right) => left.x - right.x);
+  if (points.length < 20) return null;
+  const slopes: number[] = [];
+  const stride = Math.max(1, Math.floor(points.length / 150));
+  for (let i = 0; i < points.length; i += stride)
+    for (let j = i + 1; j < points.length; j += stride) {
+      const a = points[i] as { x: number; y: number };
+      const b = points[j] as { x: number; y: number };
+      if (b.x - a.x < 60) continue;
+      slopes.push((b.y - a.y) / (b.x - a.x));
+    }
+  if (slopes.length < 50) return null;
+  slopes.sort((left, right) => left - right);
+  const slope = slopes[slopes.length >> 1] as number;
+  const known = CANDIDATE_RATES.filter((rate) => rate !== 1).find(
+    (rate) => Math.abs(rate - slope) < 0.002,
+  );
+  return known ?? null;
 }
 
 function runsOf(offsets: Float64Array): { first: number; last: number }[] {

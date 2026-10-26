@@ -52,7 +52,6 @@ import {
   alignmentStrength,
   alignPiecewise,
   type AlignmentReference,
-  type CueAnchor,
   type CueDisposition,
   type PiecewiseAlignment,
   type PiecewiseBreakpoint,
@@ -81,6 +80,8 @@ import {
 } from "./subtitleRevisions";
 import { subtitleDigest, type SubtitleStorage } from "./subtitleStorage";
 import type { TitleReferences } from "./subtitleReferences";
+import type { AudioReference } from "./subtitleFit";
+import type { SemanticAnchorEvidence } from "./subtitleSemantics";
 import {
   alignmentCues,
   applyPlacements,
@@ -178,27 +179,30 @@ export interface SubtitleSyncRequest {
   readonly reviewed?: ReviewedProposal;
   /** Work out the correction and report it, writing nothing. */
   readonly dryRun?: boolean;
-  /**
-   * Transcript-derived evidence for this title's audio, when it has been
-   * analysed (see `subtitleTranscript.ts`). Optional: without it the speech
-   * envelope is all the audio says.
-   */
-  readonly transcript?: TranscriptEvidence | null;
   readonly signal?: AbortSignal;
   readonly progress?: (message: string) => Promise<void>;
 }
 
 /**
- * What an ASR pass contributes: speech segments timed by the recogniser, and
- * anchors from matching what each cue says to what was spoken.
+ * What the meaning of the subtitle's lines contributes, when the title's audio
+ * has been transcribed (see `subtitleAnalysis.ts`).
  */
-export interface TranscriptEvidence {
-  readonly intervals: readonly SpeechInterval[];
-  /** Built per subtitle, since they depend on the cues' text. */
-  anchorsFor?(
-    cues: readonly { index: number; text: string; startSeconds: number }[],
-  ): Promise<readonly CueAnchor[]>;
-  readonly describe: Record<string, unknown>;
+export interface MeaningEvidence {
+  /** Anchors for these cues from the stored transcript, or null without one. */
+  anchorsFor(input: {
+    mediaFileId: string;
+    sourceStreamIndex: number | null;
+    audio: AudioReference;
+    cues: readonly { index: number; text: string; startSeconds: number }[];
+  }): Promise<{
+    anchors: readonly SemanticAnchorEvidence[];
+    describe: Record<string, unknown>;
+  } | null>;
+  /** Queues a transcription of this audio; the task's id, or null when none can be. */
+  requestTranscript?(input: {
+    mediaFileId: string;
+    sourceStreamIndex: number | null;
+  }): Promise<string | null>;
 }
 
 /** The parts of a piecewise alignment an operator reviews, sized for a task result. */
@@ -215,6 +219,8 @@ export interface SyncAlignmentReport {
   readonly segments: readonly PiecewiseSegment[];
   readonly breakpoints: readonly PiecewiseBreakpoint[];
   readonly cues: readonly SyncCuePlacement[];
+  /** The meaning-based anchors given to the aligner, strongest first. */
+  readonly anchors: readonly SemanticAnchorEvidence[];
 }
 
 export interface SubtitleSyncSuccess {
@@ -235,6 +241,8 @@ export interface SubtitleSyncSuccess {
   readonly needsReview: boolean;
   readonly reviewReasons: readonly string[];
   readonly alignment: SyncAlignmentReport | null;
+  /** A transcription this analysis queued, to analyse again after. */
+  readonly transcriptionTaskId?: string | null;
   /**
    * The single transform that best describes the result, for a summary line:
    * the largest corrected region's, or the identity. Not what was applied
@@ -411,9 +419,13 @@ function trackLabel(
 
 const ms = (seconds: number) => Math.round(seconds * 1000) / 1000;
 
+/** The most anchors a report carries for review; the aligner used them all. */
+const REPORTED_ANCHORS = 400;
+
 export function alignmentReport(
   alignment: PiecewiseAlignment,
   document: SubtitleDocument,
+  anchors: readonly SemanticAnchorEvidence[] = [],
 ): SyncAlignmentReport {
   const timed = documentCues(document);
   return {
@@ -452,6 +464,16 @@ export function alignmentReport(
       endSeconds: ms(cue.endSeconds),
       text: (timed[cue.index]?.text ?? []).join("\n").slice(0, 200),
     })),
+    anchors: [...anchors]
+      .sort((left, right) => right.weight - left.weight)
+      .slice(0, REPORTED_ANCHORS)
+      .map((anchor) => ({
+        ...anchor,
+        mediaSeconds: ms(anchor.mediaSeconds),
+        weight: ms(anchor.weight),
+        similarity: ms(anchor.similarity),
+        margin: ms(anchor.margin),
+      })),
   };
 }
 
@@ -540,6 +562,8 @@ export function createSubtitleSyncService(dependencies: {
    * reading), and the only way to retime against either once it is removed.
    */
   references?: TitleReferences;
+  /** Meaning-based anchors from a transcript, where the title has one. */
+  meaning?: MeaningEvidence;
 }): SubtitleSyncService {
   const { libraryRoot, ffmpegPath, catalogue, repository } = dependencies;
 
@@ -846,16 +870,22 @@ export function createSubtitleSyncService(dependencies: {
       if ("outcome" in readings) return readings;
       const cues = alignmentCues(document);
       await request.progress?.("Matching the subtitle against the reference");
-      const anchors =
-        request.transcript?.anchorsFor && request.reference.kind === "audio"
-          ? await request.transcript.anchorsFor(
-              timed.map((cue, index) => ({
-                index,
-                text: cue.text.join(" "),
-                startSeconds: cue.startSeconds,
-              })),
-            )
-          : [];
+      const meaning =
+        readings.audio && dependencies.meaning
+          ? await dependencies.meaning
+              .anchorsFor({
+                mediaFileId: request.mediaFileId,
+                sourceStreamIndex: request.reference.streamIndex,
+                audio: readings.audio,
+                cues: timed.map((cue, index) => ({
+                  index,
+                  text: cue.text.join("\n"),
+                  startSeconds: cue.startSeconds,
+                })),
+              })
+              .catch(() => null)
+          : null;
+      const anchors = meaning?.anchors ?? [];
       /*
        * Where a stretch of speech starts depends on the threshold, and the
        * right threshold is a property of the film's mix; reading the audio is
@@ -881,16 +911,39 @@ export function createSubtitleSyncService(dependencies: {
       const placement = applyPlacements(document, alignment.cues, {
         unmatched: "keep",
       });
-      const report = alignmentReport(alignment, document);
+      const report = alignmentReport(alignment, document, anchors);
       const reasons = reviewReasons(
         alignment,
         placement.excluded.length,
         placement.beforeMedia.length,
       );
+      /*
+       * Escalation. Loudness alone could not place everything, and the audio
+       * has never been transcribed: what was said is the evidence most likely
+       * to settle it, so a transcription is queued on the machine that can do
+       * it. The operator analyses again once it is done; nothing waits here.
+       */
+      const escalate =
+        readings.audio &&
+        !meaning &&
+        dependencies.meaning?.requestTranscript &&
+        (alignment.verdict !== "in-sync" || alignment.counts.unresolved > 0) &&
+        !(alignment.verdict === "correctable" && alignment.autoApplicable);
+      const transcriptionTaskId = escalate
+        ? await dependencies.meaning!.requestTranscript!({
+            mediaFileId: request.mediaFileId,
+            sourceStreamIndex: request.reference.streamIndex,
+          }).catch(() => null)
+        : null;
+      if (transcriptionTaskId)
+        reasons.push(
+          "The audio is being transcribed on the processing machine; analyse again when that finishes for evidence from what is said.",
+        );
       const result = {
         ...base,
         referenceKind: request.reference.kind,
         referenceLabel: readings.label,
+        transcriptionTaskId,
         alignment: report,
         ...dominant(alignment),
         droppedCues: placement.beforeMedia.length,
@@ -936,9 +989,7 @@ export function createSubtitleSyncService(dependencies: {
           segments: report.segments,
           breakpoints: report.breakpoints,
           anchors: alignment.anchorCount,
-          ...(request.transcript
-            ? { transcript: request.transcript.describe }
-            : {}),
+          ...(meaning ? { meaning: meaning.describe } : {}),
           reviewed: false,
         },
         syncState: "assumed-in-sync",
@@ -1098,7 +1149,13 @@ export function createSubtitleSyncService(dependencies: {
     request: SubtitleSyncRequest,
     resolved: Target,
   ): Promise<
-    { references: AlignmentReference[]; label: string } | SubtitleSyncResult
+    | {
+        references: AlignmentReference[];
+        label: string;
+        /** The audio read, when the reference is an audio track. */
+        audio?: AudioReference;
+      }
+    | SubtitleSyncResult
   > {
     const { streams, storage, relativeMedia } = resolved;
     if (request.reference.kind === "subtitle") {
@@ -1184,17 +1241,16 @@ export function createSubtitleSyncService(dependencies: {
         intervals: speechIntervalsFromEnvelope(envelope, { dutyCycle }),
       }),
     ).filter((reading) => reading.intervals.length > 0);
-    if (request.transcript && request.transcript.intervals.length > 0)
-      references.push({
-        kind: "transcript",
-        intervals: request.transcript.intervals,
-      });
     if (references.length === 0)
       return refuse(
         "reference-empty",
         "No speech could be found in that audio track.",
       );
-    return { references, label: `the ${trackLabel(reference)} audio` };
+    return {
+      references,
+      label: `the ${trackLabel(reference)} audio`,
+      audio,
+    };
   }
 
   async function sourceIsGone(relativeMedia: string): Promise<boolean> {

@@ -17,6 +17,7 @@ import { createSubtitleRepository } from "./subtitleRepository";
 import { createSubtitleService } from "./subtitleService";
 import {
   createSubtitleSyncService,
+  type MeaningEvidence,
   type SubtitleSyncCatalogue,
 } from "./subtitleSync";
 import { createSubtitleStorage } from "./subtitleStorage";
@@ -77,6 +78,8 @@ export function createSubtitleRuntime(options: {
    * candidate that fits best and a retiming never needs the source.
    */
   references?: TitleReferences;
+  /** Meaning-based anchors from transcripts, where this host can embed. */
+  meaning?: MeaningEvidence;
 }) {
   if (!options.config) return undefined;
   const providers = options.providers ?? [];
@@ -155,6 +158,7 @@ export function createSubtitleRuntime(options: {
         ...(options.playback ? { playback: options.playback } : {}),
         onFilesChanged: options.onFilesChanged,
         ...(options.references ? { references: options.references } : {}),
+        ...(options.meaning ? { meaning: options.meaning } : {}),
       })
     : undefined;
   return {

@@ -201,7 +201,7 @@ export const tr = {
     "Altyazıyı ait olduğu bölümden, Bölümler sekmesinde yükleyin.",
   "library.syncSubtitle": "Altyazıyı senkronize et",
   "library.syncHint":
-    "Bir altyazı dosyasını zaten doğru zamanlanmış bir parçaya göre yeniden zamanlar. Eşleşme ikna edici değilse hiçbir şey yazılmaz.",
+    "Bir altyazı dosyasını, zaten doğru zamanlanmış bir parçaya göre bölüm bölüm yeniden zamanlar. Senkronizasyon dosyayı yalnızca her satır yerine oturtulabiliyorsa değiştirir; daha azı önce sizin kontrolünüz için gösterilir.",
   "library.syncTarget": "Düzeltilecek altyazı",
   "library.syncAgainst": "Neye göre",
   "library.syncAgainstSubtitle": "Mevcut altyazı",
@@ -227,6 +227,84 @@ export const tr = {
   "library.syncFailed": "Senkronizasyon tamamlanamadı.",
   "library.syncCancelled": "Senkronizasyon iptal edildi. Hiçbir şey değişmedi.",
   "library.syncTracksFailed": "Bu videonun parçaları okunamadı.",
+  "library.syncPreview": "Önizle",
+  "library.syncNeedsReview":
+    "Hiçbir şey değişmedi: bu düzeltme uygulanmadan önce gözden geçirilmeli.",
+  "library.syncPreviewReady":
+    "Senkronizasyonun yapacakları aşağıda. Hiçbir şey değişmedi.",
+  "library.syncTranscriptionQueued":
+    "Ses, işleme bilgisayarında yazıya dökülüyor; bitince konuşulanlardan gelen kanıt için yeniden önizleyin.",
+  "library.syncRegionsCorrected": "bölüm ayrı ayrı düzeltildi",
+  "library.syncNoChange": "değişiklik yok",
+  "library.syncEarlierShort": "öne",
+  "library.syncLaterShort": "geriye",
+  "library.syncStatusAligned": "Zaten zamanında",
+  "library.syncStatusCorrected": "Düzeltildi",
+  "library.syncStatusInferred": "Komşularıyla birlikte kaydırıldı",
+  "library.syncStatusUnresolved": "Doğrulanamadı",
+  "library.syncStatusUnmatched": "Bu sürümde olmayan sahne",
+  "library.syncVerdictInSync": "Bu altyazı zaten zamanında.",
+  "library.syncVerdictCorrectable":
+    "Bu altyazının her bölümü yerine oturtulabiliyor.",
+  "library.syncVerdictPartial":
+    "Bazı bölümler düzeltilebiliyor; diğerlerine bakılmalı.",
+  "library.syncVerdictReordered":
+    "Bulunan bölümler satırların sırasını bozuyor. Uygulamadan önce kontrol edin.",
+  "library.syncVerdictInsufficient":
+    "Bu altyazının bir şey söylemeye yetecek kadarı eşleşmiyor.",
+  "library.syncLinesMove": "satır kayacak",
+  "library.syncLinesUnverified": "satır doğrulanamadı ve yerinde kalıyor",
+  "library.syncLinesMissingScene":
+    "satır bu sürümde olmayan bir sahneye ait görünüyor",
+  "library.syncLinesMatchedByMeaning": "satır konuşulanla eşleşti",
+  "library.syncTimelineLabel": "Altyazının zaman çizelgesi, bölüm bölüm",
+  "library.syncRegionTime": "Altyazı zamanı",
+  "library.syncRegionChange": "Ne olacak",
+  "library.syncRegionLines": "Satır (eşleşen)",
+  "library.syncEditRemoved": "bu sürümde olmayan görüntü",
+  "library.syncEditInserted": "yalnızca bu sürümde olan görüntü",
+  "library.syncPickRegion":
+    "Arkasındaki satırları görmek için bir bölüm seçin.",
+  "library.syncReviewLines": "Kontrol edilecek satırlar",
+  "library.syncUnmatchedChoice": "Olmayan sahnedeki satırlar",
+  "library.syncUnmatchedKeep": "Oldukları yerde kalsın",
+  "library.syncUnmatchedExclude": "Altyazıdan çıkarılsın (asıl dosya saklanır)",
+  "library.syncApplyProposal": "Bu düzeltmeyi uygula",
+  "library.syncApplyHint":
+    "Altyazı o zamandan beri değişmediyse, tam gösterildiği gibi uygulanır. Şimdiki sürüm saklanır ve geri yüklenebilir.",
+  "library.syncEvidenceMeaning": "Konuşulanla eşleşenler",
+  "library.syncEvidenceMoves": "Kayan satırlar",
+  "library.syncEvidenceNone": "Bu bölümde hiçbir şey kaymıyor.",
+  "library.syncReasonUnresolved":
+    "satır yerine oturtulamadı ve olduğu yerde kalacak.",
+  "library.syncReasonUnmatched":
+    "satır bu sürümde olmayan görüntüden geliyor olabilir.",
+  "library.syncReasonPlacedAtEdit":
+    "satır, bir kurgu noktasının yanında doğrudan kanıt olmadan yerleştirildi.",
+  "library.syncReasonReordered":
+    "Bulunan bölümler satırların sırasını bozuyor.",
+  "library.syncReasonWeak":
+    "Düzeltilen bazı bölümlerin kanıtı otomatik bir değişiklik için yeterince güçlü değil.",
+  "library.revisions": "Sürümler",
+  "library.revisionsNone":
+    "Henüz sürüm yok. İlk değişiklik şimdiki dosyayı asıl sürüm olarak saklar.",
+  "library.revisionsFailed": "Sürümler okunamadı.",
+  "library.revisionOriginal": "Asıl",
+  "library.revisionExternal": "Seyirlik dışında değiştirildi",
+  "library.revisionDownload": "İndirildiği gibi",
+  "library.revisionFit": "Kurulurken oturtuldu",
+  "library.revisionSync": "Senkronize edildi",
+  "library.revisionManual": "Elle kaydırıldı",
+  "library.revisionRestore": "Geri yüklendi",
+  "library.revisionPending": "onaylanmadı",
+  "library.revisionAbandoned": "kaydedilmedi",
+  "library.revisionCurrent": "şimdiki",
+  "library.revisionCompare": "Karşılaştır",
+  "library.revisionRestoreAction": "Geri yükle",
+  "library.revisionRestored": "Sürüm geri yüklendi",
+  "library.revisionMoved": "satır kaydı",
+  "library.revisionRemoved": "çıkarıldı",
+  "library.revisionAdded": "geri kondu",
   "library.saveFailed": "Değişiklik kaydedilemedi. Yeniden deneyin.",
   "library.remove": "Kaldır",
   "library.removeHeading": "Kaldır:",

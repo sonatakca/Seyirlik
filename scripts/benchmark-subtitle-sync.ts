@@ -12,12 +12,19 @@
  *
  * Usage:
  *   npx tsx scripts/benchmark-subtitle-sync.ts <dataset> [--episodes a,b] [--json out.json]
+ *     [--model-cache <dir> [--embedding multilingual-e5-small]]
+ *     [--approaches global,piecewise/speech,piecewise/speech+meaning,...]
  *
  * `<dataset>` holds one directory per episode with:
  *   audio.m4a      the package's audio rendition (the one `TitleReferences` reads)
  *   turkish.vtt    a subtitle timed to this edition — the truth that gets damaged
  *   english.vtt    optional: a second subtitle timed to this edition, the reference
- *   transcript.json optional: an ASR transcript (see `subtitleTranscript.ts`)
+ *   whisper-small.json optional: whisper.cpp `--output-json-full` of audio.m4a
+ *   silero-0.5.txt, silero-0.35.txt optional: `whisper-vad-speech-segments`
+ *                  output at those thresholds (see `subtitleVoice.ts`)
+ *
+ * With `--model-cache`, cues are also matched by meaning to the transcript
+ * (see `subtitleSemantics.ts`), and the anchors are given to the aligner.
  *
  * No media is in the repository; the dataset lives wherever the operator put it.
  */
@@ -49,6 +56,22 @@ import {
   parseSubtitleDocument,
 } from "../src/server/ownApi/subtitles/subtitleCues";
 import { MINIMUM_SYNC_CONFIDENCE } from "../src/server/ownApi/subtitles/subtitleSync";
+import {
+  createTransformersEmbedder,
+  SUBTITLE_EMBEDDING_MODELS,
+  type SubtitleEmbeddingModelName,
+} from "../src/server/ownApi/subtitles/subtitleEmbedder";
+import {
+  semanticAnchors,
+  type TextEmbedder,
+} from "../src/server/ownApi/subtitles/subtitleSemantics";
+import { parseVoiceSegments } from "../src/server/ownApi/subtitles/subtitleVoice";
+import {
+  isReliableSpeech,
+  parseWhisperTranscript,
+  transcriptUtterances,
+  type Transcript,
+} from "../src/server/ownApi/subtitles/subtitleTranscript";
 
 const FFMPEG = process.env.FFMPEG_PATH ?? "ffmpeg";
 
@@ -339,6 +362,30 @@ async function intervalsOf(file: string): Promise<SpeechInterval[]> {
 const fmt = (value: number, digits = 2) =>
   Number.isFinite(value) ? value.toFixed(digits) : "—";
 
+/** Silero speech segments (whisper.cpp `whisper-vad-speech-segments`), if run. */
+async function voiceOf(directory: string): Promise<SpeechInterval[][]> {
+  const readings: SpeechInterval[][] = [];
+  for (const threshold of ["0.5", "0.35"]) {
+    const file = path.join(directory, `silero-${threshold}.txt`);
+    if (!(await exists(file))) continue;
+    readings.push(parseVoiceSegments(await readFile(file, "utf8")));
+  }
+  return readings.filter((reading) => reading.length > 0);
+}
+
+const speechReadingsOf = (speech: readonly SpeechInterval[][]) =>
+  speech.map((intervals) => ({ kind: "speech" as const, intervals }));
+
+/**
+ * The line a borrowed cue in scenario D copied: the truth line its index
+ * past the end stands for, counted the way `scenarios` borrowed them.
+ */
+function borrowedFrom(truth: readonly SpeechInterval[], index: number): number {
+  const duration = Math.max(...truth.map((cue) => cue.endSeconds));
+  const first = truth.findIndex((line) => line.startSeconds > duration * 0.7);
+  return first + (index - truth.length);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const dataset = args[0];
@@ -353,6 +400,25 @@ async function main() {
     ? args[args.indexOf("--json") + 1]
     : null;
   const { readdir } = await import("node:fs/promises");
+  const modelCache = args.includes("--model-cache")
+    ? args[args.indexOf("--model-cache") + 1]
+    : undefined;
+  const embedding = (
+    args.includes("--embedding")
+      ? args[args.indexOf("--embedding") + 1]
+      : "multilingual-e5-small"
+  ) as SubtitleEmbeddingModelName;
+  const approaches = args.includes("--approaches")
+    ? new Set((args[args.indexOf("--approaches") + 1] ?? "").split(","))
+    : null;
+  const wanted = (name: string) => !approaches || approaches.has(name);
+  const embedder: TextEmbedder | null = modelCache
+    ? createTransformersEmbedder({
+        model: SUBTITLE_EMBEDDING_MODELS[embedding],
+        cacheDir: modelCache,
+        threads: 8,
+      })
+    : null;
   const episodes = (await readdir(dataset, { withFileTypes: true }))
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
@@ -363,7 +429,33 @@ async function main() {
   for (const episode of episodes) {
     const directory = path.join(dataset, episode);
     if (!(await exists(path.join(directory, "turkish.vtt")))) continue;
-    const truth = await intervalsOf(path.join(directory, "turkish.vtt"));
+    const lines = documentCues(
+      parseSubtitleDocument(
+        await readFile(path.join(directory, "turkish.vtt"), "utf8"),
+      ),
+    )
+      .filter((cue) => cue.endSeconds > cue.startSeconds)
+      .sort((left, right) => left.startSeconds - right.startSeconds);
+    const truth: SpeechInterval[] = lines.map((cue) => ({
+      startSeconds: cue.startSeconds,
+      endSeconds: cue.endSeconds,
+    }));
+    const textOf = (index: number) =>
+      (lines[index] ?? lines[borrowedFrom(truth, index)])?.text.join("\n") ??
+      "";
+    const transcript: Transcript | null = (await exists(
+      path.join(directory, "whisper-small.json"),
+    ))
+      ? parseWhisperTranscript(
+          await readFile(path.join(directory, "whisper-small.json"), "utf8"),
+          { name: "whisper.cpp", model: "ggml-small", options: {} },
+        )
+      : null;
+    const utterances = transcript ? transcriptUtterances(transcript) : null;
+    const voice = await voiceOf(directory);
+    const spoken = transcript
+      ? transcript.segments.filter(isReliableSpeech)
+      : null;
     const envelope = await envelopeOf(directory);
     const speech = SPEECH_DUTY_CYCLES.map((dutyCycle) =>
       speechIntervalsFromEnvelope(envelope, { dutyCycle }),
@@ -378,7 +470,7 @@ async function main() {
         piecewiseApproach(
           "piecewise/speech",
           scenario,
-          speech.map((intervals) => ({ kind: "speech" as const, intervals })),
+          speechReadingsOf(speech),
         ),
       ];
       if (english)
@@ -387,6 +479,69 @@ async function main() {
             { kind: "subtitle", intervals: english },
           ]),
         );
+      const voiceReadings = voice.map((intervals) => ({
+        kind: "voice" as const,
+        intervals,
+      }));
+      if (voiceReadings.length > 0 && wanted("piecewise/voice"))
+        results.push(
+          piecewiseApproach("piecewise/voice", scenario, voiceReadings),
+        );
+      if (voiceReadings.length > 0 && wanted("piecewise/speech+voice"))
+        results.push(
+          piecewiseApproach("piecewise/speech+voice", scenario, [
+            ...speechReadingsOf(speech),
+            ...voiceReadings,
+          ]),
+        );
+      if (utterances && spoken) {
+        const speechReadings = speechReadingsOf(speech);
+        const transcriptReading = {
+          kind: "transcript" as const,
+          intervals: utterances,
+        };
+        if (wanted("piecewise/transcript"))
+          results.push(
+            piecewiseApproach("piecewise/transcript", scenario, [
+              transcriptReading,
+            ]),
+          );
+        if (embedder) {
+          const started = performance.now();
+          const anchors = await semanticAnchors({
+            cues: scenario.cues.map((truth) => ({
+              index: truth.cue.index,
+              text: textOf(truth.cue.index),
+              startSeconds: truth.cue.startSeconds,
+            })),
+            segments: spoken,
+            embedder,
+          });
+          const anchorMs = performance.now() - started;
+          const timed = (score: Score) => ({
+            ...score,
+            ms: score.ms + anchorMs,
+          });
+          const combos: [string, AlignmentReference[]][] = [
+            ["piecewise/speech+meaning", speechReadings],
+            ["piecewise/voice+meaning", voiceReadings],
+            [
+              "piecewise/speech+voice+meaning",
+              [...speechReadings, ...voiceReadings],
+            ],
+            ["piecewise/transcript+meaning", [transcriptReading]],
+            [
+              "piecewise/all-audio+meaning",
+              [...speechReadings, transcriptReading],
+            ],
+          ];
+          for (const [name, readings] of combos)
+            if (wanted(name))
+              results.push(
+                timed(piecewiseApproach(name, scenario, readings, anchors)),
+              );
+        }
+      }
       for (const score of results) {
         all.push({ episode, ...score });
         console.log(

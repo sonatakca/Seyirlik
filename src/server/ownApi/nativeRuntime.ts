@@ -213,6 +213,20 @@ import { createAcquisitionRoutes } from "./acquisition/acquisitionRoutes";
 import { parseImportConfig } from "./imports/importConfig";
 import { parseSubtitleConfig } from "./subtitles/subtitleConfig";
 import {
+  createSubtitleAnalysisHandler,
+  createSubtitleAnalysisStore,
+  parseAsrConfig,
+  parseEmbeddingConfig,
+  SUBTITLE_ANALYSIS_JOB_TYPE,
+  transcriptAnchors,
+} from "./subtitles/subtitleAnalysis";
+import {
+  createTransformersEmbedder,
+  DEFAULT_SUBTITLE_EMBEDDING_MODEL,
+  SUBTITLE_EMBEDDING_MODELS,
+} from "./subtitles/subtitleEmbedder";
+import type { MeaningEvidence } from "./subtitles/subtitleSync";
+import {
   createSubtitleRuntime,
   disabledSubtitleJobTypes,
 } from "./subtitles/subtitleRuntime";
@@ -1449,6 +1463,117 @@ export async function createNativeRuntime({
         anonymous: { [TURKCE_ALTYAZI_ID]: { userAgent: SEYIRLIK_USER_AGENT } },
       })
     : undefined;
+  /*
+   * What a subtitle is timed against, from the package first: its audio
+   * rendition (the same print as the source, read through its playlist in
+   * about twenty seconds over the Drive mount, where a DTS source can take
+   * minutes) and its copies of the video's own text subtitles. The source
+   * only for a title not packaged yet: processing removes it.
+   */
+  const titleReferences: TitleReferences = (() => {
+    const located = async (mediaFileId: string, relativePath: string) => {
+      const file = await catalogue.getFileById(mediaFileId);
+      if (!file || file.relativePath !== relativePath) return null;
+      const root = path.resolve(mediaRoot);
+      const sourcePath = path.resolve(root, ...relativePath.split("/"));
+      if (!sourcePath.startsWith(root + path.sep)) return null;
+      return {
+        file,
+        sourcePath,
+        media: {
+          mediaId: file.id,
+          filePath: sourcePath,
+          size: Number(file.sizeBytes),
+          mtimeMs: Number(file.mtimeMs),
+        },
+      };
+    };
+    return {
+      audio: async ({ mediaFileId, relativePath, sourceStreamIndex }) => {
+        const found = await located(mediaFileId, relativePath);
+        if (!found) return null;
+        const packaged = await renditions
+          .findPackagedAudio(found.media, sourceStreamIndex)
+          .catch(() => null);
+        if (packaged)
+          return {
+            path: packaged.playlistPath,
+            streamIndex: 0,
+            isPackagePlaylist: true,
+          };
+        const present = await stat(found.sourcePath).then(
+          (stats) => stats.isFile(),
+          () => false,
+        );
+        if (!present) return null;
+        const audio = (await catalogue.listStreams(found.file.id)).filter(
+          (stream) => stream.kind === "audio" && !stream.isExternal,
+        );
+        const chosen =
+          audio.find((stream) => stream.streamIndex === sourceStreamIndex) ??
+          audio.find((stream) => stream.isDefault) ??
+          audio[0];
+        return chosen
+          ? { path: found.sourcePath, streamIndex: chosen.streamIndex }
+          : null;
+      },
+      embeddedSubtitles: async ({ mediaFileId, relativePath }) => {
+        const found = await located(mediaFileId, relativePath);
+        if (!found || !renditions.findPackagedSubtitles) return [];
+        return (await renditions.findPackagedSubtitles(found.media))
+          .filter((subtitle) => !subtitle.fromSidecar)
+          .map((subtitle) => ({
+            streamIndex: subtitle.streamIndex,
+            language: subtitle.language ?? null,
+            path: subtitle.path,
+          }));
+      },
+    } satisfies TitleReferences;
+  })();
+
+  /*
+   * Speech recognition and meaning, both optional (see subtitleAnalysis.ts).
+   * The recogniser runs where SEYIRLIK_SUBTITLE_ASR names one — the encoding
+   * laptop — and only there claims transcription jobs. The embedding model
+   * runs where SEYIRLIK_SUBTITLE_EMBEDDINGS names a directory for it, which is
+   * where subtitles are synced; it is loaded on first use and let go after
+   * ten idle minutes, like the reader's search model.
+   */
+  const subtitleAsr = parseAsrConfig(environment);
+  const subtitleEmbeddings = parseEmbeddingConfig(environment);
+  const subtitleAnalyses = createSubtitleAnalysisStore(pool);
+  const subtitleMeaning: MeaningEvidence | undefined = subtitleEmbeddings
+    ? (() => {
+        const embedder = createTransformersEmbedder({
+          model: SUBTITLE_EMBEDDING_MODELS[DEFAULT_SUBTITLE_EMBEDDING_MODEL],
+          cacheDir: subtitleEmbeddings.modelDir,
+          threads: subtitleEmbeddings.threads,
+        });
+        let idle: NodeJS.Timeout | null = null;
+        const touch = () => {
+          if (idle) clearTimeout(idle);
+          idle = setTimeout(() => void embedder.dispose(), 10 * 60_000);
+          idle.unref?.();
+        };
+        return {
+          anchorsFor: async (input) => {
+            touch();
+            return transcriptAnchors({
+              store: subtitleAnalyses,
+              embedder,
+              ...input,
+            });
+          },
+          requestTranscript: ({ mediaFileId, sourceStreamIndex }) =>
+            queue.enqueue({
+              jobType: SUBTITLE_ANALYSIS_JOB_TYPE,
+              payload: { mediaFileId, sourceStreamIndex },
+              dedupeKey: `subtitle-analyse:${mediaFileId}:${sourceStreamIndex ?? "default"}`,
+            }),
+        } satisfies MeaningEvidence;
+      })()
+    : undefined;
+
   const subtitles = createSubtitleRuntime({
     config: subtitleConfig,
     pool,
@@ -1465,73 +1590,8 @@ export async function createNativeRuntime({
      * so a deployment without them mounts no sync routes at all.
      */
     sync: { catalogue, ffmpegPath: ffmpegPath ?? "ffmpeg" },
-    /*
-     * What a subtitle is timed against, from the package first: its audio
-     * rendition (the same print as the source, read through its playlist in
-     * about twenty seconds over the Drive mount, where a DTS source can take
-     * minutes) and its copies of the video's own text subtitles. The source
-     * only for a title not packaged yet: processing removes it.
-     */
-    references: (() => {
-      const located = async (mediaFileId: string, relativePath: string) => {
-        const file = await catalogue.getFileById(mediaFileId);
-        if (!file || file.relativePath !== relativePath) return null;
-        const root = path.resolve(mediaRoot);
-        const sourcePath = path.resolve(root, ...relativePath.split("/"));
-        if (!sourcePath.startsWith(root + path.sep)) return null;
-        return {
-          file,
-          sourcePath,
-          media: {
-            mediaId: file.id,
-            filePath: sourcePath,
-            size: Number(file.sizeBytes),
-            mtimeMs: Number(file.mtimeMs),
-          },
-        };
-      };
-      return {
-        audio: async ({ mediaFileId, relativePath, sourceStreamIndex }) => {
-          const found = await located(mediaFileId, relativePath);
-          if (!found) return null;
-          const packaged = await renditions
-            .findPackagedAudio(found.media, sourceStreamIndex)
-            .catch(() => null);
-          if (packaged)
-            return {
-              path: packaged.playlistPath,
-              streamIndex: 0,
-              isPackagePlaylist: true,
-            };
-          const present = await stat(found.sourcePath).then(
-            (stats) => stats.isFile(),
-            () => false,
-          );
-          if (!present) return null;
-          const audio = (await catalogue.listStreams(found.file.id)).filter(
-            (stream) => stream.kind === "audio" && !stream.isExternal,
-          );
-          const chosen =
-            audio.find((stream) => stream.streamIndex === sourceStreamIndex) ??
-            audio.find((stream) => stream.isDefault) ??
-            audio[0];
-          return chosen
-            ? { path: found.sourcePath, streamIndex: chosen.streamIndex }
-            : null;
-        },
-        embeddedSubtitles: async ({ mediaFileId, relativePath }) => {
-          const found = await located(mediaFileId, relativePath);
-          if (!found || !renditions.findPackagedSubtitles) return [];
-          return (await renditions.findPackagedSubtitles(found.media))
-            .filter((subtitle) => !subtitle.fromSidecar)
-            .map((subtitle) => ({
-              streamIndex: subtitle.streamIndex,
-              language: subtitle.language ?? null,
-              path: subtitle.path,
-            }));
-        },
-      } satisfies TitleReferences;
-    })(),
+    references: titleReferences,
+    ...(subtitleMeaning ? { meaning: subtitleMeaning } : {}),
   });
 
   /*
@@ -1732,9 +1792,17 @@ export async function createNativeRuntime({
      * A `light` or `heavy` worker runs only its half of these; see
      * `workerRole.ts`.
      */
-    lanes: workerLanes(workerRole, disabledSubtitleJobTypes(subtitleConfig), {
-      bridge: bridgeWorker,
-    }),
+    lanes: workerLanes(
+      workerRole,
+      [
+        ...disabledSubtitleJobTypes(subtitleConfig),
+        // Claimed only where a recogniser is declared.
+        ...(subtitleAsr ? [] : [SUBTITLE_ANALYSIS_JOB_TYPE]),
+      ],
+      {
+        bridge: bridgeWorker,
+      },
+    ),
     handlers: {
       ...createJobHandlers({
         libraries,
@@ -1807,6 +1875,29 @@ export async function createNativeRuntime({
       }),
       ...createNfoJobHandlers(nfoService),
       ...(subtitles?.handlers ?? {}),
+      ...(subtitleAsr
+        ? {
+            [SUBTITLE_ANALYSIS_JOB_TYPE]: createSubtitleAnalysisHandler({
+              ffmpegPath: ffmpegPath ?? "ffmpeg",
+              whisper: subtitleAsr,
+              store: subtitleAnalyses,
+              references: titleReferences,
+              mediaFileRelativePath: async (id) =>
+                (await catalogue.getFileById(id))?.relativePath ?? null,
+              audioLanguage: async (id, streamIndex) => {
+                const audio = (await catalogue.listStreams(id)).filter(
+                  (stream) => stream.kind === "audio",
+                );
+                return (
+                  (streamIndex === null
+                    ? (audio.find((stream) => stream.isDefault) ?? audio[0])
+                    : audio.find((stream) => stream.streamIndex === streamIndex)
+                  )?.language ?? null
+                );
+              },
+            }),
+          }
+        : {}),
       ...(acquisition
         ? createAcquisitionJobHandlers(
             acquisition.service,
