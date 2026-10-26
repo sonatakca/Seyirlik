@@ -75,6 +75,14 @@ class ChunkTest(unittest.TestCase):
             # No chunk ends between "Gel." and the closing quote.
             self.assertFalse(chunk.text.endswith(("Gel.", "Otur.")))
 
+    def test_never_cuts_after_a_quoted_exclamation_the_sentence_runs_on_from(self):
+        sentence = (
+            "Ben hakikati söyleyince, “Seni gidi çapkın seni!” manasına gelen çok bilmiş bir "
+            "gülümseme ile şahadetparmağını sallar ve gözlerini süzerdi. "
+        )
+        for chunk in chunk_section({"section": 0, "blocks": [block(0, (sentence * 8).strip())]}):
+            self.assertFalse(chunk.text.endswith("seni!”"), chunk.text[-40:])
+
     def test_the_pause_inside_a_block_follows_its_last_mark(self):
         def pause(text):
             return Chunk(0, 0, 0, 0, len(text), text, heading=False, block_end=False).pause_after

@@ -1,7 +1,7 @@
 """A narration's working folder: everything needed to stop at any moment and go on later.
 
     <work>/script.json               the script being read
-    <work>/takes/<chunk>/<n>.wav     every take generated, kept for repairs
+    <work>/takes/<chunk>/<fp>/<n>.wav  every take generated, kept for repairs
     <work>/chunks/<chunk>.json       the chosen take of a finished chunk
     <work>/sections/<n>.m4a          a finished section, and <n>.words.json beside it
     <work>/progress.json             the latest progress, for whoever is watching
@@ -42,13 +42,15 @@ class WorkDir:
         self.root = root
         root.mkdir(parents=True, exist_ok=True)
 
-    def take_wav(self, chunk_id: str, take: int) -> Path:
-        path = self.root / "takes" / chunk_id / f"{take}.wav"
+    def take_wav(self, chunk_id: str, fingerprint: str, take: int) -> Path:
+        # Takes are kept per fingerprint: a take made with another voice or
+        # other settings is never counted as one of this chunk's tries.
+        path = self.root / "takes" / chunk_id / fingerprint / f"{take}.wav"
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
-    def takes(self, chunk_id: str) -> int:
-        folder = self.root / "takes" / chunk_id
+    def takes(self, chunk_id: str, fingerprint: str) -> int:
+        folder = self.root / "takes" / chunk_id / fingerprint
         return len(list(folder.glob("*.wav"))) if folder.is_dir() else 0
 
     def chunk(self, chunk_id: str) -> Path:

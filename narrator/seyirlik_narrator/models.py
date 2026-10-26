@@ -40,7 +40,10 @@ class Voice:
                 raise FileNotFoundError(f"reference {audio} is missing")
             if len(text.split()) < 4:
                 raise ValueError(f"reference {audio.name} needs the words spoken in it")
-        return cls(spec["name"], refs, float(spec.get("temperature", 0.8)), spec.get("top_k", 50))
+        # The model's own sampling unless a voice says otherwise. Boson suggests
+        # 0.8 and top-k 50 for cloning; for this narrator that sounded worse to
+        # the person listening than 1.0 with no top-k.
+        return cls(spec["name"], refs, float(spec.get("temperature", 1.0)), spec.get("top_k"))
 
     def fingerprint(self) -> dict:
         import hashlib

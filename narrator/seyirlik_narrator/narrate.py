@@ -53,9 +53,9 @@ class Narration:
 
     # -- one take -------------------------------------------------------------
 
-    def _analyse(self, chunk: Chunk, take: int, audio: np.ndarray) -> dict:
+    def _analyse(self, chunk: Chunk, print_: str, take: int, audio: np.ndarray) -> dict:
         rate = self.speaker.sample_rate
-        wav = self.work.take_wav(chunk.id, take)
+        wav = self.work.take_wav(chunk.id, print_, take)
         sf.write(wav, audio, rate, subtype="PCM_16")
         seconds = len(audio) / rate
         timed = []
@@ -94,12 +94,12 @@ class Narration:
         tries: dict[str, list[dict]] = {}
         for c in pending:
             tries[c.id] = []
-            for n in range(1, self.work.takes(c.id) + 1):
-                wav = self.work.take_wav(c.id, n)
+            for n in range(1, self.work.takes(c.id, prints[c.id]) + 1):
+                wav = self.work.take_wav(c.id, prints[c.id], n)
                 result = read_json(wav.with_suffix(".json"))
                 if result is None:
                     audio, _ = sf.read(wav, dtype="float32")
-                    result = self._analyse(c, n, audio)
+                    result = self._analyse(c, prints[c.id], n, audio)
                 tries[c.id].append(result)
             if tries[c.id] and (self._verdict(tries[c.id][-1]).accepted or len(tries[c.id]) >= MAX_TAKES):
                 self._finish(c, prints[c.id], tries[c.id])
@@ -116,7 +116,7 @@ class Narration:
             batch, queue = queue[:BATCH], queue[BATCH:]
             audios = self.speaker.say([tts_text(c.text) for c in batch])
             for chunk, audio in zip(batch, audios):
-                result = self._analyse(chunk, len(tries[chunk.id]) + 1, audio)
+                result = self._analyse(chunk, prints[chunk.id], len(tries[chunk.id]) + 1, audio)
                 tries[chunk.id].append(result)
                 self.generated_seconds += result["seconds"]
                 self.generated_chars += len(chunk.text)
@@ -159,7 +159,7 @@ class Narration:
         results = [self.work.finished(c.id, prints[c.id]) for c in chunks]
         wav = self.work.section(number, ".wav")
         starts = join(
-            [Piece(self.work.take_wav(c.id, r["take"]), r["pause"]) for c, r in zip(chunks, results)],
+            [Piece(self.work.take_wav(c.id, prints[c.id], r["take"]), r["pause"]) for c, r in zip(chunks, results)],
             wav,
         )
         words, review = [], []

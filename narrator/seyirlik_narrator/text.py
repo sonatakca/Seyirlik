@@ -144,11 +144,20 @@ def _quote_depths(text: str) -> list[int]:
     return depths
 
 
+def _starts_sentence(text: str, at: int) -> bool:
+    """Whether what follows `at` begins a sentence: "“Seni gidi çapkın seni!” manasına" goes on."""
+    rest = text[at:].lstrip()
+    return not rest or rest[0].isupper() or rest[0].isdigit() or rest[0] in "\"“«'‘(–—-"
+
+
 def _cut_points(text: str) -> list[tuple[int, int]]:
     """Every place a chunk may end, as (end offset, rank): lower rank is a better place."""
     depths = _quote_depths(text)
     points = []
     for m in SENTENCE_END.finditer(text):
+        if not _starts_sentence(text, m.end()):
+            points.append((m.end(), 2))  # an exclamation inside the sentence: a clause, no more
+            continue
         points.append((m.end(), 0 if depths[m.end() - 1] == 0 else 1))
     points += [(m.end(), 2) for m in CLAUSE_END.finditer(text)]
     points += [(m.end(), 3) for m in COMMA.finditer(text)]
