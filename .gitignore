@@ -47,3 +47,7 @@ docs/windows-migration/
 # Design masters (ProRes and other editing sources). Kept out of public/ so the
 # build never copies them; the site uses the WebP exports made from them.
 design/
+
+# The narrator (Python, runs on a Mac)
+__pycache__/
+*.pyc
