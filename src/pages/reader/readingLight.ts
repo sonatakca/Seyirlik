@@ -371,6 +371,8 @@ export class ReadingLight {
   private fading = false;
   /** The blocks given a layer of their own last frame (see `frame`). */
   private layered = new Set<HTMLElement>();
+  /** The next frame sets every line's ink at once, without its fade. */
+  private snapping = false;
 
   constructor(private readonly viewport: HTMLElement) {}
 
@@ -416,6 +418,18 @@ export class ReadingLight {
     });
   }
 
+  /**
+   * The next frame puts every line at its ink at once. The read-along hands
+   * the light over this way: the page takes the voice's ink in the same
+   * frame, so a fade would show the text dipping or flaring on the way.
+   */
+  snapNext() {
+    this.snapping = true;
+    this.documents.forEach((entry) => {
+      entry.resting = false;
+    });
+  }
+
   /** True while some line is still fading towards its ink; the caller runs another frame. */
   get isFading() {
     return this.fading;
@@ -434,6 +448,8 @@ export class ReadingLight {
     const byLine = this.shape === "line";
     const span = Math.max(1, view.height * this.reach);
     const now = performance.now();
+    const snap = this.snapping;
+    this.snapping = false;
     let position: ReadingLinePosition | null = null;
     const near: Array<{ block: LitBlock; top: number; entry: LitDocument }> =
       [];
@@ -596,7 +612,7 @@ export class ReadingLight {
           continue;
         }
 
-        const progress = Math.min(1, (now - slot.start) / FADE_MS);
+        const progress = snap ? 1 : Math.min(1, (now - slot.start) / FADE_MS);
         slot.value = slot.from + (slot.goal - slot.from) * easeSine(progress);
         changed = true;
 

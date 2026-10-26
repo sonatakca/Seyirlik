@@ -354,6 +354,8 @@ A conflict `reason` is `foreign-file`, `symlink`, `not-a-regular-file`,
 
 A book position is `{ cfi, place, fraction, readAt }`: `place` is `{ section, block, offset }` (the first block still on screen and the px from its top to the top of the screen), `fraction` is how far through the book (0 to 1), and `readAt` is when the reader was there (ms since the epoch on PUT, ISO 8601 in replies), capped at the server's clock. A PUT always answers `{ accepted, position }` with the place now on record, so a device whose save lost learns the later place instead of getting an error. Any item that is not a book the caller can see answers 404.
 
+**Narration (the reader reads it; the server's routes are still to come).** `GET /books/:itemId/narration` answers `{ version, sections: [{ section, duration }] }`: the spine sections that have audio, in reading order, with their length in seconds. 404 means the book has none, and the reader shows no listen button. `GET /books/:itemId/narration/sections/:section/words` answers the narrator's `<section>.words.json` as written, without its review list: `{ version, section, duration, words }`, where each word is `[block, start, end, t0, t1]`. `block` counts blocks the way `getEpubBlocks` does, `start` and `end` are character offsets into that block's `epubBlockText`, and `t0` and `t1` are ms into the section's audio. `GET /books/:itemId/narration/sections/:section/audio` serves that audio (AAC in MP4) with byte ranges, so it can seek.
+
 A playback-plan response uses native enum values `DIRECT_PLAY`, `REMUX`, `DIRECT_STREAM`, or `TRANSCODE`, and includes both `reasonCodes` and `reasons`. It never returns a raw source path.
 
 ### Tasks, activity, sessions, and settings
