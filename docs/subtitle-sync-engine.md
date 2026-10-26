@@ -261,7 +261,25 @@ with no real line reported as missing.
 | Silero voice detection                                        | 97–99% of what it marks is inside a subtitle line (energy gate 39–46%; Arcane 99% vs 25–36%); onsets lag 0.19–0.21 s             | `voice` reference kind; end-to-end comparison below |
 | AST AudioSet tagging                                          | ~0.9 s per 10 s window on CPU (≈8 min an episode); as a hallucination guard on Arcane E01 it removed 1 false and 2 real segments | Rejected                                            |
 
-<!-- VOICE-RESULTS -->
+**Silero end to end** (95th-percentile error, 9 episodes, LaBSE anchors in all
+three meaning columns):
+
+| Scenario        | Loudness + meaning | Silero + meaning | Loudness + Silero + meaning |
+| --------------- | ------------------ | ---------------- | --------------------------- |
+| A half late     | 0.20 s             | 0.10 s           | 0.20 s                      |
+| B four regions  | 0.29 s             | 0.16 s           | 0.29 s                      |
+| C frame rate    | 0.27 s             | 11.87 s          | 0.17 s                      |
+| D scene missing | 0.17 s             | 0.19 s           | 0.17 s                      |
+| E scene added   | 0.08 s             | 40.0 s           | 0.08 s                      |
+| plain +6.5 s    | 0.24 s             | 6.5 s            | 0.24 s                      |
+
+No combination damaged an already-correct subtitle or wrote a bad correction
+unattended. Silero alone loses whole regions where only loudness finds
+speech; added to loudness it changed only the frame-rate case (and turned 4
+of 9 unattended writes there into 6). That gain does not yet justify running a
+second tool on every analysis, so `voice` stays an evaluated reference kind
+(`subtitleVoice.ts` parses the tool's output) and is not wired into the
+analyse job.
 
 ### Cost
 
