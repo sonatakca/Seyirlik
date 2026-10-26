@@ -52,6 +52,9 @@ class FakeServer:
                 return self.rfile.read(int(self.headers.get("Content-Length") or 0))
 
             def _route(self, method):
+                # As Cloudflare does in front of the real server.
+                if self.headers.get("User-Agent", "").startswith("Python-urllib"):
+                    return self._send(403, code="CLOUDFLARE_1010")
                 if self.headers.get("Authorization") != f"Bearer {KEY}":
                     return self._send(401, code="NARRATOR_KEY_REQUIRED")
                 path = self.path.removeprefix("/ownAPI/v1")

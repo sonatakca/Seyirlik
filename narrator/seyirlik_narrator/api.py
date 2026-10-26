@@ -18,6 +18,8 @@ from typing import Any
 # Below the server's 32 MiB, and well below the ~100 MB a request through the tunnel can carry.
 PART_BYTES = 16 * 1024 * 1024
 TIMEOUT = 120
+# Cloudflare refuses urllib's own "Python-urllib/3.x" with error 1010.
+USER_AGENT = "SeyirlikNarrator/1"
 
 
 class Unreachable(OSError):
@@ -55,7 +57,7 @@ class NarratorApi:
         self.key = key
 
     def _request(self, method: str, path: str, body: bytes | None = None, content_type: str | None = None) -> Any:
-        headers = {"Authorization": f"Bearer {self.key}", "Accept": "application/json"}
+        headers = {"Authorization": f"Bearer {self.key}", "Accept": "application/json", "User-Agent": USER_AGENT}
         if content_type:
             headers["Content-Type"] = content_type
         request = urllib.request.Request(self.base + path, data=body, method=method, headers=headers)
