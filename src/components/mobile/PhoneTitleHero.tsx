@@ -48,6 +48,8 @@ import {
   PHONE_TITLE_LOGO_REGION,
   phoneTitleFacts,
 } from "./phoneTitleHeroRows";
+import { AnimatedText } from "../AnimatedText";
+import { AnimatedWidth } from "../AnimatedWidth";
 
 /** A floating artwork card: clean backdrop, then its reflected copy, with a fixed centre dock. */
 export function PhoneTitleHero({
@@ -297,19 +299,33 @@ export function PhoneTitleHero({
                           fill="currentColor"
                           className="relative shrink-0"
                         />
-                        <span className="relative truncate">
-                          {progress ? shortPlayLabel : playLabel}
-                        </span>
+                        {/* No truncating wrapper: its clip would cut the outgoing words. */}
+                        <AnimatedWidth
+                          value={progress ? shortPlayLabel : playLabel}
+                        >
+                          <AnimatedText
+                            value={progress ? shortPlayLabel : playLabel}
+                          />
+                        </AnimatedWidth>
                         {progress ? (
                           <>
                             <span
                               className={`${PLAY_TIME_LEFT} relative shrink-0 text-xs text-zinc-500`}
                             >
                               <span aria-hidden="true">·&nbsp; </span>
-                              {t("hero.timeLeft").replace(
-                                "{time}",
-                                progress.left,
-                              )}
+                              <AnimatedWidth
+                                value={t("hero.timeLeft").replace(
+                                  "{time}",
+                                  progress.left,
+                                )}
+                              >
+                                <AnimatedText
+                                  value={t("hero.timeLeft").replace(
+                                    "{time}",
+                                    progress.left,
+                                  )}
+                                />
+                              </AnimatedWidth>
                             </span>
                             <span
                               aria-hidden="true"
@@ -333,7 +349,11 @@ export function PhoneTitleHero({
                             size={PHONE_TITLE_ACTION_ICON}
                             strokeWidth={2}
                           />
-                          <span>{t("details.restartWatching")}</span>
+                          <AnimatedWidth value={t("details.restartWatching")}>
+                            <AnimatedText
+                              value={t("details.restartWatching")}
+                            />
+                          </AnimatedWidth>
                         </Link>
                       </span>
                     ) : null}
@@ -345,7 +365,9 @@ export function PhoneTitleHero({
                           className={PHONE_TITLE_HERO_ACTION}
                         >
                           <Info size={PHONE_TITLE_ACTION_ICON} />
-                          <span>{t("common.details")}</span>
+                          <AnimatedWidth value={t("common.details")}>
+                            <AnimatedText value={t("common.details")} />
+                          </AnimatedWidth>
                         </button>
                       ) : null}
                       <span className={PHONE_TITLE_HERO_ACTION_SLOT}>

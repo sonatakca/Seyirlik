@@ -359,6 +359,11 @@ export const MAINTENANCE_ERROR_CODES = [
   "hdr-unsupported",
   "payload-invalid",
   "lease-expired",
+  "source-gone",
+  "file-missing",
+  "access-denied",
+  "volume-full",
+  "unreadable",
   "unknown",
 ] as const;
 export type MaintenanceErrorCode = (typeof MAINTENANCE_ERROR_CODES)[number];

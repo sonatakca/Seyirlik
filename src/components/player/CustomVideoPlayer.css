@@ -1042,3 +1042,202 @@ body:has(.seyirlik-player-shell) {
   letter-spacing: 0.08em;
   color: rgba(255, 255, 255, 0.6);
 }
+
+/*
+ * The save-frame toast hangs under the top-right actions, right-aligned with
+ * the camera button it answers, and below that button's tooltip so a pointer
+ * still resting on it never covers the answer.
+ */
+.frame-capture-anchor {
+  position: absolute;
+  z-index: 40;
+  top: calc(max(1rem, env(safe-area-inset-top)) + 5.75rem);
+  right: calc(max(1rem, env(safe-area-inset-right)) + 0.5%);
+  pointer-events: none;
+}
+
+.frame-capture {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: min(17.5rem, calc(100vw - 2rem));
+  border-radius: 1rem;
+  padding: 0.5rem 0.875rem 0.5rem 0.5rem;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  box-shadow: var(--shadow-player-controls);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+  transform-origin: 100% 0;
+  will-change: transform, opacity;
+}
+
+.frame-capture-entering {
+  animation: frameCaptureEnter 460ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.frame-capture-leaving {
+  animation: frameCaptureExit 280ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+/* A 16:9 slot, the shape of the picture it holds. */
+.frame-capture-plate {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 4.5rem;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 0.5rem;
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.09);
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.frame-capture[data-status="saving"] .frame-capture-plate {
+  color: var(--accent);
+}
+
+.frame-capture[data-status="saved"] .frame-capture-plate {
+  background: #000;
+}
+
+.frame-capture[data-status="failed"] .frame-capture-plate {
+  background: rgba(248, 113, 113, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.22);
+  color: #f87171;
+}
+
+/*
+ * The saved file itself, letterboxed rather than cropped so a scope frame
+ * shows its real shape. It develops into place: dark and colourless first,
+ * as a print comes up in the tray.
+ */
+.frame-capture-print {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  animation: frameCaptureDevelop 1600ms cubic-bezier(0.33, 0, 0.2, 1) both;
+}
+
+.frame-capture-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  animation: frameCaptureCopyIn 240ms ease-out both;
+}
+
+.frame-capture-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.3125rem;
+  font-size: 13px;
+  line-height: 17px;
+  font-weight: 800;
+}
+
+.frame-capture-check {
+  flex: none;
+  color: var(--accent);
+}
+
+.frame-capture-meta {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.6);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.frame-capture-retry {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  margin: -2px -6px;
+  border-radius: 999px;
+  padding: 2px 6px;
+  font: inherit;
+  font-weight: 800;
+  color: #fff;
+  transition: background-color 160ms ease;
+}
+
+.frame-capture-retry:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.frame-capture-retry:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+@keyframes frameCaptureEnter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -0.5rem, 0) scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes frameCaptureExit {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: translate3d(0, -0.25rem, 0) scale(0.98);
+  }
+}
+
+@keyframes frameCaptureDevelop {
+  from {
+    opacity: 0.4;
+    filter: grayscale(1) brightness(0.3) contrast(1.25);
+  }
+
+  to {
+    opacity: 1;
+    filter: grayscale(0) brightness(1) contrast(1);
+  }
+}
+
+@keyframes frameCaptureCopyIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .frame-capture-entering {
+    animation: qualityToastFadeIn 200ms ease-out both;
+  }
+
+  .frame-capture-leaving {
+    animation: qualityToastFadeOut 200ms ease-in both;
+  }
+
+  .frame-capture-print {
+    animation: frameCaptureCopyIn 200ms ease-out both;
+  }
+}

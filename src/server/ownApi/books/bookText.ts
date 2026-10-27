@@ -40,6 +40,18 @@ export interface BookPassage {
   text: string;
 }
 
+/** One block of a section, as the reader counts it. */
+export interface BookBlock {
+  /** The section's position in the spine, as epub.js numbers it. */
+  section: number;
+  /** The block's index within the section, as `getEpubBlocks` numbers it. */
+  block: number;
+  /** A title (h1–h6) rather than running text. */
+  heading: boolean;
+  /** `epubBlockText` of the block: empty for a picture. */
+  text: string;
+}
+
 /** About a paragraph or three: small enough to land on, large enough to mean something. */
 const PASSAGE_TARGET = 700;
 /** A single block longer than this (a chapter set as one block) is cut into pieces. */
@@ -135,8 +147,11 @@ function numericEntities(markup: string): string {
   });
 }
 
-/** The text of each of a section's blocks, empty for a picture. */
-function sectionBlocks(markup: string, type: DOMParserSupportedType): string[] {
+/** Each of a section's blocks: its text, empty for a picture, and whether it is a title. */
+function sectionBlocks(
+  markup: string,
+  type: DOMParserSupportedType,
+): Array<{ heading: boolean; text: string }> {
   const { DOMParser, XMLSerializer } = parsing();
   // What epub.js hands the serialize hook: the parsed section, serialized.
   let parsed = new DOMParser().parseFromString(
@@ -153,11 +168,12 @@ function sectionBlocks(markup: string, type: DOMParserSupportedType): string[] {
   const frame = new JSDOM(
     withJsdomParser(() => neutraliseBookScripts(serialized)),
   );
-  const texts = getEpubBlocks(frame.window.document).map((block) =>
-    epubBlockText(block.textContent ?? ""),
-  );
+  const blocks = getEpubBlocks(frame.window.document).map((block) => ({
+    heading: /^h[1-6]$/i.test(block.tagName),
+    text: epubBlockText(block.textContent ?? ""),
+  }));
   frame.window.close();
-  return texts;
+  return blocks;
 }
 
 /** Cuts one block's text at sentence ends into pieces near the target length. */
@@ -183,7 +199,7 @@ function pieces(text: string): string[] {
 }
 
 /** One section's passages: whole blocks gathered to the target, never across sections. */
-function sectionPassages(section: number, blocks: string[]): BookPassage[] {
+function sectionPassages(blocks: BookBlock[]): BookPassage[] {
   const passages: BookPassage[] = [];
   let open: BookPassage | null = null;
   const close = () => {
@@ -191,8 +207,8 @@ function sectionPassages(section: number, blocks: string[]): BookPassage[] {
     open = null;
   };
 
-  blocks.forEach((text, block) => {
-    if (!text) return;
+  for (const { section, block, text } of blocks) {
+    if (!text) continue;
     const cut = pieces(text);
 
     // A block too long for one passage stands alone, a passage per piece.
@@ -205,7 +221,7 @@ function sectionPassages(section: number, blocks: string[]): BookPassage[] {
           anchor: piece.slice(0, ANCHOR_LENGTH),
           text: piece,
         });
-      return;
+      continue;
     }
 
     if (!open) {
@@ -214,7 +230,7 @@ function sectionPassages(section: number, blocks: string[]): BookPassage[] {
       open.text += `\n${text}`;
     }
     if (open.text.length >= PASSAGE_TARGET) close();
-  });
+  }
   close();
   return passages;
 }
@@ -224,10 +240,21 @@ function sectionPassages(section: number, blocks: string[]): BookPassage[] {
  * reader could not open either.
  */
 export function readBookPassages(bytes: Buffer): BookPassage[] {
+  const passages = readBookBlocks(bytes).flatMap(sectionPassages);
+  if (passages.length === 0)
+    throw new BookRejectedError("This book has no text to search.");
+  return passages;
+}
+
+/**
+ * Every block of the book in reading order, one list per section the reader
+ * can show. Refuses (BookRejectedError) a book the reader could not open either.
+ */
+export function readBookBlocks(bytes: Buffer): BookBlock[][] {
   const { entries, packageName, packageDocument } = openEpub(bytes);
   const spine = spineEntries(packageName, packageDocument);
 
-  const passages: BookPassage[] = [];
+  const sections: BookBlock[][] = [];
   spine.forEach((entry, section) => {
     if (!entry) return;
     const name = entryName(entries, entry.name);
@@ -239,12 +266,13 @@ export function readBookPassages(bytes: Buffer): BookPassage[] {
       "A chapter of this EPUB is too large to be read here.",
     );
     if (markup === null) return;
-    passages.push(
-      ...sectionPassages(section, sectionBlocks(markup, sectionType(name))),
+    sections.push(
+      sectionBlocks(markup, sectionType(name)).map((found, block) => ({
+        section,
+        block,
+        ...found,
+      })),
     );
   });
-
-  if (passages.length === 0)
-    throw new BookRejectedError("This book has no text to search.");
-  return passages;
+  return sections;
 }

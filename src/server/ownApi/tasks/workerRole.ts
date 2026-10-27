@@ -3,6 +3,7 @@ import { IMPORT_JOB_TYPES } from "../imports/importJobs";
 import { GARBAGE_JOB_TYPES } from "../maintenance/garbageCollector";
 import { MEDIA_LANE_JOB_TYPES, TRICKPLAY_LANE_JOB_TYPES } from "./jobHandlers";
 import type { WorkerLane } from "./worker";
+import { SUBTITLE_ANALYSIS_JOB_TYPE } from "../subtitles/subtitleAnalysis";
 
 /**
  * Which half of the queue a worker process takes.
@@ -38,7 +39,62 @@ export const HEAVY_JOB_TYPES: readonly string[] = [
   ...Object.values(ACQUISITION_JOB_TYPES),
   ...Object.values(IMPORT_JOB_TYPES),
   GARBAGE_JOB_TYPES.collect,
+  SUBTITLE_ANALYSIS_JOB_TYPE,
 ];
+
+/**
+ * Speech recognition for subtitle timing: minutes of a GPU per episode.
+ *
+ * Its own lane at one job at a time, so two transcriptions never hold two
+ * models in the laptop's eight gigabytes of video memory, and a backlog of
+ * them never waits behind (or holds up) the downloads lane.
+ */
+export const ANALYSIS_LANE_JOB_TYPES: readonly string[] = [
+  SUBTITLE_ANALYSIS_JOB_TYPE,
+];
+
+/** Work that can hold a worker for hours: an encode, a trickplay sheet. */
+export const LONG_JOB_TYPES: readonly string[] = [
+  ...MEDIA_LANE_JOB_TYPES,
+  ...TRICKPLAY_LANE_JOB_TYPES,
+];
+
+/**
+ * Work only the process that owns the encoder can do, because it goes through
+ * that process's enqueuer and scratch: queueing imported files for processing,
+ * and collecting the scratch the encoder leaves behind.
+ */
+const ENCODER_OWNED_JOB_TYPES: readonly string[] = [
+  IMPORT_JOB_TYPES.process,
+  GARBAGE_JOB_TYPES.collect,
+];
+
+/**
+ * A bridge worker's lanes (`releaseBridge.ts`): the role's lanes without the
+ * long work and without what only the encoder's owner may run. A bridge starts
+ * while the old release still holds an encode, so it must never claim one, and
+ * it owns no encoder to queue through.
+ */
+function bridgeLanes(lanes: readonly WorkerLane[]): WorkerLane[] {
+  // Transcription holds the GPU the old release's encode is using.
+  const left = new Set([
+    ...LONG_JOB_TYPES,
+    ...ENCODER_OWNED_JOB_TYPES,
+    ...ANALYSIS_LANE_JOB_TYPES,
+  ]);
+  return lanes.flatMap((lane): WorkerLane[] => {
+    if (lane.jobTypes) {
+      const jobTypes = lane.jobTypes.filter((type) => !left.has(type));
+      return jobTypes.length > 0 ? [{ ...lane, jobTypes }] : [];
+    }
+    return [
+      {
+        ...lane,
+        excludeJobTypes: [...(lane.excludeJobTypes ?? []), ...left],
+      },
+    ];
+  });
+}
 
 export function parseWorkerRole(value: string | undefined): WorkerRole {
   const role = value?.trim().toLowerCase() || "all";
@@ -59,6 +115,15 @@ export function ownsLibrary(runWorker: boolean, role: WorkerRole): boolean {
 export function workerLanes(
   role: WorkerRole,
   disabledJobTypes: readonly string[],
+  { bridge = false }: { bridge?: boolean } = {},
+): WorkerLane[] {
+  const lanes = roleLanes(role, disabledJobTypes);
+  return bridge ? bridgeLanes(lanes) : lanes;
+}
+
+function roleLanes(
+  role: WorkerRole,
+  disabledJobTypes: readonly string[],
 ): WorkerLane[] {
   const mediaLane: WorkerLane = {
     name: "media",
@@ -70,14 +135,24 @@ export function workerLanes(
     jobTypes: [...TRICKPLAY_LANE_JOB_TYPES],
     concurrency: 1,
   };
+  const analysisTypes = ANALYSIS_LANE_JOB_TYPES.filter(
+    (type) => !disabledJobTypes.includes(type),
+  );
+  const analysisLane: WorkerLane[] =
+    analysisTypes.length > 0
+      ? [{ name: "analysis", jobTypes: analysisTypes, concurrency: 1 }]
+      : [];
   if (role === "heavy") {
     const laned = new Set([
       ...MEDIA_LANE_JOB_TYPES,
       ...TRICKPLAY_LANE_JOB_TYPES,
+      ...ANALYSIS_LANE_JOB_TYPES,
+      ...disabledJobTypes,
     ]);
     return [
       mediaLane,
       trickplayLane,
+      ...analysisLane,
       {
         name: "downloads",
         jobTypes: HEAVY_JOB_TYPES.filter((type) => !laned.has(type)),
@@ -97,11 +172,13 @@ export function workerLanes(
   return [
     mediaLane,
     trickplayLane,
+    ...analysisLane,
     {
       name: "library",
       excludeJobTypes: [
         ...MEDIA_LANE_JOB_TYPES,
         ...TRICKPLAY_LANE_JOB_TYPES,
+        ...ANALYSIS_LANE_JOB_TYPES,
         ...disabledJobTypes,
       ],
       concurrency: 3,

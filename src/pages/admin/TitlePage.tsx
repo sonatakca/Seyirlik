@@ -481,6 +481,7 @@ export function TitlePage() {
               onTrickplay: (id) => void actions.trickplay(id),
               onUploadSubtitle: (id, file) =>
                 void actions.uploadSubtitle(id, file, uploadPolicy),
+              onSynced: load,
               onSearchMissing: (season) =>
                 void actions.searchMissing(detail.id, season),
               searchingMissing,

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createDiskutilIdentityProbe,
   describeMedium,
+  isUncNetworkPath,
   parseDfDevice,
   parseDiskutilPlist,
   requiresOperatorAfterUncleanRestart,
@@ -783,5 +784,22 @@ describe("the keys current macOS actually emits", () => {
     ).toBe("/dev/disk4s1");
     expect(parseDfDevice("Filesystem 512-blocks Mounted on\n")).toBeNull();
     expect(parseDfDevice("")).toBeNull();
+  });
+});
+
+describe("isUncNetworkPath", () => {
+  it("recognises the Drive mount as the Windows hosts see it", () => {
+    expect(
+      isUncNetworkPath(
+        "\\\\seyirlik\\drive\\media\\Series\\House of the Dragon\\Season 2\\src\\House of the Dragon - S02E04.mkv",
+      ),
+    ).toBe(true);
+    expect(isUncNetworkPath("\\\\?\\UNC\\seyirlik\\drive\\media")).toBe(true);
+  });
+
+  it("does not mistake local paths for shares", () => {
+    expect(isUncNetworkPath("D:\\media\\film.mkv")).toBe(false);
+    expect(isUncNetworkPath("\\\\?\\D:\\media\\film.mkv")).toBe(false);
+    expect(isUncNetworkPath("/Volumes/Expansion/film.mkv")).toBe(false);
   });
 });

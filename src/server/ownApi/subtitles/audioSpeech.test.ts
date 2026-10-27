@@ -1,11 +1,17 @@
+import { rm } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   buildAudioEnvelopeArgs,
   envelopeThreshold,
   parseAudioEnvelope,
+  readAudioEnvelope,
   speechIntervalsFromEnvelope,
   type EnvelopeSample,
 } from "./audioSpeech";
+import {
+  ffmpegAvailable,
+  writeSpacedAudioPackage,
+} from "./packagedAudioTestFixture";
 
 /** Exactly what FFmpeg's `ametadata` printer writes, two lines per window. */
 const envelopeText = (levels: readonly (number | "-inf")[]): string =>
@@ -117,3 +123,50 @@ describe("speechIntervalsFromEnvelope", () => {
     expect(speechIntervalsFromEnvelope([])).toEqual([]);
   });
 });
+
+/*
+ * A kept original track is named `english (original)`, and the package
+ * playlist percent-encodes the space for browsers. FFmpeg read the `%20`
+ * literally and could not open the track at all.
+ */
+describe.skipIf(!ffmpegAvailable)(
+  "reading a packaged track whose name has a space in it",
+  { timeout: 60_000 },
+  () => {
+    const subtitle = Array.from(
+      { length: 30 },
+      (_, index) =>
+        `${index + 1}\n00:${String(Math.floor((10 + index * 5) / 60)).padStart(2, "0")}:${String((10 + index * 5) % 60).padStart(2, "0")},000 --> 00:${String(Math.floor((12 + index * 5) / 60)).padStart(2, "0")}:${String((12 + index * 5) % 60).padStart(2, "0")},000\nLine.`,
+    ).join("\n\n");
+
+    it("hears every line through a decoded copy of the playlist", async () => {
+      const pkg = await writeSpacedAudioPackage(subtitle);
+      try {
+        const envelope = await readAudioEnvelope({
+          ffmpegPath: "ffmpeg",
+          inputPath: pkg.playlistPath,
+          streamIndex: 0,
+          isPackagePlaylist: true,
+        });
+        expect(speechIntervalsFromEnvelope(envelope)).toHaveLength(30);
+      } finally {
+        await rm(pkg.root, { recursive: true, force: true });
+      }
+    });
+
+    it("cannot open the package's own playlist as it is written", async () => {
+      const pkg = await writeSpacedAudioPackage(subtitle);
+      try {
+        await expect(
+          readAudioEnvelope({
+            ffmpegPath: "ffmpeg",
+            inputPath: pkg.playlistPath,
+            streamIndex: 0,
+          }),
+        ).rejects.toThrow();
+      } finally {
+        await rm(pkg.root, { recursive: true, force: true });
+      }
+    });
+  },
+);

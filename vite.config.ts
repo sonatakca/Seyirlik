@@ -4,11 +4,15 @@ import { loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { FLAG_COUNTRY_CODES } from "./src/lib/flagCountryCodes";
 import {
   BUILD_META_NAME,
   describeBuild,
+  parseReleaseNote,
+  RELEASE_NOTE_FILE,
   type BuildInfo,
+  type ReleaseNote,
 } from "./src/lib/appVersion/buildInfo";
 
 // flag-icons ships every flag in the world: ~270 CSS rules pulling ~3.5 MB of
@@ -72,6 +76,16 @@ function gitOutput(args: string[]): string | null {
   }
 }
 
+// A missing or unusable note leaves the build without one rather than failing
+// it; `deploy/ship.sh` is what insists on a note before a release goes out.
+function readReleaseNote(): ReleaseNote | null {
+  try {
+    return parseReleaseNote(readFileSync(RELEASE_NOTE_FILE, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 function readBuildInfo(): BuildInfo {
   // Named outright when the build runs from a `git archive` copy, which is how
   // www and origin are built; such a copy is the commit, so it is never dirty.
@@ -86,6 +100,7 @@ function readBuildInfo(): BuildInfo {
     commit: commit || null,
     dirty: Boolean(changes),
     builtAt: new Date(),
+    note: readReleaseNote(),
   });
 }
 

@@ -42,19 +42,46 @@ export function isHdrTransfer(colorTransfer: string | null): boolean {
   return colorTransfer !== null && HDR_TRANSFERS.has(colorTransfer);
 }
 
+/**
+ * How far before the paused time decoding starts. Longer than any frame lasts
+ * in a film or episode, so the frame on screen is always among those decoded.
+ */
+const FRAME_LOOKBACK_SECONDS = 0.5;
+
+/**
+ * Within this of a frame's start counts as on it: the player's paused time is
+ * a double, and a frame-exact time can come back a hair under the frame.
+ */
+const FRAME_TIME_TOLERANCE_SECONDS = 0.001;
+
+/**
+ * The time asked for is the on-screen frame's own timestamp where the browser
+ * reports it, else the player's time, and either way the frame wanted is the
+ * last one that began at or before it. An input seek gives the opposite — the
+ * first frame at or after it — which is the next frame whenever the time lands
+ * between two, and so a different shot at a cut (Arcane S01E07, 35:10). So
+ * decode from a little before, keep the frames up to that time, and take the
+ * last of them.
+ */
 export function buildFrameCaptureArgs(
   inputPath: string,
   atSeconds: number,
   options: { toneMap: boolean },
 ): string[] {
+  const seekTo = (
+    atSeconds - Math.min(FRAME_LOOKBACK_SECONDS, atSeconds)
+  ).toFixed(3);
+  // Measured from the seek as written, so its rounding cannot move the cut.
+  const lookback = atSeconds - Number(seekTo);
   return [
     "-v",
     "error",
     "-nostdin",
-    // An input seek, so FFmpeg jumps to the keyframe before `at` and decodes
-    // forward to the exact frame rather than reading the film from the start.
+    // An input seek, so FFmpeg jumps to the keyframe before it and decodes
+    // forward rather than reading the film from the start. Timestamps after
+    // it count from the seek point, so the paused time is `lookback`.
     "-ss",
-    atSeconds.toFixed(3),
+    seekTo,
     "-i",
     inputPath,
     // `V`, not `v`: skips cover art and thumbnails muxed in as video streams.
@@ -63,7 +90,13 @@ export function buildFrameCaptureArgs(
     "-frames:v",
     "1",
     "-vf",
-    options.toneMap ? HDR_TO_SDR : SDR,
+    [
+      // Ends the stream after the last frame that began by the paused time;
+      // `reverse` then hands that frame over first, and only it is converted.
+      `trim=end=${(lookback + FRAME_TIME_TOLERANCE_SECONDS).toFixed(6)}`,
+      "reverse",
+      options.toneMap ? HDR_TO_SDR : SDR,
+    ].join(","),
     "-c:v",
     "png",
     "-f",

@@ -740,7 +740,12 @@ async function scanMovieDirectory(
   } else if (!isLibraryRoot && (await hasCompleteTitlePackage(fs, directory))) {
     const displayName = directory.split("/").pop() ?? directory;
     result.items.push({
-      ...buildMovieItem(directory, displayName, [], []),
+      ...buildMovieItem(
+        directory,
+        displayName,
+        [],
+        matchSubtitles(contents.subtitleFiles, displayName),
+      ),
       renditionBacked: true,
       packageDirectory: directory,
     });
@@ -908,7 +913,7 @@ async function scanEpisodeFiles(
       parentSourceKey: season.sourceKey,
       seriesSourceKey: context.seriesKey,
       files: [],
-      subtitles: [],
+      subtitles: matchSubtitles(contents.subtitleFiles, child),
       renditionBacked: true,
       packageDirectory: childPath,
     });

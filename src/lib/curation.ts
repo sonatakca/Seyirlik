@@ -146,3 +146,20 @@ export function buildHomeCarouselPool(items: MediaItem[]): MediaItem[] {
     .sort((left, right) => right.score - left.score || left.index - right.index)
     .map(({ item }) => item);
 }
+
+/**
+ * A partial Latest page may omit the saved opener. Keep the loading state
+ * until that title arrives, or the full catalogue proves it is unavailable.
+ */
+export function canOpenHomeCarousel(
+  items: MediaItem[],
+  list: CuratedList | null,
+  catalogueLoaded: boolean,
+): boolean {
+  const firstVisibleId = list?.entries.find((entry) => !entry.hidden)?.itemId;
+  return (
+    catalogueLoaded ||
+    !firstVisibleId ||
+    items.some((item) => item.Id === firstVisibleId)
+  );
+}

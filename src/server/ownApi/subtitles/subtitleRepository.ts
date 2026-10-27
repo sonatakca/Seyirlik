@@ -93,6 +93,16 @@ export interface RecordRetimingInput {
   readonly sha256: string;
   readonly sizeBytes: number;
   readonly cueCount: number | null;
+  /**
+   * What the rewrite says about the file's timing. A correction placed every
+   * cue: assumed in sync. A partial one, or bytes put back from a revision:
+   * unknown. Defaults to assumed in sync, which is what a retiming meant
+   * before corrections could be partial.
+   */
+  readonly syncState?: Extract<
+    SubtitleSyncState,
+    "assumed-in-sync" | "unknown"
+  >;
 }
 
 /** Raised when a conditional write matched no row. */
@@ -483,13 +493,13 @@ export function createSubtitleRepository(
         `INSERT INTO subtitle_installations
            (id, media_file_id, relative_path, language, forced,
             hearing_impaired, format, sha256, size_bytes, cue_count, sync_state)
-         VALUES ($1, $2, $3, $4, $5, false, $6, $7, $8, $9, 'assumed-in-sync')
+         VALUES ($1, $2, $3, $4, $5, false, $6, $7, $8, $9, $10)
          ON CONFLICT (media_file_id, relative_path) DO UPDATE
            SET sha256 = EXCLUDED.sha256,
                size_bytes = EXCLUDED.size_bytes,
                cue_count = EXCLUDED.cue_count,
                format = EXCLUDED.format,
-               sync_state = 'assumed-in-sync',
+               sync_state = EXCLUDED.sync_state,
                updated_at = now()`,
         [
           randomUUID(),
@@ -501,6 +511,7 @@ export function createSubtitleRepository(
           input.sha256,
           input.sizeBytes,
           input.cueCount,
+          input.syncState ?? "assumed-in-sync",
         ],
       );
     },

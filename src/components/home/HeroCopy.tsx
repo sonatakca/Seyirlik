@@ -37,6 +37,7 @@ import {
   COPY_ROWS,
   HERO_MOTION,
   heroDock,
+  queueSlots,
   type HeroLayout,
   type StageSize,
 } from "./homeHeroModel";
@@ -198,7 +199,12 @@ export function HeroCopyBlock({
         <div
           ref={dockRef}
           className="absolute z-[6]"
-          style={{ left: dock.left, bottom: dock.bottom, width: dock.width }}
+          style={{
+            left: dock.left,
+            top: withQueue ? queueSlots(stage)[0]?.y : undefined,
+            bottom: withQueue ? undefined : dock.bottom,
+            width: dock.width,
+          }}
         >
           <AnimatePresence mode="wait">
             {item ? (

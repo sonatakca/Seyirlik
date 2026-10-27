@@ -43,7 +43,7 @@ export function AppUpdateButton({ variant = "desktop" }: AppUpdateButtonProps) {
           transition={{ type: "spring", bounce: 0, duration: 0.3 }}
         >
           <Tooltip
-            content={`${t("appUpdate.tooltip")} (${formatBuildLabel(update.latest, language)})`}
+            content={`${t("appUpdate.tooltip")} (${update.latest.note ? `${update.latest.note[language]} · ` : ""}${formatBuildLabel(update.latest, language)})`}
           >
             <button
               type="button"

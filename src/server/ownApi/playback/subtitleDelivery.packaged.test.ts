@@ -49,6 +49,22 @@ describe("subtitles a package carries", () => {
     expect(streams.find((s) => s.streamIndex === 1)?.kind).toBe("audio");
   });
 
+  it("never replaces an edited sidecar with its stale packaged copy", () => {
+    expect(
+      packagedSubtitleFor(
+        [
+          {
+            ...row(10000, "subtitle", "tur"),
+            isExternal: true,
+            externalRelativePath: "Film.tr.srt",
+          },
+        ],
+        [packaged(10000, "tur")],
+        10000,
+      ),
+    ).toBeNull();
+  });
+
   it("serves the package copy only when it is that track", () => {
     const streams = [row(1, "audio"), row(2, "subtitle", "eng")];
     const all = [packaged(1), packaged(2, "eng"), packaged(4, "tur")];

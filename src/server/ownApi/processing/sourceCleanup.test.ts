@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { TitlePackageManifest } from "../../../renditions/adaptive/publishTitle";
+import { ADAPTIVE_PROFILE_VERSION } from "../../../renditions/adaptive/profile";
+import {
+  createEmptyRenditionRegistry,
+  type RenditionRegistryItem,
+} from "../../../renditions/registry";
 import { OwnApiError } from "../ownApiHandler";
 import type { RcRemoteFile } from "./driveUpload";
 import type { StoredDriveUpload } from "./driveUploadStatus";
@@ -17,6 +22,8 @@ import {
 const FINGERPRINT = "fingerprint-1";
 const MEDIA = "pretend 1080p rendition";
 const AUDIO = "pretend audio";
+const SOURCE_RELATIVE =
+  "Series/The Sopranos/Season 3/The Sopranos - S03E08.mkv";
 
 /**
  * A mount holding one episode's published package, laid out as the helper
@@ -223,6 +230,8 @@ describe("removing the source after upload", () => {
       gaps?: string[] | Error;
       mayDelete?: boolean;
       removal?: "deleted" | "absent" | OwnApiError | Error;
+      /** The registry entry playback would use; null when there is none. */
+      entry?: Partial<RenditionRegistryItem> | null;
     } = {},
   ) {
     const f = await fixture();
@@ -270,11 +279,41 @@ describe("removing the source after upload", () => {
       } as unknown as Parameters<typeof createSourceCleanup>[0]["jobs"],
       enqueuer: {
         locateSource: async () =>
-          ({ file: { id: "file-1" }, absolutePath: f.sourcePath }) as never,
+          ({
+            file: {
+              id: "file-1",
+              relativePath: SOURCE_RELATIVE,
+              sizeBytes: "6000000000",
+              mtimeMs: "1760000000000",
+            },
+            absolutePath: f.sourcePath,
+          }) as never,
         titleRootFor: async () => f.titleRoot,
         removeSource: removeSource as never,
       },
       store,
+      registry: {
+        read: async () => ({
+          ...createEmptyRenditionRegistry(),
+          items:
+            over.entry === null
+              ? []
+              : [
+                  {
+                    id: "11111111-1111-4111-8111-111111111111",
+                    relativePath: SOURCE_RELATIVE,
+                    size: 6_000_000_000,
+                    mtimeMs: 1_760_000_000_000,
+                    sourceFingerprint: FINGERPRINT,
+                    profileVersion: "legacy",
+                    lastSeenAt: "2026-10-20T00:00:00.000Z",
+                    adaptiveStatus: "ready",
+                    adaptiveProfileVersion: ADAPTIVE_PROFILE_VERSION,
+                    ...over.entry,
+                  },
+                ],
+        }),
+      },
       verifyOnDrive,
       mayDelete: () => over.mayDelete ?? true,
       now: () => 42,
@@ -392,6 +431,42 @@ describe("removing the source after upload", () => {
     expect(h.recorded).toEqual([]);
     expect(h.log).toHaveBeenCalledWith(expect.stringContaining("EIO"));
   });
+
+  /*
+   * Lilyhammer S01E01, 2026-10-20: the package reached Drive, the registry
+   * save did not, and the source was removed. Playback then had nothing.
+   */
+  it.each([
+    ["has no registry entry", null, "has no entry"],
+    ["has an entry at another size", { size: 1 }, "has no entry"],
+    [
+      "has an entry that is not ready",
+      { adaptiveStatus: "pending" as const },
+      "is pending",
+    ],
+    [
+      "has an entry at an older profile",
+      { adaptiveProfileVersion: "cmaf-hls-aligned-v1" },
+      "at cmaf-hls-aligned-v1",
+    ],
+    [
+      "has an entry for other source bytes",
+      { sourceFingerprint: "fingerprint-2" },
+      "describes other source bytes",
+    ],
+  ])(
+    "keeps it, undecided, while playback %s",
+    async (_label, entry, reason) => {
+      const h = await harness({ entry });
+      await h.cleanup.afterUpload(JOB, uploaded);
+      expect(h.removeSource).not.toHaveBeenCalled();
+      expect(h.recorded).toEqual([]);
+      expect(h.log).toHaveBeenCalledWith(
+        expect.stringContaining("Playback cannot find this package yet"),
+      );
+      expect(h.log).toHaveBeenCalledWith(expect.stringContaining(reason));
+    },
+  );
 
   it("records an already-absent source as such", async () => {
     const h = await harness({ removal: "absent" });

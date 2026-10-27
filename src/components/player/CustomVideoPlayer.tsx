@@ -31,6 +31,7 @@ import type {
   QualityPreferenceMode,
 } from "../../renditions/contracts";
 import { getCachedSession } from "../../lib/authStorage";
+import { useShowPlaybackDetails } from "../../lib/playbackDetailsVisibility";
 import {
   formatTemplate,
   getDisplayTitle,
@@ -167,10 +168,12 @@ import {
   type VideoFit,
 } from "./useVideoFit";
 import { usePartyEventToast } from "./usePartyEventToast";
+import { FrameCaptureToast } from "./FrameCaptureToast";
 import { QualityChangeToast } from "./QualityChangeToast";
 import { useQualityChangeToast } from "./useQualityChangeToast";
 import { formatQualityHeight, type PlayingQuality } from "./qualityToastModel";
 import { useMediaSessionControls } from "./useMediaSessionControls";
+import { watchSubtitleText } from "./watchSubtitleText";
 import { useSubtitleEditor } from "./useSubtitleEditor";
 import { useTouchSeek } from "./useTouchSeek";
 import {
@@ -427,7 +430,14 @@ export function CustomVideoPlayer({
       ? getDisplayTitle(item, mediaFormatLabels)
       : (itemMetadata.title ?? getDisplayTitle(item, mediaFormatLabels));
 
+  const showPlaybackDetails = useShowPlaybackDetails();
   const [isPlaybackInfoOpen, setIsPlaybackInfoOpen] = useState(false);
+
+  // Hidden from the administration menu while open (another tab): close it, so
+  // the controls are not held for a panel nobody can see.
+  useEffect(() => {
+    if (!showPlaybackDetails) setIsPlaybackInfoOpen(false);
+  }, [showPlaybackDetails]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isQueueOpen, setIsQueueOpen] = useState(false);
   const [isPartyWatchOpen, setIsPartyWatchOpen] = useState(false);
@@ -3478,12 +3488,16 @@ export function CustomVideoPlayer({
     [revealPlayerChrome],
   );
 
-  const { frameNotice, isSavingFrame, handleSaveFrame } = useFrameCapture({
+  const {
+    capture: frameCapture,
+    leaving: isFrameCaptureLeaving,
+    isSavingFrame,
+    handleSaveFrame,
+  } = useFrameCapture({
     videoRef,
     playSessionId: activeSource.playSessionId,
     itemName: item.Name,
     revealPlayerChrome,
-    t,
   });
 
   useEffect(() => {
@@ -4729,7 +4743,6 @@ export function CustomVideoPlayer({
       return undefined;
     }
 
-    const abortController = new AbortController();
     const subtitleUrl = activeSource.offline
       ? offlineSubtitleUrl(activeSource.itemId, selectedSubtitleStreamIndex)
       : buildSubtitleStreamUrl(
@@ -4737,37 +4750,14 @@ export function CustomVideoPlayer({
           selectedSubtitleStreamIndex,
         );
 
-    const loadSubtitleCues = async () => {
-      try {
-        const response = await fetch(subtitleUrl, {
-          credentials: "include",
-          signal: abortController.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error(`Subtitle request failed with ${response.status}`);
-        }
-
-        const subtitleText = await response.text();
-
-        if (!abortController.signal.aborted) {
-          setSubtitleCues(parseSubtitleCues(subtitleText));
-        }
-      } catch (subtitleError) {
-        if (!abortController.signal.aborted) {
-          console.warn(
-            "[Seyirlik Subtitles] Could not load subtitle stream",
-            subtitleError,
-          );
-        }
-      }
-    };
-
-    void loadSubtitleCues();
-
-    return () => {
-      abortController.abort();
-    };
+    return watchSubtitleText({
+      url: subtitleUrl,
+      refresh: !activeSource.offline && subtitleStream.IsExternal === true,
+      onText: (text) => setSubtitleCues(parseSubtitleCues(text)),
+      onError: (error) => console.warn(
+        "[Seyirlik Subtitles] Could not load subtitle stream", error,
+      ),
+    });
   }, [
     activeSource.itemId,
     activeSource.mediaSource,
@@ -5580,7 +5570,7 @@ export function CustomVideoPlayer({
             isPlaying={progress.isPlaying}
             isPlayPausePending={partyWatch.isStartPending}
             isPlayPauseLoading={isCenterPlayPauseLoading}
-            notice={frameNotice ?? notice}
+            notice={notice}
             onTogglePlay={partyWatch.togglePlay}
             onControlsHoverStart={keepControlsVisible}
             onControlsHoverEnd={releaseControlsHover}
@@ -5591,13 +5581,15 @@ export function CustomVideoPlayer({
                 data-party-watch-root
               >
                 <div className="seyirlik-player-top-actions-row flex items-center gap-2">
-                  <PlaybackInfoButton
-                    source={sourceWithLiveTranscodingReasons}
-                    onClick={() => {
-                      setIsPlaybackInfoOpen(true);
-                      setIsQueueOpen(false);
-                    }}
-                  />
+                  {showPlaybackDetails ? (
+                    <PlaybackInfoButton
+                      source={sourceWithLiveTranscodingReasons}
+                      onClick={() => {
+                        setIsPlaybackInfoOpen(true);
+                        setIsQueueOpen(false);
+                      }}
+                    />
+                  ) : null}
 
                   <Tooltip
                     content={t("player.enterViewMode")}
@@ -5864,6 +5856,17 @@ export function CustomVideoPlayer({
         </div>
       ) : null}
 
+      {frameCapture ? (
+        <FrameCaptureToast
+          capture={frameCapture}
+          leaving={isFrameCaptureLeaving}
+          onRetry={() => {
+            void handleSaveFrame();
+          }}
+          t={t}
+        />
+      ) : null}
+
       {shownQualityChange ? (
         <QualityChangeToast
           change={shownQualityChange.change}
@@ -5873,7 +5876,7 @@ export function CustomVideoPlayer({
         />
       ) : null}
 
-      {!isViewModeEnabled && isPlaybackInfoOpen ? (
+      {!isViewModeEnabled && showPlaybackDetails && isPlaybackInfoOpen ? (
         <PlaybackInfoPanel
           source={sourceWithLiveTranscodingReasons}
           videoError={lastVideoError}

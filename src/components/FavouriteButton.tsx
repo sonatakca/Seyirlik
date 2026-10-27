@@ -2,6 +2,8 @@ import type { CSSProperties, MouseEvent } from "react";
 import { useLanguage } from "../i18n/LanguageContext";
 import { useFavouriteState } from "../hooks/useFavouriteState";
 import type { MediaItem } from "../lib/types";
+import { AnimatedText } from "./AnimatedText";
+import { AnimatedWidth } from "./AnimatedWidth";
 import { ListToggleIcon } from "./ui/ListToggleIcon";
 import { Tooltip } from "./ui/Tooltip";
 
@@ -59,7 +61,11 @@ export function FavouriteButton({
           size={iconSize}
           className={`transition-opacity duration-200 ${isSaving ? "opacity-60" : "opacity-100"}`}
         />
-        {showLabel ? <span>{shortLabel ?? label}</span> : null}
+        {showLabel ? (
+          <AnimatedWidth value={shortLabel ?? label}>
+            <AnimatedText value={shortLabel ?? label} />
+          </AnimatedWidth>
+        ) : null}
       </button>
     </Tooltip>
   );

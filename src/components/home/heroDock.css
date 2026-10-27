@@ -141,7 +141,9 @@
 .hero-dock-action svg {
   flex-shrink: 0;
 }
-.hero-dock-action span {
+/* An animated label is left alone: its outgoing words overflow it while they
+   leave, and a clip here would cut them. */
+.hero-dock-action span:not([data-label], [data-label] *) {
   overflow: hidden;
   text-overflow: ellipsis;
 }

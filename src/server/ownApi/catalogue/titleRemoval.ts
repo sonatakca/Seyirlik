@@ -30,8 +30,8 @@ import { withTransaction } from "../database/transaction";
 import { resolveTitleRoot } from "../metadata/titleRoot";
 import { isPathInsideRoot } from "../../pathSecurity";
 import {
-  loadRenditionRegistry,
-  saveRenditionRegistry,
+  createFileRenditionRegistryStore,
+  type RenditionRegistryStore,
 } from "../../../renditions/registry";
 
 export const REMOVAL_STAGING_PREFIX = ".seyirlik-removing-";
@@ -73,6 +73,8 @@ export interface TitleRemovalDependencies {
   mediaRoot: string;
   renditionRoot: string;
   stateRoot: string;
+  /** Where the registry is kept; `<stateRoot>/registry.json` when omitted. */
+  registry?: RenditionRegistryStore;
   /** Cancels a download and deletes what it fetched. Absent when no client is configured. */
   cancelAcquisition?: (acquisitionId: string) => Promise<void>;
   /** Removes cached artwork that does not live in the title's own folder. */
@@ -198,19 +200,32 @@ export function createTitleRemoval(dependencies: TitleRemovalDependencies) {
     return foreign.rows.length ? undefined : folder;
   }
 
+  const registryStore =
+    dependencies.registry ??
+    createFileRenditionRegistryStore(
+      path.join(dependencies.stateRoot, "registry.json"),
+    );
+
   async function pruneRegistry(folder: string | null, files: string[]) {
-    const registryPath = path.join(dependencies.stateRoot, "registry.json");
     const prefix = folder ? `${comparable(folder)}/` : null;
     const exact = new Set(files.map(comparable));
-    const registry = await loadRenditionRegistry(registryPath);
-    const removed = registry.items.filter((entry) => {
-      const relative = comparable(entry.relativePath);
-      return exact.has(relative) || (prefix && relative.startsWith(prefix));
+    const matches = (relativePath: string) => {
+      const relative = comparable(relativePath);
+      return (
+        exact.has(relative) || Boolean(prefix && relative.startsWith(prefix))
+      );
+    };
+    const current = await registryStore.read();
+    if (!current.items.some((entry) => matches(entry.relativePath))) return [];
+    return registryStore.update((registry) => {
+      const removed = registry.items.filter((entry) =>
+        matches(entry.relativePath),
+      );
+      registry.items = registry.items.filter(
+        (entry) => !removed.includes(entry),
+      );
+      return removed.map((entry) => entry.id);
     });
-    if (removed.length === 0) return [];
-    registry.items = registry.items.filter((entry) => !removed.includes(entry));
-    await saveRenditionRegistry(registryPath, registry);
-    return removed.map((entry) => entry.id);
   }
 
   async function libraryRoots(): Promise<string[]> {
@@ -538,18 +553,15 @@ export function createTitleRemoval(dependencies: TitleRemovalDependencies) {
             else report.leftovers.push(path.relative(mediaRoot, staged));
           }
           try {
-            // Best effort: an encode running for another title rewrites the
-            // registry from its own copy and may restore these records, which is
-            // harmless — nothing in the catalogue points at them any more.
+            // Best effort: the files are already gone, and a record left
+            // behind points at nothing the catalogue still lists.
             for (const id of await pruneRegistry(folder, filePaths)) {
               if (!/^[0-9a-f-]{36}$/i.test(id)) continue;
               const legacy = path.join(dependencies.renditionRoot, id);
               if (!(await removeTree(legacy))) report.leftovers.push(legacy);
             }
           } catch {
-            report.leftovers.push(
-              path.join(dependencies.stateRoot, "registry.json"),
-            );
+            report.leftovers.push("rendition registry");
           }
           // Other titles' interrupted removals; a failure here is not this one's.
           report.leftovers.push(

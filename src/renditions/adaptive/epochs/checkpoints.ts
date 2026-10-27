@@ -136,6 +136,12 @@ export interface AuxiliaryStageManifest {
    * healthy stage must not be reused once one has been found.
    */
   damagedIntervals?: SourceInterval[];
+  /**
+   * Where the audio was cut to end with the video, if it was. Part of the
+   * identity too: audio that runs to the container's end must be rebuilt once
+   * the video end is known.
+   */
+  endSeconds?: number;
   totalBytes: number;
   completedAt: string;
 }

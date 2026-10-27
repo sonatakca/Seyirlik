@@ -129,7 +129,7 @@ export function unknownIdentity(
  * reading the leading pair of slashes as "network" would misclassify every long
  * local path on the machine.
  */
-function isUncNetworkPath(candidate: string): boolean {
+export function isUncNetworkPath(candidate: string): boolean {
   const normalized = candidate.replace(/\//g, "\\");
   if (!normalized.startsWith("\\\\")) return false;
   const rest = normalized.slice(2);

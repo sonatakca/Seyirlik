@@ -25,6 +25,7 @@ import {
   BookmarkCheck,
   Download,
   ExternalLink,
+  Headphones,
   ListTree,
   MoreHorizontal,
   Search,
@@ -126,6 +127,18 @@ import {
 } from "../lib/bookPositionApi";
 import type { BookSearchFound, BookSearchHit } from "../lib/bookSearchApi";
 import { epubBlockText } from "../lib/epubBlocks";
+import {
+  getBookNarration,
+  getNarrationAudioUrl,
+  getNarrationTimings,
+  removeBookNarration,
+  requestBookNarration,
+  type BookNarration,
+} from "../lib/bookNarrationApi";
+import { getCachedSession } from "../lib/authStorage";
+import { ReaderNarrationControl } from "./reader/ReaderNarration";
+import { ReadAlong } from "./reader/readAlong";
+import { ReaderVoice } from "./reader/ReaderVoice";
 import { findOnPage, markFoundWords } from "./reader/searchMarks";
 import { shimmerPassage } from "./reader/searchShimmer";
 import {
@@ -136,10 +149,17 @@ import {
   type BookMap,
 } from "./reader/readingLight";
 
-/** The reading light the settings ask for: its floor, its shape and its reach. */
-function lightFromSettings(light: ReadingLight, settings: ReaderSettings) {
+/**
+ * The reading light the settings ask for: its floor, its shape and its reach.
+ * While the voice reads it carries the light, and the reader's is put out.
+ */
+function lightFromSettings(
+  light: ReadingLight,
+  settings: ReaderSettings,
+  voice = false,
+) {
   light.setLight(
-    SPOTLIGHT_FLOOR[settings.spotlight],
+    voice ? 1 : SPOTLIGHT_FLOOR[settings.spotlight],
     settings.lightShape,
     settings.lightShape === "line"
       ? settings.lineReach
@@ -548,6 +568,9 @@ function listenForTaps(
   };
 }
 
+/** The page around the voice rests at the reader's dimmed ink, or at this when the light is off. */
+const VOICE_PAGE_INK = 0.36;
+
 function isEditableTarget(target: EventTarget | null): boolean {
   return (
     target instanceof HTMLElement &&
@@ -600,6 +623,19 @@ export function BookReaderPage() {
   /** Makes this copy keep the place again, at the latest place; true if it does. */
   const continueHereRef = useRef<() => Promise<boolean>>(async () => false);
   const [textContent, setTextContent] = useState<string | null>(null);
+  /** The book's narration, when it has one, and the voice reading it. */
+  const [narration, setNarration] = useState<BookNarration | null>(null);
+  const [readAlong, setReadAlong] = useState<ReadAlong | null>(null);
+  const [voiceEngaged, setVoiceEngaged] = useState(false);
+  const readAlongRef = useRef<ReadAlong | null>(null);
+  /** The narration as last fetched, for the voice to find its sections' files. */
+  const narrationRef = useRef<BookNarration | null>(null);
+  const [narrationBusy, setNarrationBusy] = useState(false);
+  const [narrationFailed, setNarrationFailed] = useState(false);
+  const voiceEngagedRef = useRef(false);
+  /** Starts the voice at the reading line; set while a book is open. */
+  const startVoiceRef = useRef<() => void>(() => undefined);
+  const voiceMetadataRef = useRef({ title: "", artist: "", artwork: "" });
   const [scrollProgress, setScrollProgress] = useState(0);
   // The book on the opening screen: about a quarter of the screen's height,
   // large enough to read as a book in the hand, never a poster.
@@ -651,6 +687,7 @@ export function BookReaderPage() {
 
   useLayoutEffect(() => {
     settingsRef.current = settings;
+    voiceEngagedRef.current = voiceEngaged;
     panelRef.current = panel;
     languageRef.current = language;
     highlightTargetRef.current = highlightTarget;
@@ -842,7 +879,29 @@ export function BookReaderPage() {
     setTextContent(null);
     setScrollProgress(0);
     setHighlightTarget(null);
+    setNarration(null);
   }, [activeItemId]);
+
+  useEffect(() => {
+    if (format !== "epub" || !activeItemId) {
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    getBookNarration(activeItemId, { signal: controller.signal })
+      .then(setNarration)
+      // No narration to be had now is the same as none: the book reads as always.
+      .catch(() => setNarration(null));
+    return () => controller.abort();
+  }, [activeItemId, format]);
+
+  useEffect(() => {
+    voiceMetadataRef.current = {
+      title,
+      artist: bookMeta.author,
+      artwork: coverUrl,
+    };
+  });
 
   /* ---------------- EPUB ---------------- */
   useEffect(() => {
@@ -958,6 +1017,63 @@ export function BookReaderPage() {
     renditionRef.current = rendition;
     lightRef.current = light;
     lightFromSettings(light, settingsRef.current);
+
+    /** A section on the page with its typography in, and its blocks. */
+    const renderedSection = (section: number) =>
+      getRenditionContents(rendition).find(
+        (content) =>
+          content.sectionIndex === section && blocksOf.has(content.document),
+      );
+    const readAlong = new ReadAlong({
+      viewport: host,
+      scroller: () => host.querySelector<HTMLElement>(".epub-container"),
+      blocks: (section) => {
+        const content = renderedSection(section);
+        return content ? (blocksOf.get(content.document) ?? null) : null;
+      },
+      show: (section, block) => showVoiceAt(section, block),
+      timings: (section) => {
+        const info = narrationRef.current?.sections.find(
+          (found) => found.section === section,
+        );
+        return info
+          ? getNarrationTimings(activeItemId, info)
+          : Promise.reject(new Error("That section has no narration."));
+      },
+      audioUrl: (section) => {
+        const info = narrationRef.current?.sections.find(
+          (found) => found.section === section,
+        );
+        return info ? getNarrationAudioUrl(activeItemId, info) : "";
+      },
+      get metadata() {
+        return voiceMetadataRef.current;
+      },
+    });
+    readAlongRef.current = readAlong;
+    setReadAlong(readAlong);
+    const stopWatchingVoice = readAlong.subscribe(() =>
+      setVoiceEngaged(readAlong.getState().engaged),
+    );
+
+    /** The block at the reading line, where the voice starts when asked to read. */
+    const blockAtReadingLine = () => {
+      const view = host.getBoundingClientRect();
+      const line = view.top + view.height * READING_LINE;
+      for (const content of getRenditionContents(rendition)) {
+        const frame = content.document.defaultView?.frameElement;
+        const blocks = blocksOf.get(content.document);
+        if (!frame || !blocks || content.sectionIndex === undefined) continue;
+        const rect = frame.getBoundingClientRect();
+        if (line < rect.top || line >= rect.bottom) continue;
+        const block = blocks.findIndex(
+          (element) => rect.top + element.getBoundingClientRect().bottom > line,
+        );
+        return { section: content.sectionIndex, block: Math.max(0, block) };
+      }
+      return null;
+    };
+    startVoiceRef.current = () => readAlong.start(blockAtReadingLine());
     /**
      * The ruler's marker follows the reading line, but a leap — a new chapter,
      * or a jump across most of this one — fades it out, moves it, and fades it
@@ -1312,6 +1428,23 @@ export function BookReaderPage() {
       };
     };
 
+    /** Underlines the word a click would play from, for a pointer that hovers. */
+    const listenForVoiceHover = (document: Document) => {
+      const fine = window.matchMedia?.("(hover: hover) and (pointer: fine)");
+      const move = (event: PointerEvent) => {
+        if (fine?.matches && event.pointerType === "mouse") {
+          readAlong.hover(document, event.clientX, event.clientY);
+        }
+      };
+      const leave = () => readAlong.hover(document, -1, -1);
+      document.addEventListener("pointermove", move, { passive: true });
+      document.addEventListener("pointerleave", leave, { passive: true });
+      return () => {
+        document.removeEventListener("pointermove", move);
+        document.removeEventListener("pointerleave", leave);
+      };
+    };
+
     const buildMapIfReady = () => {
       if (!isMounted || !hasLocations || !navigationToc) {
         return;
@@ -1368,6 +1501,8 @@ export function BookReaderPage() {
       blocksOf.set(view.document, blocks);
       paintHighlights(view);
       light.add(view.document, view.sectionIndex ?? 0, blocks);
+      readAlong.addDocument(view.document, view.sectionIndex ?? 0);
+      tapListeners.push(listenForVoiceHover(view.document));
       resolveFirstContent();
       measureColumn();
       scheduleFrame();
@@ -1497,7 +1632,15 @@ export function BookReaderPage() {
     const handleScroll = () => {
       scheduleFrame();
       placeHighlightMenu();
-      lastScrollAt = performance.now();
+      // The page following the voice is not the reader scrolling: a tap
+      // then still plays from a word, and the bar stays as it is.
+      const voiceScroll =
+        scrollElement !== null && readAlong.ownsScroll(scrollElement.scrollTop);
+
+      if (!voiceScroll) {
+        lastScrollAt = performance.now();
+        readAlong.scrolled();
+      }
 
       if (scrollElement) {
         const top = scrollElement.scrollTop;
@@ -1505,6 +1648,7 @@ export function BookReaderPage() {
         lastScrollTop = top;
 
         if (
+          !voiceScroll &&
           Math.abs(delta) > 4 &&
           panelRef.current === null &&
           !barHoverRef.current
@@ -1558,6 +1702,19 @@ export function BookReaderPage() {
 
       if (panelRef.current !== null) {
         setPanel(null);
+        return;
+      }
+
+      const word =
+        readAlong.getState().engaged && target?.ownerDocument
+          ? readAlong.wordAt(
+              target.ownerDocument,
+              release.clientX,
+              release.clientY,
+            )
+          : null;
+      if (word) {
+        readAlong.playFrom(word);
         return;
       }
 
@@ -1874,6 +2031,37 @@ export function BookReaderPage() {
     };
 
     /**
+     * Takes the page to where the voice is, when that part of the book is not
+     * on it: the block's top on the reading line, behind the same fade as a
+     * search hit, so the way there is never seen. The voice then follows.
+     */
+    const showVoiceAt = async (section: number, block: number) => {
+      await book.opened;
+      const href = (book.spine.get(section) as Section | null)?.href;
+      if (!href || !isMounted) {
+        return;
+      }
+      const at: ReaderPlace = {
+        section,
+        block,
+        offset: -Math.round(host.clientHeight * READING_LINE),
+      };
+      setJumping(true);
+      await veilTo(0, 140);
+      if (renderedSection(section) || (await displayWithin(href))) {
+        await waitForLayoutToSettle(host);
+        if (isMounted && backToPlace(at)) {
+          await waitForLayoutToSettle(host);
+          backToPlace(at);
+        }
+      }
+      setJumping(false);
+      scheduleFrame();
+      await veilTo(1, 240);
+      veil?.cancel();
+    };
+
+    /**
      * Brings the reading line to `fraction` of a chapter, as the ruler's
      * marker would show it: the inverse of the marker's placement. A section
      * already on the page is scrolled to directly. One that is not (a chapter
@@ -2062,8 +2250,12 @@ export function BookReaderPage() {
         const selecting = getRenditionContents(rendition).some(
           (content) => !(content.document.getSelection()?.isCollapsed ?? true),
         );
+        // While the voice reads, the page is where the voice is.
+        const listening =
+          readAlong.getState().engaged && readAlong.getState().playing;
         if (
           !selecting &&
+          !listening &&
           rulerDragRef.current < 0 &&
           performance.now() - lastScrollAt >= CATCH_UP_IDLE_MS
         ) {
@@ -2165,6 +2357,14 @@ export function BookReaderPage() {
       tapListeners.forEach((stop) => stop());
       rendition.off("keydown", handleKey);
       stopSettlingDisplays();
+      stopWatchingVoice();
+      readAlong.destroy();
+      if (readAlongRef.current === readAlong) {
+        readAlongRef.current = null;
+      }
+      setReadAlong(null);
+      setVoiceEngaged(false);
+      startVoiceRef.current = () => undefined;
       light.clear();
       rendition.destroy();
       book.destroy();
@@ -2198,7 +2398,7 @@ export function BookReaderPage() {
     }
 
     if (lightRef.current) {
-      lightFromSettings(lightRef.current, settings);
+      lightFromSettings(lightRef.current, settings, voiceEngagedRef.current);
     }
 
     const css = getEpubThemeCss(settings, palette, readLiveAccent());
@@ -2212,11 +2412,101 @@ export function BookReaderPage() {
         measureColumnRef.current();
         scheduleFrameRef.current();
         placeHighlightMenu();
+        readAlongRef.current?.invalidate();
       }, delay),
     );
 
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [format, palette, placeHighlightMenu, settings]);
+
+  /* ---------------- Read-along ---------------- */
+  // Only sections uploaded can be played; a narration still on its way plays
+  // what it has.
+  const playableNarration =
+    narration && narration.sections.length > 0 ? narration : null;
+  useLayoutEffect(() => {
+    narrationRef.current = narration;
+  }, [narration]);
+  useEffect(() => {
+    readAlong?.setNarration(playableNarration);
+  }, [playableNarration, readAlong]);
+
+  // While the narrator reads, its progress and new sections are fetched as
+  // they come, without the reader asking.
+  const narrationMoving =
+    narration?.state === "queued" || narration?.state === "narrating";
+  useEffect(() => {
+    if (!narrationMoving || !activeItemId) {
+      return undefined;
+    }
+    const controller = new AbortController();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      void getBookNarration(activeItemId, { signal: controller.signal })
+        .then(setNarration)
+        .catch(() => undefined);
+    }, 20_000);
+    return () => {
+      window.clearInterval(timer);
+      controller.abort();
+    };
+  }, [activeItemId, narrationMoving]);
+
+  const isAdministrator = getCachedSession()?.isAdministrator ?? false;
+  const changeNarration = useCallback(
+    async (change: "request" | "remove") => {
+      if (!activeItemId) return;
+      setNarrationBusy(true);
+      setNarrationFailed(false);
+      try {
+        if (change === "remove") {
+          readAlongRef.current?.close();
+          await removeBookNarration(activeItemId);
+          setNarration(null);
+        } else {
+          // A narration of another edition is taken away first, then asked for anew.
+          if (narrationRef.current?.state === "outdated") {
+            await removeBookNarration(activeItemId);
+          }
+          setNarration(await requestBookNarration(activeItemId));
+        }
+      } catch {
+        setNarrationFailed(true);
+      } finally {
+        setNarrationBusy(false);
+      }
+    },
+    [activeItemId],
+  );
+
+  // The voice paints in the reader's own light: the page at its dimmed ink.
+  const voiceFloor = SPOTLIGHT_FLOOR[settings.spotlight];
+  useEffect(() => {
+    readAlong?.setInks({
+      ground: palette.ground,
+      ink: palette.ink,
+      hint: palette.ink3,
+      far: voiceFloor < 1 ? voiceFloor : VOICE_PAGE_INK,
+    });
+  }, [palette, readAlong, voiceFloor]);
+
+  // The voice takes the reading light, and gives it back, in one frame.
+  useEffect(() => {
+    const light = lightRef.current;
+    if (!light) {
+      return;
+    }
+    light.snapNext();
+    lightFromSettings(light, settingsRef.current, voiceEngaged);
+    scheduleFrameRef.current();
+  }, [voiceEngaged]);
+
+  // The book opened on another device: this one stops reading aloud too.
+  useEffect(() => {
+    if (takenBy) {
+      readAlong?.pause();
+    }
+  }, [readAlong, takenBy]);
 
   /* ---------------- Plain text, HTML, images ---------------- */
   const shouldFetchText = format === "text" || format === "html";
@@ -2346,6 +2636,25 @@ export function BookReaderPage() {
         event.ctrlKey ||
         event.altKey
       ) {
+        return;
+      }
+
+      // While the voice reads, space plays and pauses it and the side arrows
+      // step through sentences; the rest still move the page.
+      const voice = readAlongRef.current;
+      if (
+        voice?.getState().engaged &&
+        (event.key === " " ||
+          event.key === "ArrowLeft" ||
+          event.key === "ArrowRight") &&
+        !(
+          event.target instanceof Element &&
+          event.target.closest("button, [role='slider']")
+        )
+      ) {
+        event.preventDefault();
+        if (event.key === " ") voice.toggle();
+        else voice.seekSentence(event.key === "ArrowLeft" ? -1 : 1);
         return;
       }
 
@@ -2816,6 +3125,26 @@ export function BookReaderPage() {
             className: "rd-bookmark-action",
             onClick: () => void toggleBookmark(),
           },
+          ...(playableNarration && readAlong
+            ? [
+                {
+                  id: "listen",
+                  type: "button" as const,
+                  label: voiceEngaged
+                    ? t("reader.voice.close")
+                    : t("reader.voice.listen"),
+                  icon: <Headphones />,
+                  active: voiceEngaged,
+                  // Named until it is pressed: on a touchscreen a tooltip
+                  // would otherwise stay over the page while the voice reads.
+                  tooltip: !voiceEngaged,
+                  onClick: () => {
+                    if (voiceEngaged) readAlong.close();
+                    else startVoiceRef.current();
+                  },
+                },
+              ]
+            : []),
         ]
       : []),
     {
@@ -3101,7 +3430,7 @@ export function BookReaderPage() {
         />
       ) : null}
 
-      {timeLeftDocked ? (
+      {timeLeftDocked && !voiceEngaged ? (
         <div className="rd-timeleft" data-docked>
           {t("reader.toChapterEnd")} <b>≈ {timeLeftText}</b>
         </div>
@@ -3125,6 +3454,20 @@ export function BookReaderPage() {
           sizeLabel ? `${getFormatLabel(format)} · ${sizeLabel}` : null
         }
         onClose={closePanel}
+        narrationControl={
+          format === "epub" && isAdministrator ? (
+            <ReaderNarrationControl
+              narration={narration}
+              busy={narrationBusy}
+              failed={narrationFailed}
+              onRequest={() => void changeNarration("request")}
+              onRemove={() => void changeNarration("remove")}
+              reviewHref={
+                activeItemId ? `/admin/narration/${activeItemId}` : null
+              }
+            />
+          ) : null
+        }
         finishedControl={
           <WatchedStatusButton
             scope="item"
@@ -3221,6 +3564,10 @@ export function BookReaderPage() {
             ) : null}
           </div>
         </div>
+      ) : null}
+
+      {format === "epub" && playableNarration && readAlong ? (
+        <ReaderVoice voice={readAlong} />
       ) : null}
 
       {zoomedImage ? (

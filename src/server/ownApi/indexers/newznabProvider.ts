@@ -31,6 +31,12 @@ const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_RETRY_DELAY_MS = 1_000;
 /** A page of results is tens of kilobytes; a megabyte is already an anomaly. */
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+/*
+ * An NZB grows with the release: a line per article, about 0.15 MB per GB.
+ * A 2160p Blu-ray season pack is well past 100 GB, so the search page's
+ * ceiling would refuse exactly the releases most worth having.
+ */
+const MAX_NZB_BYTES = 64 * 1024 * 1024;
 
 export interface NewznabProviderOptions {
   readonly id: string;
@@ -194,7 +200,7 @@ export function createNewznabProvider(
       if (buffer.byteLength === 0) {
         throw new IndexerError("not-found", "The provider returned nothing.");
       }
-      if (buffer.byteLength > MAX_RESPONSE_BYTES) {
+      if (buffer.byteLength > MAX_NZB_BYTES) {
         throw new IndexerError(
           "malformed-response",
           "The provider's payload is implausibly large.",

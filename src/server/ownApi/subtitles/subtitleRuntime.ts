@@ -1,9 +1,11 @@
 import type { DatabasePool } from "../database/databasePool";
+import { createJobQueue } from "../tasks/jobQueue";
 import type { PlaybackRefreshBoundary } from "../playback/playbackRefresh";
 import type { SubtitleCatalogueAttachment } from "./subtitleAttachment";
 import type { SubtitleConfig } from "./subtitleConfig";
 import { readFile } from "node:fs/promises";
 import { createSubtitleFitter } from "./subtitleFit";
+import { createSubtitleRevisionStore } from "./subtitleRevisions";
 import type { TitleReferences } from "./subtitleReferences";
 import { createSubtitleExecutionRepository } from "./subtitleExecution";
 import { createSubtitleJobHandlers, SUBTITLE_JOB_TYPES } from "./subtitleJobs";
@@ -15,6 +17,7 @@ import { createSubtitleRepository } from "./subtitleRepository";
 import { createSubtitleService } from "./subtitleService";
 import {
   createSubtitleSyncService,
+  type MeaningEvidence,
   type SubtitleSyncCatalogue,
 } from "./subtitleSync";
 import { createSubtitleStorage } from "./subtitleStorage";
@@ -56,6 +59,7 @@ export function createSubtitleRuntime(options: {
   providers?: readonly SubtitleProvider[];
   sessions?: ProviderSessionManager;
   playback?: PlaybackRefreshBoundary;
+  onFilesChanged?: (relativePath: string) => Promise<void>;
   /** Records an installed sidecar so the player lists it without a scan. */
   catalogue?: SubtitleCatalogueAttachment;
   /**
@@ -74,6 +78,8 @@ export function createSubtitleRuntime(options: {
    * candidate that fits best and a retiming never needs the source.
    */
   references?: TitleReferences;
+  /** Meaning-based anchors from transcripts, where this host can embed. */
+  meaning?: MeaningEvidence;
 }) {
   if (!options.config) return undefined;
   const providers = options.providers ?? [];
@@ -86,6 +92,7 @@ export function createSubtitleRuntime(options: {
   const sessions: ProviderSessionManager =
     options.sessions ?? unattendedSessionManager();
   const repository = createSubtitleRepository(options.pool);
+  const revisions = createSubtitleRevisionStore(options.pool);
   const config = options.config;
   const service = createSubtitleService({
     config,
@@ -93,6 +100,8 @@ export function createSubtitleRuntime(options: {
     providers,
     sessions,
     playback: options.playback,
+    onFilesChanged: options.onFilesChanged,
+    revisions,
     ...(options.catalogue ? { catalogue: options.catalogue } : {}),
     ...(options.references && options.sync
       ? {
@@ -128,6 +137,7 @@ export function createSubtitleRuntime(options: {
         ffmpegPath: options.sync.ffmpegPath,
         catalogue: options.sync.catalogue,
         repository,
+        revisions,
         /*
          * A writer bound to the one media file the request named. The storage
          * module resolves every destination through `resolveMedia`, so binding
@@ -146,13 +156,28 @@ export function createSubtitleRuntime(options: {
               repository.managedDigest(id, relative),
           }),
         ...(options.playback ? { playback: options.playback } : {}),
+        onFilesChanged: options.onFilesChanged,
         ...(options.references ? { references: options.references } : {}),
+        ...(options.meaning ? { meaning: options.meaning } : {}),
       })
     : undefined;
   return {
     repository,
+    revisions,
     service,
     sync,
-    handlers: createSubtitleJobHandlers(service, repository, sync),
+    handlers: createSubtitleJobHandlers(
+      service,
+      repository,
+      sync,
+      async (attemptId, runAfter) => {
+        await createJobQueue(options.pool).enqueue({
+          jobType: SUBTITLE_JOB_TYPES.run,
+          payload: { attemptId, replace: false },
+          dedupeKey: `subtitle:${attemptId}`,
+          runAfter,
+        });
+      },
+    ),
   };
 }

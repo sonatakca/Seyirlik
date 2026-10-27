@@ -233,6 +233,36 @@ integration("acquisitions in PostgreSQL", () => {
     expect(ready.every((row) => row.downloadPath)).toBe(true);
   });
 
+  it("offers only finished downloads that no import has taken", async () => {
+    // Downloads stay `downloaded` for good. When imported ones were offered,
+    // the oldest filled the page and every later download waited for an
+    // import that never started.
+    const imported: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const created = await repository.create(input);
+      await repository.update(created.id, "planned", {
+        state: "downloaded",
+        downloadPath: `C:/SeyirlikDownloads/complete/seyirlik/imported-${index}`,
+      });
+      await pool.query(
+        `INSERT INTO imports (id, acquisition_id, target_kind, target_title,
+           source_root, library_root, source_relative, state, idempotency_key)
+         VALUES ($1,$2,'movie','Big Buck Bunny','/d','/l','x','complete',$3)`,
+        [randomUUID(), created.id, `k-${randomUUID()}`],
+      );
+      imported.push(created.id);
+    }
+    const waiting = await repository.create(input);
+    await repository.update(waiting.id, "planned", {
+      state: "downloaded",
+      downloadPath: "C:/SeyirlikDownloads/complete/seyirlik/waiting",
+    });
+
+    const ids = (await repository.listReadyForImport()).map((row) => row.id);
+    expect(ids).toContain(waiting.id);
+    for (const id of imported) expect(ids).not.toContain(id);
+  });
+
   it("does not offer a finished download that has no path yet", async () => {
     // Completion is observed before the path is known; a handoff without one
     // would tell the import phase to go looking for nothing.
@@ -383,6 +413,42 @@ integration("acquisitions in PostgreSQL", () => {
     expect(await repository.hasLiveAcquisitionFor(pack(3).target)).toBe(false);
     await importOf(await finish(4), "failed");
     expect(await repository.hasLiveAcquisitionFor(pack(4).target)).toBe(false);
+
+    // Imported, but the library scan has not registered the file yet: the
+    // episode has no media and must not be searched again. The sweep decides
+    // the file once the scan sees it; after that, the import is done.
+    const landing = async (season: number) => {
+      const importId = randomUUID();
+      await pool.query(
+        `INSERT INTO imports (id, acquisition_id, target_kind, target_title, target_season,
+           source_root, library_root, source_relative, state, idempotency_key, committed_at)
+         VALUES ($1,$2,'season','Imported Show',$3,'/d','/l','x','complete',$4, now())`,
+        [importId, await finish(season), season, `k-${randomUUID()}`],
+      );
+      const fileId = randomUUID();
+      await pool.query(
+        `INSERT INTO import_files (id, import_id, role, source_relative, destination_relative, state)
+         VALUES ($1,$2,'media','x.mkv','Imported Show/x.mkv','committed')`,
+        [fileId, importId],
+      );
+      return { importId, fileId };
+    };
+    await landing(6);
+    expect(await repository.hasLiveAcquisitionFor(pack(6).target)).toBe(true);
+    const decided = await landing(7);
+    await pool.query(
+      "UPDATE import_files SET processing_outcome = 'queued' WHERE id = $1",
+      [decided.fileId],
+    );
+    expect(await repository.hasLiveAcquisitionFor(pack(7).target)).toBe(false);
+    // Nothing ever decides with the sweep switched off, so a day-old import
+    // no longer stands for anything coming.
+    const forgotten = await landing(8);
+    await pool.query(
+      "UPDATE imports SET committed_at = now() - interval '2 days' WHERE id = $1",
+      [forgotten.importId],
+    );
+    expect(await repository.hasLiveAcquisitionFor(pack(8).target)).toBe(false);
 
     // Downloaded long ago and never imported: no longer on its way.
     const stale = await finish(5);

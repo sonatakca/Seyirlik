@@ -7,10 +7,14 @@ import {
   purgeStaleCaches,
   resetAppUpdateForTests,
 } from "./appUpdate";
+import { readFileSync } from "node:fs";
 import {
   describeBuild,
   formatBuildLabel,
+  parseReleaseNote,
   readBuildIdFromHtml,
+  RELEASE_NOTE_FILE,
+  releaseNoteProblem,
 } from "./buildInfo";
 
 const NEWER = {
@@ -102,6 +106,71 @@ describe("build identity", () => {
   });
 });
 
+/*
+ * A release says what it changed in a few words, in both languages; the menu
+ * shows that above the hash. `deploy/ship.sh` refuses anything these refuse.
+ */
+describe("release notes", () => {
+  const note = {
+    en: "Faster imports during encodes",
+    tr: "Daha hızlı içe aktarma",
+  };
+
+  it("takes two to five plain words in each language", () => {
+    expect(releaseNoteProblem(note)).toBeNull();
+    expect(
+      parseReleaseNote(
+        JSON.stringify({
+          en: " Subtitles sync again ",
+          tr: "Altyazılar yeniden eş ",
+        }),
+      ),
+    ).toEqual({
+      en: "Subtitles sync again",
+      tr: "Altyazılar yeniden eş",
+    });
+  });
+
+  it("refuses a note that would not say what changed at a glance", () => {
+    expect(
+      releaseNoteProblem({ en: "Fixes", tr: "Düzeltmeler yapıldı" }),
+    ).toMatch(/1 word;/);
+    expect(
+      releaseNoteProblem({
+        en: "Fix the thing that was broken yesterday",
+        tr: "Hata düzeltildi",
+      }),
+    ).toMatch(/7 words/);
+    expect(
+      releaseNoteProblem({
+        en: "Ship f78de69 again",
+        tr: "Yeni sürüm yayında",
+      }),
+    ).toMatch(/commit/);
+    expect(releaseNoteProblem({ en: "Faster imports" })).toMatch(
+      /"tr" is missing/,
+    );
+    expect(releaseNoteProblem("Faster imports")).toMatch(/\{"en"/);
+    expect(parseReleaseNote("not json")).toBeNull();
+  });
+
+  it("carries the note in the build's identity", () => {
+    const build = describeBuild({
+      commit: "abcdef1234567",
+      dirty: false,
+      builtAt: new Date("2026-10-24T08:00:00Z"),
+      note,
+    });
+    expect(build.note).toEqual(note);
+  });
+
+  it("has a usable note in the repository", () => {
+    expect(
+      releaseNoteProblem(JSON.parse(readFileSync(RELEASE_NOTE_FILE, "utf8"))),
+    ).toBeNull();
+  });
+});
+
 describe("app update", () => {
   const reload = vi.fn();
 
@@ -127,6 +196,17 @@ describe("app update", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("offline")));
     expect(await checkForAppUpdate()).toBeNull();
     expect(getAppUpdateState()).toEqual({ status: "current" });
+  });
+
+  it("shows a newer build's note only when it is a usable one", async () => {
+    const note = {
+      en: "Faster imports during encodes",
+      tr: "Daha hızlı içe aktarma",
+    };
+    serveLiveBuild({ ...NEWER, note });
+    expect((await checkForAppUpdate())?.note).toEqual(note);
+    serveLiveBuild({ ...NEWER, buildId: "abcdef1-other", note: { en: 1 } });
+    expect((await checkForAppUpdate())?.note).toBeNull();
   });
 
   it("offers a newer live build, asked for past every cache", async () => {

@@ -14,6 +14,10 @@ import {
   retryImport,
   type ImportRow,
 } from "../../lib/importsApi";
+import { DriveUploadPanel } from "./DriveUploadPanel";
+
+/** How often the list is read again while a file is still uploading. */
+const UPLOAD_REFRESH_MS = 5_000;
 
 /**
  * What the importer has done, and whether it may do anything at all.
@@ -34,6 +38,7 @@ export function ImportsPage() {
   const [importsAvailable, setImportsAvailable] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
   const [failure, setFailure] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
     setPageTitle(`${t("admin.imports.title")} · Seyirlik`, {
@@ -47,6 +52,7 @@ export function ImportsPage() {
     setFailure(null);
     try {
       setImports(await listImports());
+      setNowMs(Date.now());
       setImportsAvailable(true);
     } catch (error) {
       /*
@@ -92,6 +98,26 @@ export function ImportsPage() {
       isCancelled = true;
     };
   }, []);
+
+  /*
+   * An upload moves on its own, so while one is under way the list is read
+   * again quietly: no spinner, and a failed read keeps the last one.
+   */
+  const uploading = (imports ?? []).some(
+    (row) => row.driveUpload?.state === "uploading",
+  );
+  useEffect(() => {
+    if (!uploading) return;
+    const timer = window.setInterval(() => {
+      void listImports()
+        .then((rows) => {
+          setImports(rows);
+          setNowMs(Date.now());
+        })
+        .catch(() => undefined);
+    }, UPLOAD_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [uploading]);
 
   const act = useCallback(
     async (id: string, action: "retry" | "reconcile") => {
@@ -230,6 +256,16 @@ export function ImportsPage() {
                   </li>
                 ))}
               </ul>
+            ) : null}
+
+            {row.driveUpload ? (
+              <div className="mt-3">
+                <DriveUploadPanel
+                  upload={row.driveUpload}
+                  nowMs={nowMs}
+                  t={t}
+                />
+              </div>
             ) : null}
 
             {row.failureClass ? (

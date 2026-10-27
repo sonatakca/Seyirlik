@@ -12,6 +12,10 @@ import { safeTaskLabel } from "../../../lib/notifications/taskPresentation";
 import { episodeCode } from "../processing/processingProjection";
 import type { LibraryRepository } from "../libraries/libraryRepository";
 import type { JobRecord } from "./jobQueue";
+import {
+  TRICKPLAY_FFMPEG_FAILURES,
+  TRICKPLAY_NOTHING_TO_SAMPLE,
+} from "../trickplay/trickplayService";
 import { JOB_TYPES, MEDIA_LANE_JOB_TYPES } from "./jobHandlers";
 import type { MediaSubject } from "./taskRoutes";
 
@@ -65,6 +69,11 @@ const ERROR_CODES: Record<string, MaintenanceErrorCode> = {
   "The processing task payload is incomplete.": "payload-invalid",
   "The job did not complete before its lease expired.": "lease-expired",
   "No handler is registered for this task.": "unavailable",
+  [TRICKPLAY_NOTHING_TO_SAMPLE]: "source-gone",
+  [TRICKPLAY_FFMPEG_FAILURES.fileMissing]: "file-missing",
+  [TRICKPLAY_FFMPEG_FAILURES.accessDenied]: "access-denied",
+  [TRICKPLAY_FFMPEG_FAILURES.volumeFull]: "volume-full",
+  [TRICKPLAY_FFMPEG_FAILURES.unreadable]: "unreadable",
 };
 
 /**

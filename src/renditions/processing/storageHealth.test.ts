@@ -362,6 +362,19 @@ describe("what is not storage evidence", () => {
     ).toBe("encoder-stall");
   });
 
+  it("never quarantines for a slow network read", () => {
+    const observation = observationForFailure(
+      "network-read-stall",
+      "FFmpeg produced no media for 26s and was stopped at 1658.907s.",
+    );
+    expect(observation.kind).toBe("ok");
+    const record = run(initialStorageHealth("\\\\seyirlik\\drive\\media", AT), [
+      [observation, AT],
+      [observation, AT + 1_000],
+    ]);
+    expect(record.state).toBe("healthy");
+  });
+
   it("does not treat a full disk or a crashed encoder as a storage fault", () => {
     expect(observationForFailure("out-of-space", "ENOSPC").kind).toBe("ok");
     expect(observationForFailure("encoder", "segfault").kind).toBe("ok");

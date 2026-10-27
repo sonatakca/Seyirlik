@@ -107,6 +107,11 @@ function toCredits(people: ItemPersonDto[], language: Language): MediaPerson[] {
   });
 }
 
+/** Worded at render, so a language switch rewords it without a reload. */
+type DetailsLoadError =
+  | { kind: "not-found" }
+  | { kind: "failed"; message: string | null };
+
 interface SeriesLibraryDetailsProps {
   initialItem: MediaItem;
   variant: "desktop" | "mobile";
@@ -348,7 +353,7 @@ export function SeriesLibraryDetails({
   const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
   const [resolvedEpisodeSelectionKey, setResolvedEpisodeSelectionKey] =
     useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<DetailsLoadError | null>(null);
   const reportedReadyItemIdRef = useRef<string | null>(null);
 
   const isDesktop = variant === "desktop";
@@ -368,11 +373,7 @@ export function SeriesLibraryDetails({
 
     async function loadDetails() {
       if (!detailsItemId) {
-        setError(
-          language === "tr"
-            ? "İçerik bilgileri bulunamadı."
-            : "The media details could not be found.",
-        );
+        setError({ kind: "not-found" });
         setIsLoading(false);
         return;
       }
@@ -431,13 +432,10 @@ export function SeriesLibraryDetails({
         setSelectedSeasonId(defaultSeason?.Id ?? null);
       } catch (loadError) {
         if (!cancelled) {
-          setError(
-            loadError instanceof Error
-              ? loadError.message
-              : language === "tr"
-                ? "Dizi ayrıntıları yüklenemedi."
-                : "Series details could not be loaded.",
-          );
+          setError({
+            kind: "failed",
+            message: loadError instanceof Error ? loadError.message : null,
+          });
         }
       } finally {
         if (!cancelled) {
@@ -451,7 +449,10 @@ export function SeriesLibraryDetails({
     return () => {
       cancelled = true;
     };
-  }, [initialItem, language, routeSeasonId, seriesId]);
+    // Nothing fetched here depends on the language. Reloading on a switch
+    // would swap the page for its skeleton and unmount the watched button
+    // portaled into the hero dock.
+  }, [initialItem, routeSeasonId, seriesId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -567,7 +568,18 @@ export function SeriesLibraryDetails({
     return (
       <ErrorMessage
         title={language === "tr" ? "Dizi kullanılamıyor" : "Series unavailable"}
-        message={error ?? "Unknown error"}
+        message={
+          error?.kind === "not-found"
+            ? language === "tr"
+              ? "İçerik bilgileri bulunamadı."
+              : "The media details could not be found."
+            : error?.kind === "failed"
+              ? (error.message ??
+                (language === "tr"
+                  ? "Dizi ayrıntıları yüklenemedi."
+                  : "Series details could not be loaded."))
+              : "Unknown error"
+        }
       />
     );
   }

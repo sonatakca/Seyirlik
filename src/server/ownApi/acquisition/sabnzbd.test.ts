@@ -426,6 +426,43 @@ describe("how far a download has got", () => {
     expect(await sab.queueSnapshot()).toMatchObject({ paused: true, jobs: [] });
   });
 
+  it("reads which news servers SABnzbd can use, without its dashboard", async () => {
+    // The shape SABnzbd 5.0.2 gave on 2026-10-23 with Newsdemon refusing it.
+    const { sab, calls } = client(() =>
+      json({
+        status: {
+          servers: [
+            {
+              servername: "news.newsdemon.com",
+              serveractive: false,
+              serveractiveconn: 0,
+              servertotalconn: 8,
+              servererror:
+                "Cannot connect to server news.newsdemon.com [502 Connection failure. Please contact technical support.]",
+              serveroptional: 0,
+            },
+            {
+              servername: "backup.example",
+              serveractive: true,
+              servererror: "",
+            },
+          ],
+        },
+      }),
+    );
+    expect(await sab.servers()).toEqual([
+      {
+        name: "news.newsdemon.com",
+        active: false,
+        error:
+          "Cannot connect to server news.newsdemon.com [502 Connection failure. Please contact technical support.]",
+      },
+      { name: "backup.example", active: true },
+    ]);
+    expect(calls[0]!.searchParams.get("mode")).toBe("status");
+    expect(calls[0]!.searchParams.get("skip_dashboard")).toBe("1");
+  });
+
   it("carries the post-processing step from the history", async () => {
     const { sab } = client(() =>
       json({

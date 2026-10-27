@@ -28,6 +28,7 @@ import {
 import {
   PROCESSING_JOB_TYPE,
   createProcessingEnqueuer,
+  type ProcessingEnqueueOptions,
 } from "./processingEnqueue";
 import { createPackageIndex, type PackageIndex } from "./packageIndex";
 import {
@@ -65,6 +66,10 @@ export interface ProcessingRoutesOptions {
   ffmpegPath?: string;
   /** See `ProcessingEnqueueOptions.processingElsewhere`. */
   processingElsewhere?: boolean;
+  /** See `ProcessingEnqueueOptions.registry`. */
+  registry?: ProcessingEnqueueOptions["registry"];
+  /** See `ProcessingEnqueueOptions.originalLanguageFor`. */
+  originalLanguageFor?: ProcessingEnqueueOptions["originalLanguageFor"];
   ffprobePath?: string;
   /**
    * Whether the media volume is currently mounted. Injected rather than probed
@@ -296,6 +301,8 @@ export function createProcessingRoutes({
   workRoot,
   ffmpegPath = process.env.SEYIRLIK_FFMPEG_PATH ?? "ffmpeg",
   processingElsewhere = false,
+  registry,
+  originalLanguageFor,
   ffprobePath = process.env.SEYIRLIK_FFPROBE_PATH ?? "ffprobe",
   storageAvailable = () => true,
   storageGuard = createPermissiveStorageGuard(),
@@ -358,6 +365,8 @@ export function createProcessingRoutes({
     hardware,
     storageGuard,
     processingElsewhere,
+    ...(registry ? { registry } : {}),
+    ...(originalLanguageFor ? { originalLanguageFor } : {}),
   });
   const { locateSource, statSource, existingPackage, analyse } = enqueuer;
 

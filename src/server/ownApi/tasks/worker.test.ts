@@ -534,6 +534,9 @@ describe("worker lanes", () => {
       queue,
       lanes: LANES,
       handlers: {
+        // Registered so the media lane really asks for it: a lane claims only
+        // the types this process has a handler for.
+        "media.process": async () => undefined,
         "library.scan": async () => {
           scanRan = true;
         },
@@ -541,6 +544,35 @@ describe("worker lanes", () => {
     }).runPending();
 
     expect(scanRan).toBe(true);
+  });
+
+  /*
+   * Releases overlap now: an older worker finishes its job while a newer
+   * server is already enqueueing. A type it has never heard of is not its to
+   * fail, and "everything except the media lane's" used to make it exactly
+   * that.
+   */
+  it("leaves a type it has no handler for to a worker that has one", async () => {
+    const rows = [
+      job({ id: "future", jobType: "future.task" }),
+      job({ id: "scan", jobType: "library.scan" }),
+    ];
+    const { queue } = lanedQueue(rows);
+    const fail = vi.spyOn(queue, "fail");
+    const ran: string[] = [];
+
+    await createWorker({
+      queue,
+      lanes: LANES,
+      handlers: {
+        "library.scan": async ({ job: current }) => {
+          ran.push(current.id);
+        },
+      },
+    }).runPending();
+
+    expect(ran).toEqual(["scan"]);
+    expect(fail).not.toHaveBeenCalled();
   });
 });
 
@@ -643,5 +675,125 @@ describe("a started worker", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * Pausing for a release hand-off: take nothing new, let what is held finish,
+ * and say when nothing is.
+ */
+describe("a paused worker", () => {
+  it("finishes the job it holds, takes nothing new, and resumes", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending: JobRecord[] = [
+        job({ id: "encode", jobType: "media.process" }),
+      ];
+      const { queue } = lanedQueue(pending);
+      let finishEncode: () => void = () => undefined;
+      const ran: string[] = [];
+
+      const worker = createWorker({
+        queue,
+        lanes: LANES,
+        pollIntervalMs: 1_000,
+        handlers: {
+          "media.process": () =>
+            new Promise<void>((resolve) => {
+              finishEncode = () => {
+                ran.push("encode");
+                resolve();
+              };
+            }),
+          "library.scan": async ({ job: current }) => {
+            ran.push(current.id);
+          },
+        },
+      });
+
+      worker.start();
+      await vi.advanceTimersByTimeAsync(10);
+      worker.pause();
+      expect(worker.activeJobs()).toEqual([
+        { id: "encode", jobType: "media.process" },
+      ]);
+
+      let idle = false;
+      void worker.whenIdle().then(() => {
+        idle = true;
+      });
+      pending.push(job({ id: "scan", jobType: "library.scan" }));
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(ran).toEqual([]);
+      expect(idle).toBe(false);
+
+      finishEncode();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(idle).toBe(true);
+      expect(worker.activeJobs()).toEqual([]);
+
+      // Still paused: idle is not a licence to start again.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(ran).toEqual(["encode"]);
+
+      worker.resume();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(ran).toEqual(["encode", "scan"]);
+      await worker.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is idle at once when it holds nothing", async () => {
+    const { queue } = lanedQueue([]);
+    const worker = createWorker({ queue, lanes: LANES, handlers: {} });
+    worker.pause();
+    await expect(worker.whenIdle()).resolves.toBeUndefined();
+  });
+
+  /*
+   * The gap that matters: a claim asked for before the pause and answered
+   * after it. Announcing idle in between would let the process exit holding a
+   * row it had just marked running.
+   */
+  it("counts a claim still in flight as held", async () => {
+    const { queue } = lanedQueue([]);
+    let answer: (row: JobRecord | null) => void = () => undefined;
+    let asked: () => void = () => undefined;
+    const claimAsked = new Promise<void>((resolve) => {
+      asked = resolve;
+    });
+    let claims = 0;
+    queue.claim = () => {
+      claims += 1;
+      // One row, then an empty queue.
+      if (claims > 1) return Promise.resolve(null);
+      asked();
+      return new Promise<JobRecord | null>((resolve) => {
+        answer = resolve;
+      });
+    };
+    const order: string[] = [];
+    const worker = createWorker({
+      queue,
+      handlers: {
+        "library.scan": async () => {
+          order.push("ran");
+        },
+      },
+    });
+
+    const pass = worker.runPending();
+    await claimAsked;
+    worker.pause();
+    void worker.whenIdle().then(() => order.push("idle"));
+    await Promise.resolve();
+    expect(order).toEqual([]);
+
+    answer(job({ id: "late" }));
+    await pass;
+    await Promise.resolve();
+    expect(order).toEqual(["ran", "idle"]);
   });
 });

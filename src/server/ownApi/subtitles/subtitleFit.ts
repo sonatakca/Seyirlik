@@ -1,4 +1,9 @@
-import { alignSpeech, type AlignmentProposal } from "./subtitleAlignment";
+import {
+  alignmentStrength,
+  alignPiecewise,
+  type AlignmentReference,
+  type PiecewiseAlignment,
+} from "./piecewiseAlignment";
 import {
   readAudioEnvelope,
   SPEECH_DUTY_CYCLES,
@@ -8,10 +13,13 @@ import {
   cueIntervals,
   documentCues,
   parseSubtitleDocument,
-  retimeBlocks,
   serialiseSubtitleDocument,
 } from "./subtitleCues";
-import { MINIMUM_SYNC_CONFIDENCE } from "./subtitleSync";
+import {
+  alignmentCues,
+  applyPlacements,
+  canApplyUnreviewed,
+} from "./subtitleTimeMap";
 
 /**
  * How well a downloaded subtitle fits the title it is for, measured against
@@ -24,6 +32,11 @@ import { MINIMUM_SYNC_CONFIDENCE } from "./subtitleSync";
  * second late by the end while the CtrlHD pack's, the same text, landed on the
  * speech throughout; nothing a provider said would have chosen between them.
  *
+ * Each candidate is aligned region by region (`alignPiecewise`), because a
+ * subtitle for another cut of the episode is right in some places and not in
+ * others, and the one transform the fit used to measure scored such a file as
+ * a confident fit and wrote the late half's shift over the right half.
+ *
  * Every reference comes from the package once there is one (see
  * `TitleReferences`), so this works the same after the source is removed.
  */
@@ -32,13 +45,22 @@ import { MINIMUM_SYNC_CONFIDENCE } from "./subtitleSync";
 export interface AudioReference {
   readonly path: string;
   readonly streamIndex: number;
+  /** `path` is a package's HLS playlist; see `readAudioEnvelope`. */
+  readonly isPackagePlaylist?: boolean;
 }
 
 export interface SubtitleFit {
-  /** The most confident proposal over every reference and speech threshold. */
-  readonly proposal: AlignmentProposal;
-  /** True when the proposal is confident enough to act on. */
+  /** The alignment from the reference reading that explains the most of it. */
+  readonly alignment: PiecewiseAlignment;
+  /**
+   * True when the candidate may be installed as the measurement leaves it:
+   * already in sync, or correctable everywhere on strong evidence.
+   */
   readonly trusted: boolean;
+  /** The largest corrected region's transform, else the identity. */
+  readonly rate: number;
+  readonly offsetSeconds: number;
+  readonly confidence: number;
 }
 
 export interface SubtitleFitter {
@@ -47,13 +69,29 @@ export interface SubtitleFitter {
 }
 
 /**
- * Below this a correction is not worth making. An audio onset is itself only
- * placed to the envelope's quarter-second window, so moving a subtitle by less
- * would be correcting the measurement, not the subtitle.
+ * How good a fit is, as a rank: in sync beats correctable without review,
+ * which beats needing review, which beats not matching at all. A subtitle that
+ * already fits most of this edition is worth more than one that needs many
+ * corrections, however confident each correction is.
  */
-const NEGLIGIBLE_OFFSET_SECONDS = 0.15;
-/** A rate this close to one drifts less than the offset floor over three hours. */
-const NEGLIGIBLE_RATE_ERROR = 0.00001;
+export function fitClass(fit: SubtitleFit): 0 | 1 | 2 | 3 {
+  const { verdict } = fit.alignment;
+  if (verdict === "in-sync") return 3;
+  if (fit.trusted) return 2;
+  if (verdict === "insufficient-evidence" || verdict === "reordered") return 0;
+  return 1;
+}
+
+/** How much a fit would move, in cue-seconds: less is better between equals. */
+export function fitCorrection(fit: SubtitleFit): number {
+  return fit.alignment.cues.reduce(
+    (sum, cue) =>
+      cue.disposition === "corrected" || cue.disposition === "inferred"
+        ? sum + Math.abs(cue.startSeconds - cue.sourceStartSeconds)
+        : sum,
+    0,
+  );
+}
 
 type Intervals = ReturnType<typeof cueIntervals>;
 
@@ -61,9 +99,9 @@ export function createSubtitleFitter(options: {
   ffmpegPath: string;
   audio: AudioReference | null;
   /**
-   * Subtitles that were inside the video, as text. `confidence` is measured
-   * against chance on the pair in hand, so it compares across a subtitle and
-   * an audio reference, and the better of the two is taken.
+   * Subtitles that were inside the video, as text. Each is a reading of its
+   * own, and a subtitle's onsets are a far sharper reference than an audio
+   * track's speech; the reading that places most of the candidate wins.
    */
   subtitles?: readonly string[];
   signal?: AbortSignal;
@@ -74,12 +112,16 @@ export function createSubtitleFitter(options: {
    * references are read once, on first use, and an audio that cannot be read
    * is remembered rather than retried per candidate.
    */
-  let references: Promise<Intervals[]> | null = null;
-  const referenceSets = () =>
+  let references: Promise<AlignmentReference[]> | null = null;
+  const readings = () =>
     (references ??= (async () => {
-      const sets: Intervals[] = (options.subtitles ?? [])
-        .map((text) => cueIntervals(documentCues(parseSubtitleDocument(text))))
-        .filter((intervals) => intervals.length > 0);
+      const sets: AlignmentReference[] = (options.subtitles ?? [])
+        .map(
+          (text): Intervals =>
+            cueIntervals(documentCues(parseSubtitleDocument(text))),
+        )
+        .filter((intervals) => intervals.length > 0)
+        .map((intervals) => ({ kind: "subtitle" as const, intervals }));
       let audioError: unknown = null;
       if (options.audio) {
         try {
@@ -87,11 +129,16 @@ export function createSubtitleFitter(options: {
             ffmpegPath: options.ffmpegPath,
             inputPath: options.audio.path,
             streamIndex: options.audio.streamIndex,
+            ...(options.audio.isPackagePlaylist
+              ? { isPackagePlaylist: true }
+              : {}),
             ...(options.signal ? { signal: options.signal } : {}),
           });
           for (const dutyCycle of SPEECH_DUTY_CYCLES) {
-            const speech = speechIntervalsFromEnvelope(envelope, { dutyCycle });
-            if (speech.length > 0) sets.push(speech);
+            const intervals = speechIntervalsFromEnvelope(envelope, {
+              dutyCycle,
+            });
+            if (intervals.length > 0) sets.push({ kind: "speech", intervals });
           }
         } catch (error) {
           audioError = error;
@@ -104,34 +151,46 @@ export function createSubtitleFitter(options: {
 
   return {
     async measure(bytes) {
-      const cues = documentCues(
-        parseSubtitleDocument(new TextDecoder("utf-8").decode(bytes)),
+      const document = parseSubtitleDocument(
+        new TextDecoder("utf-8").decode(bytes),
       );
-      const target = cueIntervals(cues);
-      if (target.length === 0) return null;
-      let best: AlignmentProposal | null = null;
-      for (const intervals of await referenceSets()) {
-        const proposal = alignSpeech(target, intervals);
-        if (best === null || proposal.confidence > best.confidence)
-          best = proposal;
+      const cues = alignmentCues(document);
+      if (cues.length === 0) return null;
+      let best: PiecewiseAlignment | null = null;
+      for (const reference of await readings()) {
+        const alignment = alignPiecewise(cues, reference);
+        if (
+          best === null ||
+          alignmentStrength(alignment) > alignmentStrength(best)
+        )
+          best = alignment;
       }
       if (best === null) return null;
+      const placement = applyPlacements(document, best.cues, {
+        unmatched: "keep",
+      });
+      const corrected = best.segments
+        .filter((segment) => segment.status === "corrected")
+        .sort((left, right) => right.cueCount - left.cueCount)[0];
       return {
-        proposal: best,
-        trusted: best.confidence >= MINIMUM_SYNC_CONFIDENCE,
+        alignment: best,
+        trusted:
+          best.verdict === "in-sync" || canApplyUnreviewed(best, placement),
+        rate: corrected?.rate ?? 1,
+        offsetSeconds: corrected?.offsetSeconds ?? 0,
+        confidence:
+          corrected?.confidence ??
+          best.segments.find((segment) => segment.status === "aligned")
+            ?.confidence ??
+          0,
       };
     },
   };
 }
 
-/** Whether a trusted fit moves the cues by enough to be worth rewriting them. */
+/** Whether a trusted fit moves any cue, and so is worth rewriting. */
 export function fitNeedsRetiming(fit: SubtitleFit): boolean {
-  if (!fit.trusted) return false;
-  const { rate, offsetSeconds } = fit.proposal;
-  return (
-    Math.abs(rate - 1) > NEGLIGIBLE_RATE_ERROR ||
-    Math.abs(offsetSeconds) > NEGLIGIBLE_OFFSET_SECONDS
-  );
+  return fit.trusted && fit.alignment.verdict === "correctable";
 }
 
 /** The subtitle with its cues moved onto the title's timeline. UTF-8 in, UTF-8 out. */
@@ -139,8 +198,10 @@ export function retimeToFit(bytes: Uint8Array, fit: SubtitleFit): Uint8Array {
   const document = parseSubtitleDocument(
     new TextDecoder("utf-8").decode(bytes),
   );
-  const retimed = retimeBlocks(document.blocks, fit.proposal);
+  const placed = applyPlacements(document, fit.alignment.cues, {
+    unmatched: "keep",
+  });
   return new TextEncoder().encode(
-    serialiseSubtitleDocument({ ...document, blocks: retimed.blocks }),
+    serialiseSubtitleDocument({ ...document, blocks: placed.blocks }),
   );
 }

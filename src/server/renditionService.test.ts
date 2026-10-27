@@ -9,7 +9,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   adaptiveVersionIdFor,
   createRenditionService,
@@ -592,6 +592,83 @@ describe("complete-file rendition routes", () => {
       { h264: true, hevc: false },
     );
     expect(afterwards.adaptive).toBeDefined();
+  });
+
+  /*
+   * On 2026-10-20 the registry on the Drive mount read as an empty file, and
+   * the service re-read it on the change in size and threw. A bad read keeps
+   * the copy that was read last; only a good one replaces it.
+   */
+  it("keeps the last good registry when the file reads empty or cut short", async () => {
+    const { service, sourcePath } = await fixture({ includeAdaptive: true });
+    const sourceStats = await stat(sourcePath);
+    const media = {
+      mediaId,
+      filePath: sourcePath,
+      size: sourceStats.size,
+      mtimeMs: sourceStats.mtimeMs,
+    };
+    const describe = () =>
+      service.createManifest(media, undefined, { h264: true, hevc: false });
+    expect((await describe()).adaptive).toBeDefined();
+
+    const registryPath = path.join(
+      path.dirname(path.dirname(sourcePath)),
+      ".seyirlik",
+      "state",
+      "registry.json",
+    );
+    const good = await readFile(registryPath, "utf8");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await writeFile(registryPath, "", "utf8");
+      expect((await describe()).adaptive).toBeDefined();
+      await writeFile(registryPath, good.slice(0, 60), "utf8");
+      expect((await describe()).adaptive).toBeDefined();
+      expect((await describe()).adaptive).toBeDefined();
+      expect(warn.mock.calls.map(([event]) => event)).toEqual([
+        "rendition_registry.read_failed_using_last_good",
+        "rendition_registry.read_failed_using_last_good",
+      ]);
+      expect(String(warn.mock.calls[0]?.[1]?.error)).toContain(
+        `The rendition registry at ${registryPath} could not be read`,
+      );
+
+      // A good registry that withdraws the title is believed.
+      const withdrawn = JSON.parse(good);
+      withdrawn.items[0].adaptiveStatus = "failed";
+      await writeFile(registryPath, JSON.stringify(withdrawn), "utf8");
+      expect((await describe()).adaptive).toBeUndefined();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("still fails when no registry has ever been read", async () => {
+    const { service, sourcePath } = await fixture({ includeAdaptive: true });
+    const sourceStats = await stat(sourcePath);
+    await writeFile(
+      path.join(
+        path.dirname(path.dirname(sourcePath)),
+        ".seyirlik",
+        "state",
+        "registry.json",
+      ),
+      "",
+      "utf8",
+    );
+    await expect(
+      service.createManifest(
+        {
+          mediaId,
+          filePath: sourcePath,
+          size: sourceStats.size,
+          mtimeMs: sourceStats.mtimeMs,
+        },
+        undefined,
+        { h264: true, hevc: false },
+      ),
+    ).rejects.toThrow("could not be read");
   });
 
   /** A record describing a different size is still rejected outright. */

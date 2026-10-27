@@ -53,6 +53,8 @@ const CONTENT_TYPES: Record<string, string> = {
   ts: "video/mp2t",
   m4s: "video/iso.segment",
   vtt: "text/vtt; charset=utf-8",
+  // A book read aloud (narrationStore.ts): AAC in MP4.
+  m4a: "audio/mp4",
   // Books. epub.js refuses an archive it is not told the type of, so these
   // matter as much as the video types do.
   epub: "application/epub+zip",

@@ -1052,6 +1052,88 @@ describe("an encoder that hangs on a damaged region", () => {
 });
 
 /**
+ * The same silent hang on a network volume.
+ *
+ * The 2026-10-23 incident: an epoch read over the Drive mount went quiet, the
+ * bounded probe timed out too, and the hang above was read as damage — so a
+ * healthy library was quarantined. On a network source that silence is waited
+ * out, and only a production circuit breaker that is never called proves it.
+ */
+describe("an encoder that hangs on a network volume", () => {
+  it("waits out a stall that clears and finishes the title", async () => {
+    if (!fixture) return;
+    const harness = await createHarness();
+    const { runner, failures } = failingSourceReads(harness, {
+      window: [11, 13],
+      mode: "hang-silently",
+      times: 1,
+    });
+
+    const hardFaults: string[] = [];
+    const verdicts: string[] = [];
+    const result = await runPackage(harness, {
+      runEncoder: runner,
+      stalls: FAST_STALLS,
+      sourceOnNetworkVolume: true,
+      networkStallBackoffMs: [0, 0, 0],
+      verifySourceReadable: async () => ({ verdict: "timeout" as const }),
+      onHardStorageFault: async (failure: { kind: string }) => {
+        hardFaults.push(failure.kind);
+      },
+      onEvent: (event: { type: string; verdict?: string }) => {
+        if (event.type === "source-io-retry" && event.verdict) {
+          verdicts.push(event.verdict);
+        }
+      },
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe("ready");
+    expect(result.sourceDamage).toBeUndefined();
+    expect(hardFaults).toEqual([]);
+    expect(verdicts).toEqual(["network-stall"]);
+    expect(failures()).toBe(1);
+  }, 900_000);
+
+  it("hands a stall that never clears back to the queue, not to quarantine", async () => {
+    if (!fixture) return;
+    const harness = await createHarness();
+    const { runner, failures } = failingSourceReads(harness, {
+      window: [11, 13],
+      mode: "hang-silently",
+    });
+
+    const hardFaults: string[] = [];
+    let asked = 0;
+    const result = await runPackage(harness, {
+      runEncoder: runner,
+      sourceDamagePolicy: "replace-epoch",
+      stalls: FAST_STALLS,
+      sourceOnNetworkVolume: true,
+      networkStallBackoffMs: [0, 0, 0],
+      verifySourceReadable: async () => {
+        asked += 1;
+        return { verdict: "timeout" as const };
+      },
+      onHardStorageFault: async (failure: { kind: string }) => {
+        hardFaults.push(failure.kind);
+      },
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.failureKind).toBe("network-read-stall");
+    // Never salvaged, even where salvage is allowed: nothing is wrong with it.
+    expect(result.sourceDamage).toBeUndefined();
+    expect(hardFaults).toEqual([]);
+    // Four reads, one per wait, before the queue gets it back.
+    expect(failures()).toBe(4);
+    expect(asked).toBe(4);
+    expect(await durableEpochs(harness)).toEqual(["000000", "000001"]);
+    expect(await partialEpochs(harness)).toEqual([]);
+  }, 900_000);
+});
+
+/**
  * What a killed attempt leaves on disk.
  *
  * The real incident left two `000010.partial-*` directories behind, because the

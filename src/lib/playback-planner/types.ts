@@ -68,6 +68,8 @@ export interface AudioStreamAnalysis {
 
 export interface SubtitleStreamAnalysis {
   index: number;
+  /** A mutable file beside the source, rather than an embedded track. */
+  isExternal?: boolean;
   codecName: string;
   language?: string;
   title?: string;

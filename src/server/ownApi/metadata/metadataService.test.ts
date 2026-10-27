@@ -219,6 +219,98 @@ describe("metadata identification", () => {
     ]);
   });
 
+  it("describes a title matched by hand from that match, without searching", async () => {
+    const locked = target({
+      id: "series-1",
+      kind: "series",
+      title: "Chernobyl",
+      providerIds: { tmdb: "87108" },
+      lockedFields: ["identity", "overview"],
+      metadataState: "locked",
+    });
+    const metadata = fakeMetadata(locked);
+    metadata.repository.listEpisodesForSeries = async () => [
+      target({
+        id: "e1",
+        kind: "episode",
+        title: "23-45",
+        productionYear: null,
+        seriesId: "series-1",
+        parentIndexNumber: 1,
+        indexNumber: 1,
+        metadataState: "pending",
+      }),
+    ];
+    const images = fakeImages();
+    const searchSeries = vi.fn(async () => []);
+    const getSeries = vi.fn(async () =>
+      details({ providerId: "87108", title: "Chernobyl" }),
+    );
+    const service = createMetadataService({
+      metadata: metadata.repository,
+      images,
+      imageStorage: fakeStorage(),
+      tmdb: fakeTmdb({
+        searchSeries,
+        getSeries,
+        getSeasonEpisodes: async () => [
+          {
+            seasonNumber: 1,
+            episodeNumber: 1,
+            title: "1:23:45",
+            overview: "The reactor explodes.",
+            airDate: "2019-05-06",
+            stillPath: "/still1.jpg",
+          },
+        ],
+      }),
+    });
+
+    const result = await service.identify(locked);
+
+    expect(searchSeries).not.toHaveBeenCalled();
+    expect(getSeries).toHaveBeenCalledWith("87108");
+    expect(result).toMatchObject({ status: "matched", providerId: "87108" });
+    expect(
+      metadata.updates.filter((entry) => entry.itemId === "e1"),
+    ).toContainEqual({
+      itemId: "e1",
+      update: expect.objectContaining({
+        title: "1:23:45",
+        overview: "The reactor explodes.",
+        metadataState: "matched",
+      }),
+    });
+    expect(images.upserts).toContainEqual(
+      expect.objectContaining({ itemId: "e1", imageType: "thumb" }),
+    );
+  });
+
+  it("keeps a match chosen by hand when the provider no longer knows it", async () => {
+    const locked = target({
+      providerIds: { tmdb: "999" },
+      lockedFields: ["identity"],
+    });
+    const metadata = fakeMetadata(locked);
+    const service = createMetadataService({
+      metadata: metadata.repository,
+      images: fakeImages(),
+      imageStorage: fakeStorage(),
+      tmdb: fakeTmdb({
+        getMovie: async () => {
+          throw new TmdbError("not-found", "No such movie.");
+        },
+      }),
+    });
+
+    const result = await service.identify(locked);
+
+    expect(result.status).toBe("not-found");
+    expect(metadata.updates).toEqual([
+      { itemId: "item-1", update: { metadataState: "locked" } },
+    ]);
+  });
+
   it("reuses a provider id that is already recorded instead of searching again", async () => {
     const searchMovies = vi.fn(async () => []);
     const getMovie = vi.fn(async () => details({ providerId: "999" }));

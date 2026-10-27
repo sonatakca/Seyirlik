@@ -9,7 +9,10 @@ import {
 import { SabError, type SabJob, type SabnzbdClient } from "./sabnzbd";
 import { IndexerError, type IndexerProvider } from "../indexers/indexerTypes";
 import type { IndexerRegistry } from "../indexers/indexerRegistry";
-import type { AcquisitionState } from "./acquisitionState";
+import {
+  MAX_ATTEMPTS_PER_RELEASE,
+  type AcquisitionState,
+} from "./acquisitionState";
 
 const NZB = new TextEncoder().encode("<nzb/>");
 const KEY = "seyirlik-acq-0001";
@@ -47,6 +50,7 @@ function makeStore(initial: Partial<AcquisitionRecord> = {}) {
         ...(patch.sizeBytes === undefined
           ? {}
           : { sizeBytes: patch.sizeBytes }),
+        ...(patch.retryAfterMs ? { retryAfterMs: patch.retryAfterMs } : {}),
         updatedAtMs: record.updatedAtMs,
       };
       return true;
@@ -248,6 +252,39 @@ describe("handing a release to SABnzbd", () => {
     expect(sab.submissions).toBe(0);
   });
 
+  it("says when it will try again, so the wait can end", async () => {
+    // A row parked with no time was never picked up again.
+    const { store, current } = makeStore();
+    const indexers = makeIndexers(async () => {
+      throw new IndexerError(
+        "unavailable",
+        "The provider could not be reached.",
+      );
+    });
+    await service(store, makeSab(), indexers, { now: () => 10_000 }).submit(
+      "acq-1",
+    );
+    expect(current()).toMatchObject({
+      state: "awaiting_retry",
+      retryAfterMs: 70_000,
+    });
+  });
+
+  it("fails rather than waits once the release has used its attempts", async () => {
+    const { store, current } = makeStore({
+      state: "awaiting_retry",
+      attempt: MAX_ATTEMPTS_PER_RELEASE - 1,
+    });
+    const indexers = makeIndexers(async () => {
+      throw new IndexerError(
+        "unavailable",
+        "The provider could not be reached.",
+      );
+    });
+    await service(store, makeSab(), indexers).submit("acq-1");
+    expect(current().state).toBe("failed");
+  });
+
   it("stops when the indexer refuses the credential", async () => {
     const { store, current } = makeStore();
     const indexers = makeIndexers(async () => {
@@ -309,6 +346,33 @@ describe("reconciling with SABnzbd", () => {
     });
   });
 
+  it("waits for SABnzbd to name the path before calling it downloaded", async () => {
+    // History can say Completed before `storage` is filled.
+    const { store, current } = makeStore({
+      state: "processing",
+      externalId: "nzo-1",
+    });
+    const job: SabJob = {
+      nzoId: "nzo-1",
+      name: KEY,
+      state: "completed",
+      source: "history",
+    };
+    const runner = service(store, makeSab({ jobs: [job] }));
+    expect((await runner.reconcile()).changed).toBe(0);
+    expect(current().state).toBe("processing");
+
+    const later = service(
+      store,
+      makeSab({ jobs: [{ ...job, storagePath: "C:/downloads/complete/x" }] }),
+    );
+    await later.reconcile();
+    expect(current()).toMatchObject({
+      state: "downloaded",
+      downloadPath: "C:/downloads/complete/x",
+    });
+  });
+
   it("finds a lost submission by name and adopts it", async () => {
     // Seyirlik never learned the id; SABnzbd has the job under our name.
     const { store, current } = makeStore({ state: "submitting" });
@@ -353,6 +417,7 @@ describe("reconciling with SABnzbd", () => {
     });
     await late.reconcile();
     expect(current().state).toBe("awaiting_retry");
+    expect(current().retryAfterMs).toBeGreaterThan(100_000);
   });
 
   it("marks a job that vanished after we knew its id as removed elsewhere", async () => {

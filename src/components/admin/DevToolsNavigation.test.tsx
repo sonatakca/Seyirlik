@@ -139,6 +139,26 @@ describe("the administration navigation", () => {
     expect(current?.getAttribute("href")).toBe("/admin");
   });
 
+  it("switches the player's playback details from the menu", async () => {
+    mobile.value = false;
+    window.localStorage.removeItem("seyirlik-player-playback-details");
+    renderAt("/admin");
+
+    const nav = screen.getByRole("navigation", { name: "admin.nav.label" });
+    const toggle = within(nav).getByRole("switch", {
+      name: "admin.nav.playbackDetails",
+    });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+
+    await userEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(
+      window.localStorage.getItem("seyirlik-player-playback-details"),
+    ).toBe("false");
+    window.localStorage.removeItem("seyirlik-player-playback-details");
+  });
+
   it("adds no page heading of its own, so a tool keeps exactly one", () => {
     // Every tool already renders its own h1. A second one from the shell would
     // be the duplicate page header this work exists to remove.

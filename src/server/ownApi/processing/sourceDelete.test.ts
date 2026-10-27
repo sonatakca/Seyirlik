@@ -4,7 +4,11 @@ import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { decideProcessing } from "../../../renditions/processing/decide";
-import { computeSourceFingerprint } from "../../../renditions/registry";
+import {
+  computeSourceFingerprint,
+  createEmptyRenditionRegistry,
+  type RenditionRegistryItem,
+} from "../../../renditions/registry";
 import type { RouteContext, RoutePrincipal } from "../api/router";
 import { OwnApiError } from "../ownApiHandler";
 import { ADAPTIVE_PROFILE_VERSION } from "../../../renditions/adaptive/profile";
@@ -26,7 +30,8 @@ vi.mock("../../../renditions/probe", () => ({
 vi.mock("../../../renditions/hardware/detect", () => ({
   detectHardware: vi.fn(async () => ({ platform: "test", adapters: [] })),
 }));
-vi.mock("../../../renditions/registry", () => ({
+vi.mock("../../../renditions/registry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../renditions/registry")>()),
   computeSourceFingerprint: vi.fn(async () => FINGERPRINT),
 }));
 vi.mock("../../../renditions/processing/decide", () => ({
@@ -350,8 +355,12 @@ describe("POST /processing/source/delete", () => {
  * merely bytes some package in the folder matches.
  */
 describe("removing a source for a particular job", () => {
-  function enqueuer(root: string) {
+  function enqueuer(
+    root: string,
+    registry?: Parameters<typeof createProcessingEnqueuer>[0]["registry"],
+  ) {
     return createProcessingEnqueuer({
+      ...(registry ? { registry } : {}),
       catalogue: stubCatalogue(),
       store: stubStore(null),
       queue: {} as unknown as JobQueue,
@@ -401,5 +410,68 @@ describe("removing a source for a particular job", () => {
       expect.objectContaining({ rungs: [1080], elsewhere: false }),
     );
     expect(await exists(data.sourcePath)).toBe(true);
+  });
+
+  /*
+   * Lilyhammer S01E01, 2026-10-20: the package was whole, the registry write
+   * that tells playback about it was lost, and the source was removed.
+   */
+  describe("asks the registry playback reads", () => {
+    const registryWith = (entry: Partial<RenditionRegistryItem> | null) => ({
+      read: async () => ({
+        ...createEmptyRenditionRegistry(),
+        items: entry
+          ? [
+              {
+                id: "11111111-1111-4111-8111-111111111111",
+                relativePath: "Movies/Solaris (1972)/Solaris (1972).mkv",
+                size: SOURCE_BYTES.length,
+                // The stub catalogue row records no modification time.
+                mtimeMs: 0,
+                sourceFingerprint: FINGERPRINT,
+                profileVersion: "legacy",
+                lastSeenAt: "2026-10-20T00:00:00.000Z",
+                adaptiveStatus: "ready" as const,
+                adaptiveProfileVersion: ADAPTIVE_PROFILE_VERSION,
+                ...entry,
+              },
+            ]
+          : [],
+      }),
+    });
+
+    it("removes it once playback's entry is ready", async () => {
+      const data = await fixture();
+      const removal = await enqueuer(data.root, registryWith({})).removeSource(
+        ITEM,
+        FILE,
+      );
+      expect(removal.deleted).toBe(true);
+    });
+
+    it.each([
+      ["there is no entry", null, "has no entry"],
+      [
+        "the entry is not ready",
+        { adaptiveStatus: "pending" as const },
+        "is pending",
+      ],
+      [
+        "the entry describes other bytes",
+        { sourceFingerprint: "b".repeat(64) },
+        "other source bytes",
+      ],
+    ])("keeps it when %s", async (_label, entry, reason) => {
+      const data = await fixture();
+      const refusal = enqueuer(data.root, registryWith(entry)).removeSource(
+        ITEM,
+        FILE,
+      );
+      await expect(refusal).rejects.toMatchObject({
+        code: "PROCESSING_PACKAGE_INCOMPLETE",
+      });
+      await expect(refusal).rejects.toThrow(reason);
+      expect(await exists(data.sourcePath)).toBe(true);
+    });
   });
 });

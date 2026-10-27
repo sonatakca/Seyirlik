@@ -20,7 +20,7 @@ import {
   validationError,
 } from "../api/validation";
 import type { JobQueue } from "../tasks/jobQueue";
-import { ACQUISITION_JOB_TYPES } from "./acquisitionJobs";
+import { ACQUISITION_JOB_TYPES, submitDedupeKey } from "./acquisitionJobs";
 import {
   createAcquisitionFallback,
   mediaTargetOf,
@@ -64,17 +64,6 @@ const CREATE_KEYS = [
   "score",
   "reasons",
 ] as const;
-
-/**
- * One queued submission per acquisition.
- *
- * The queue collapses this onto a job that is queued or already running, so
- * asking twice cannot put the same release in front of two workers. It does
- * not collapse onto a finished job, which is what leaves a retry free to run.
- */
-function submitDedupeKey(acquisitionId: string): string {
-  return `acquisition.submit:${acquisitionId}`;
-}
 
 interface AcquisitionDto {
   readonly id: string;
@@ -164,6 +153,8 @@ interface ProgressDto {
   readonly stage:
     | "queued"
     | "paused"
+    /** In the queue, but no news server SABnzbd can use will send it. */
+    | "stalled"
     | "downloading"
     | "processing"
     | "done"
@@ -190,14 +181,15 @@ function progressOf(
   job: SabJob,
   speedBytesPerSecond: number | undefined,
   queuePaused: boolean,
+  serversDown: boolean,
 ): ProgressDto {
   // A queue-wide pause stops waiting and downloading jobs, while history
-  // post-processing can still run. SABnzbd leaves slot statuses unchanged.
-  const paused =
-    job.state === "paused" ||
-    (queuePaused &&
-      job.source === "queue" &&
-      (job.state === "queued" || job.state === "downloading"));
+  // post-processing can still run. SABnzbd leaves slot statuses unchanged,
+  // and it leaves them unchanged too when no news server will connect.
+  const waiting =
+    job.source === "queue" &&
+    (job.state === "queued" || job.state === "downloading");
+  const paused = job.state === "paused" || (queuePaused && waiting);
   const stage: ProgressDto["stage"] =
     job.state === "completed"
       ? "done"
@@ -205,11 +197,13 @@ function progressOf(
         ? "failed"
         : paused
           ? "paused"
-          : job.state === "queued"
-            ? "queued"
-            : job.state === "processing"
-              ? "processing"
-              : "downloading";
+          : serversDown && waiting
+            ? "stalled"
+            : job.state === "queued"
+              ? "queued"
+              : job.state === "processing"
+                ? "processing"
+                : "downloading";
   const total = job.sizeBytes;
   const downloaded =
     total === undefined
@@ -443,7 +437,7 @@ export function createAcquisitionRoutes({
        * Live rather than stored: the reconciler writes state every thirty
        * seconds, which is right for "what is it doing" and far too coarse for
        * a progress bar. One queue read and one history read answer it for
-       * every acquisition at once.
+       * every acquisition at once, and a server read when nothing is moving.
        *
        * An unreachable SABnzbd is reported as such, not as an error: the
        * acquisitions themselves are still listed from the database.
@@ -490,6 +484,28 @@ export function createAcquisitionRoutes({
          * actually moving, which is the first one downloading, and to no
          * other — attributing it to every row would invent several speeds.
          */
+        /*
+         * Nothing moving with work waiting is either a moment between
+         * articles or a queue no server will serve. SABnzbd's slots read
+         * "Downloading" in both, so only its servers can tell them apart —
+         * asked only then, since the answer costs another request.
+         */
+        const stalledServers =
+          !queue.paused &&
+          !queue.speedBytesPerSecond &&
+          queue.jobs.some(
+            (job) => job.state === "queued" || job.state === "downloading",
+          )
+            ? await sab.servers().then(
+                (servers) =>
+                  servers.length > 0 &&
+                  servers.every((server) => !server.active || server.error)
+                    ? servers
+                    : undefined,
+                () => undefined,
+              )
+            : undefined;
+
         const moving = queue.paused
           ? undefined
           : queue.jobs
@@ -511,12 +527,23 @@ export function createAcquisitionRoutes({
               job,
               job === moving ? queue.speedBytesPerSecond : undefined,
               queue.paused,
+              stalledServers !== undefined,
             ),
           );
         }
         sendData(context.response, context.requestId, {
           reachable: true,
           paused: queue.paused,
+          ...(stalledServers === undefined
+            ? {}
+            : {
+                stalled: {
+                  servers: stalledServers.map((server) => ({
+                    name: server.name,
+                    ...(server.error ? { error: server.error } : {}),
+                  })),
+                },
+              }),
           ...(queue.paused || queue.speedBytesPerSecond === undefined
             ? {}
             : { speedBytesPerSecond: queue.speedBytesPerSecond }),

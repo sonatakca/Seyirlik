@@ -19,6 +19,7 @@ import {
 import {
   decideAudioStreams,
   decideSubtitleStreams,
+  keptAudioStreamIndexes,
   type StreamPolicyOptions,
 } from "../processing/streamPolicy";
 import {
@@ -98,9 +99,7 @@ export function planRetainedStreams(
   const audio = decideAudioStreams(probe.audioTracks, options);
   const subtitles = decideSubtitleStreams(probe.subtitleTracks, options);
   return {
-    audioStreamIndexes: audio
-      .filter((decision) => decision.keep)
-      .map((decision) => decision.streamIndex),
+    audioStreamIndexes: keptAudioStreamIndexes(audio),
     // A kept bitmap track has no WebVTT to extract, so it cannot join the
     // package even though the policy retains it on the source.
     subtitleStreamIndexes: subtitles

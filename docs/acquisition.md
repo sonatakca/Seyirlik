@@ -66,7 +66,9 @@ Fourteen failure classes, each mapped to one of three dispositions:
 
 - **retry** — the world was briefly unavailable (client down, indexer down,
   submission timed out, disk full). Exponential backoff, capped at three
-  attempts per release.
+  attempts per release. The row waits in `awaiting_retry` with its
+  `retry_after` time, and the reconciler hands it back to the submit job once
+  that time has passed; a release out of attempts is `failed` instead.
 - **try another release** — this release will fail the same way next time
   (missing articles, repair failed, unpack failed, password required). Seyirlik
   does not pick the replacement itself: searching again is a decision, and the
@@ -128,6 +130,13 @@ job’s status. A globally paused queue reports waiting and downloading jobs as
 paused, without a speed or ETA; post-processing already in history continues
 to report its actual step. Submission does not resume the downloader: an
 operator’s pause must remain effective until they choose to resume it.
+
+When work is waiting, nothing is moving, and every news server SABnzbd holds
+is set aside or carries an error, the endpoint calls those jobs `stalled` and
+names the servers with SABnzbd's own error. SABnzbd's slots still say
+"Downloading" then, so only its server status (`mode=status`, asked only when
+the queue has no speed) tells a dead provider from a pause between articles.
+The figures stay SABnzbd's own; there is no speed or ETA.
 
 History failures have a distinct `failed` progress stage. The page shows the
 failure immediately and refreshes the acquisition list, even before worker

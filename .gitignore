@@ -50,3 +50,7 @@ design/
 
 # Local state of the control dashboard in development (control/dev-setup.mjs).
 control/.dev/
+
+# The narrator (Python, runs on a Mac)
+__pycache__/
+*.pyc

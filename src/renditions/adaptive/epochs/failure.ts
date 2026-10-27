@@ -38,6 +38,16 @@ export type ProcessingFailureKind =
    * crashed and the distinction is what an operator needs to debug it.
    */
   | "media-progress-timeout"
+  /**
+   * The encoder went quiet on a network volume, a bounded re-read of the same
+   * stretch timed out as well, and waiting did not bring it back.
+   *
+   * Not `source-io`: a cloud mount that is slow to fetch says nothing about the
+   * media, and quarantining it would stop the library over a busy connection.
+   * Not `media-progress-timeout` either, because the read itself is what did
+   * not answer, and that one is worth the queue trying again later.
+   */
+  | "network-read-stall"
   | "source-missing"
   | "encoder"
   | "unknown";
@@ -223,6 +233,15 @@ export function classifyFailure({
       ...carry,
     };
   }
+  if (sourceVerdict === "network-stall") {
+    return {
+      kind: "network-read-stall",
+      summary:
+        "The network volume stopped answering while the source was being read, and waiting did not bring it back. Nothing points at the media itself, so this will be tried again later.",
+      detail,
+      ...carry,
+    };
+  }
   if (sourceVerdict === "source-damage" && ioRechecksExhausted) {
     return {
       kind: "source-io",
@@ -383,6 +402,9 @@ export class AudioStageError extends Error {
  * media-progress timeout ends the attempt and is worth a person's attention;
  * what it must never do is quietly become a black placeholder, because that
  * would let a deadlocked encoder erase five minutes of a film.
+ *
+ * A network read stall travels in it too, with `failure.kind` saying which one
+ * it is: the media is equally blameless there, and equally never replaced.
  */
 export class MediaProgressTimeoutError extends Error {
   readonly failure: ClassifiedFailure;

@@ -12,7 +12,20 @@ import {
   readJsonBody,
 } from "./http";
 
-export type RouteAccess = "public" | "authenticated" | "admin";
+/**
+ * `narrator` routes are for the narrator (the computer that reads books
+ * aloud), never a person: they take a narrator key as a bearer token and
+ * nothing else, no session cookie. A browser never sends that header on its
+ * own, so a page elsewhere cannot make one of these requests with a key it
+ * does not have, and they need neither an origin nor a CSRF token.
+ */
+export type RouteAccess = "public" | "authenticated" | "admin" | "narrator";
+
+/** The narrator a `narrator` route's key belongs to. */
+export interface RouteNarrator {
+  keyId: string;
+  label: string;
+}
 
 export interface RoutePrincipal {
   userId: string;
@@ -31,8 +44,10 @@ export interface RouteContext {
   url: URL;
   params: Readonly<Record<string, string>>;
   method: string;
-  /** Null only on `public` routes. */
+  /** Null on `public` and `narrator` routes. */
   principal: RoutePrincipal | null;
+  /** Set on `narrator` routes only. */
+  narrator?: RouteNarrator | null;
   /** Throws `AUTH_REQUIRED` instead of returning null. */
   requirePrincipal(): RoutePrincipal;
   readJson(maxBytes?: number): Promise<unknown>;
@@ -59,6 +74,8 @@ export type RouteSessionResolver = (
 export interface CreateRouterOptions {
   routes: RouteDefinition[];
   resolveSession: RouteSessionResolver;
+  /** The narrator a request's bearer key names; without one no narrator route answers. */
+  resolveNarrator?: (request: IncomingMessage) => Promise<RouteNarrator | null>;
   csrfSecret: string;
   csrfCookieName: string;
   publicOrigin?: string;
@@ -148,6 +165,7 @@ export interface OwnApiRouter {
 export function createOwnApiRouter({
   routes,
   resolveSession,
+  resolveNarrator,
   csrfSecret,
   csrfCookieName,
   publicOrigin,
@@ -210,8 +228,18 @@ export function createOwnApiRouter({
 
     const { route, params } = exact;
     let principal: RoutePrincipal | null = null;
+    let narrator: RouteNarrator | null = null;
 
-    if (route.access !== "public") {
+    if (route.access === "narrator") {
+      narrator = resolveNarrator ? await resolveNarrator(request) : null;
+      if (!narrator) {
+        throw new OwnApiError(
+          "NARRATOR_KEY_REQUIRED",
+          "A narrator key is required.",
+          401,
+        );
+      }
+    } else if (route.access !== "public") {
       principal = await resolveSession(request);
       if (!principal) {
         throw new OwnApiError(
@@ -229,7 +257,7 @@ export function createOwnApiRouter({
       }
     }
 
-    if (!SAFE_METHODS.has(method)) {
+    if (!SAFE_METHODS.has(method) && route.access !== "narrator") {
       requireMutationOrigin(request, publicOrigin, trustedOrigins);
 
       if (principal) {
@@ -261,6 +289,7 @@ export function createOwnApiRouter({
       params,
       method,
       principal,
+      narrator,
       requirePrincipal: () => {
         if (!principal) {
           throw new OwnApiError(

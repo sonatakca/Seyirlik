@@ -118,6 +118,9 @@ export function createMetadataService({
       ...(details.originalTitle
         ? { originalTitle: details.originalTitle }
         : {}),
+      ...(details.originalLanguage
+        ? { originalLanguage: details.originalLanguage }
+        : {}),
       ...(details.overview ? { overview: details.overview } : {}),
       ...(details.tagline ? { tagline: details.tagline } : {}),
       ...(details.releaseDate ? { premiereDate: details.releaseDate } : {}),
@@ -294,15 +297,19 @@ export function createMetadataService({
   }
 
   async function identify(target: MetadataTarget): Promise<IdentifyResult> {
-    if (target.lockedFields.includes("identity")) {
+    const isSeries = target.kind === "series";
+    const existingProviderId = target.providerIds.tmdb;
+
+    // A locked identity only forbids choosing a different match. A title an
+    // administrator matched by hand is still described from that match, its
+    // episodes included; the fields they edited carry locks of their own.
+    const identityLocked = target.lockedFields.includes("identity");
+    if (identityLocked && !existingProviderId) {
       // Move it out of the pending set as well, otherwise the batch scan would
       // keep selecting the same locked item and never terminate.
       await metadata.applyTitleMetadata(target.id, { metadataState: "locked" });
       return { itemId: target.id, status: "skipped" };
     }
-
-    const isSeries = target.kind === "series";
-    const existingProviderId = target.providerIds.tmdb;
 
     try {
       let providerId = existingProviderId;
@@ -377,8 +384,9 @@ export function createMetadataService({
       };
     } catch (error) {
       if (error instanceof TmdbError && error.kind === "not-found") {
+        // A match chosen by hand stays the administrator's to undo.
         await metadata.applyTitleMetadata(target.id, {
-          metadataState: "unmatched",
+          metadataState: identityLocked ? "locked" : "unmatched",
         });
         return { itemId: target.id, status: "not-found" };
       }

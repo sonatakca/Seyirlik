@@ -6,9 +6,58 @@ import {
   type RefObject,
 } from "react";
 import { fetchOriginalFrame } from "../../lib/mediaApi";
-import type { TranslationKey } from "../../i18n/translations";
 
-const FRAME_NOTICE_MS = 3200;
+/** How long each outcome stays up; saving is held until it has one. */
+const SHOWN_MS = {
+  "pause-first": 3200,
+  saved: 4600,
+  // Long enough to reach Try again.
+  failed: 7000,
+} as const;
+
+/** The exit animation's length, so the toast is removed after it, not during. */
+export const FRAME_CAPTURE_EXIT_MS = 280;
+
+/**
+ * Further than this from the element's own time, a presented-frame time is
+ * taken to belong to some other moment, and the element's time is used.
+ */
+const PRESENTED_FRAME_TRUST_SECONDS = 2;
+
+/** The media time of the frame each element last put on screen. */
+const presentedFrameTimes = new WeakMap<HTMLVideoElement, number>();
+
+/**
+ * Follows every frame an element presents, for as long as it lives.
+ *
+ * `currentTime` does not say which frame is on screen. Chrome and WebKit's
+ * MSE path show the last frame that began by it, but Safari has been seen
+ * paused on a frame after it and on one before it (Arcane S01E07 at 35:09 and
+ * 35:10), so a save keyed to `currentTime` came back a frame or two away — a
+ * different shot at a cut. `requestVideoFrameCallback` reports the presented
+ * frame's own timestamp, which is the one to save.
+ */
+export function followPresentedFrames(video: HTMLVideoElement): void {
+  if (presentedFrameTimes.has(video) || !video.requestVideoFrameCallback) {
+    return;
+  }
+  presentedFrameTimes.set(video, Number.NaN);
+  const onFrame: VideoFrameRequestCallback = (_now, metadata) => {
+    presentedFrameTimes.set(video, metadata.mediaTime);
+    video.requestVideoFrameCallback(onFrame);
+  };
+  video.requestVideoFrameCallback(onFrame);
+}
+
+/** Where the frame on screen sits in the media, as exactly as the browser says. */
+export function onScreenFrameTime(video: HTMLVideoElement): number {
+  const presented = presentedFrameTimes.get(video);
+  return presented !== undefined &&
+    Number.isFinite(presented) &&
+    Math.abs(presented - video.currentTime) <= PRESENTED_FRAME_TRUST_SECONDS
+    ? presented
+    : video.currentTime;
+}
 
 /** Finder and Explorer both refuse these characters in a file name. */
 function toFileSafeName(name: string | null | undefined): string {
@@ -50,8 +99,17 @@ interface FrameCaptureOptions {
   playSessionId: string | undefined;
   itemName: string | null | undefined;
   revealPlayerChrome: () => void;
-  t: (key: TranslationKey) => string;
 }
+
+/**
+ * What the frame toast is showing. Each press gets a new id, so a second save
+ * replays the entrance rather than editing the first one in place.
+ */
+export type FrameCapture =
+  | { id: number; status: "pause-first" }
+  | { id: number; status: "saving"; atSeconds: number }
+  | { id: number; status: "saved"; atSeconds: number; imageUrl: string }
+  | { id: number; status: "failed"; atSeconds: number };
 
 /** Saving the paused frame at the original's full resolution, and saying how it went. */
 export function useFrameCapture({
@@ -59,34 +117,60 @@ export function useFrameCapture({
   playSessionId,
   itemName,
   revealPlayerChrome,
-  t,
 }: FrameCaptureOptions) {
-  const [frameNotice, setFrameNotice] = useState<string | null>(null);
+  const [capture, setCapture] = useState<FrameCapture | null>(null);
+  const [leaving, setLeaving] = useState(false);
   const [isSavingFrame, setIsSavingFrame] = useState(false);
-  const frameNoticeTimerRef = useRef<number | null>(null);
+  const nextIdRef = useRef(0);
+  const timersRef = useRef<number[]>([]);
+  // The saved still shown in the toast; a URL of its own, apart from the download's.
+  const imageUrlRef = useRef<string | null>(null);
 
-  const showFrameNotice = useCallback(
-    (message: string, durationMs = FRAME_NOTICE_MS) => {
-      if (frameNoticeTimerRef.current !== null) {
-        window.clearTimeout(frameNoticeTimerRef.current);
-      }
-      setFrameNotice(message);
-      frameNoticeTimerRef.current = window.setTimeout(() => {
-        frameNoticeTimerRef.current = null;
-        setFrameNotice(null);
-      }, durationMs);
+  const clearTimers = useCallback(() => {
+    timersRef.current.forEach((timer) => window.clearTimeout(timer));
+    timersRef.current = [];
+  }, []);
+
+  const releaseImage = useCallback(() => {
+    if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current);
+    imageUrlRef.current = null;
+  }, []);
+
+  const show = useCallback(
+    (next: FrameCapture) => {
+      clearTimers();
+      if (next.status !== "saved") releaseImage();
+      setLeaving(false);
+      setCapture(next);
+      if (next.status === "saving") return;
+      timersRef.current.push(
+        window.setTimeout(() => {
+          setLeaving(true);
+          timersRef.current.push(
+            window.setTimeout(() => {
+              setCapture(null);
+              setLeaving(false);
+              releaseImage();
+            }, FRAME_CAPTURE_EXIT_MS),
+          );
+        }, SHOWN_MS[next.status]),
+      );
     },
-    [],
+    [clearTimers, releaseImage],
   );
 
   useEffect(
     () => () => {
-      if (frameNoticeTimerRef.current !== null) {
-        window.clearTimeout(frameNoticeTimerRef.current);
-      }
+      clearTimers();
+      releaseImage();
     },
-    [],
+    [clearTimers, releaseImage],
   );
+
+  // Every render, because a quality switch can put another deck in the ref.
+  useEffect(() => {
+    if (videoRef.current) followPresentedFrames(videoRef.current);
+  });
 
   /**
    * Saves the paused frame from the original file rather than from the
@@ -98,23 +182,24 @@ export function useFrameCapture({
   const handleSaveFrame = useCallback(async () => {
     revealPlayerChrome();
     if (isSavingFrame) return;
+    const id = ++nextIdRef.current;
 
     const video = videoRef.current;
     if (!video || !video.paused) {
-      showFrameNotice(t("player.saveFramePauseFirst"));
+      show({ id, status: "pause-first" });
       return;
     }
 
+    const atSeconds = Math.max(0, onScreenFrameTime(video));
     const sessionId = playSessionId;
     if (!sessionId) {
-      showFrameNotice(t("player.saveFrameFailed"));
+      show({ id, status: "failed", atSeconds });
       return;
     }
 
-    const atSeconds = Math.max(0, video.currentTime);
     setIsSavingFrame(true);
     // Held until the capture answers: a 4K HEVC frame can take a few seconds.
-    showFrameNotice(t("player.saveFrameSaving"), 60_000);
+    show({ id, status: "saving", atSeconds });
 
     try {
       const frame = await fetchOriginalFrame(sessionId, atSeconds);
@@ -122,10 +207,13 @@ export function useFrameCapture({
         frame,
         `${toFileSafeName(itemName)} ${formatFrameTimestamp(atSeconds)}.png`,
       );
-      showFrameNotice(t("player.saveFrameSaved"));
+      releaseImage();
+      const imageUrl = URL.createObjectURL(frame);
+      imageUrlRef.current = imageUrl;
+      show({ id, status: "saved", atSeconds, imageUrl });
     } catch (frameError) {
       console.warn("[Seyirlik Player] Could not save the frame", frameError);
-      showFrameNotice(t("player.saveFrameFailed"));
+      show({ id, status: "failed", atSeconds });
     } finally {
       setIsSavingFrame(false);
     }
@@ -133,11 +221,11 @@ export function useFrameCapture({
     playSessionId,
     isSavingFrame,
     itemName,
+    releaseImage,
     revealPlayerChrome,
-    showFrameNotice,
-    t,
+    show,
     videoRef,
   ]);
 
-  return { frameNotice, isSavingFrame, handleSaveFrame };
+  return { capture, leaving, isSavingFrame, handleSaveFrame };
 }

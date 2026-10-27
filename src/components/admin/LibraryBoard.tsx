@@ -104,6 +104,7 @@ function SeasonsInline({
         onTrickplay: (itemId) => void actions.trickplay(itemId),
         onUploadSubtitle: (itemId, file) =>
           void actions.uploadSubtitle(itemId, file, uploadPolicy),
+        onSynced: () => getLibraryTitle(title.id).then(setDetail),
       }}
     />
   );

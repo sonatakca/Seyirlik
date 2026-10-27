@@ -25,9 +25,10 @@ import type { StorageIdentityProbe } from "../../../renditions/processing/storag
 import { probeMediaFile } from "../../../renditions/probe";
 import { RenditionLockHeldError } from "../../../renditions/locks";
 import {
-  loadRenditionRegistry,
+  createFileRenditionRegistryStore,
+  findRegistryItemById,
+  type RenditionRegistryStore,
   RenditionRegistryUnreadableError,
-  saveRenditionRegistry,
   upsertRegistrySource,
 } from "../../../renditions/registry";
 import {
@@ -103,6 +104,7 @@ import {
   overallProgress,
   type ProcessingStage,
 } from "./stages";
+import type { OriginalLanguageLookup } from "./originalLanguage";
 
 /**
  * Which durable stage each build phase belongs to.
@@ -171,13 +173,6 @@ export const LIVE_PUBLISH_INTERVAL_MS = 250;
 export const LIVE_HEARTBEAT_INTERVAL_MS = 2_000;
 
 /**
- * How long a job waits for a registry that reads back empty before giving the
- * attempt back to the queue. Observed outages on MSI's mount lasted about a
- * minute; the queue's own backoff covers anything longer.
- */
-export const REGISTRY_UNREADABLE_WAIT_MS = 2 * 60_000;
-
-/**
  * Runs one processing job from analysis to publication.
  *
  * Every stage transition and every progress update goes through the store, so
@@ -191,6 +186,7 @@ export interface ProcessingJobRunnerDeps {
   /** What the processing page calls this machine; see `processedBy`. */
   workerName?: string;
   paths: RenditionPaths;
+  registry?: RenditionRegistryStore;
   mediaRoot: string;
   ffmpegPath?: string;
   ffprobePath?: string;
@@ -201,8 +197,6 @@ export interface ProcessingJobRunnerDeps {
   probeFn?: typeof probeMediaFile;
   /** Free bytes on the output volume. Injected so tests can force a shortfall. */
   freeBytesFn?: typeof freeBytesOn;
-  /** Overrides `REGISTRY_UNREADABLE_WAIT_MS`; injected in tests. */
-  registryUnreadableWaitMs?: number;
   /** Whether a verified package is already on scratch. Injected in tests. */
   verifiedPackageFn?: typeof hasVerifiedScratchPackage;
   /** Bytes of an unverified scratch package a rebuild removes. Injected in tests. */
@@ -261,6 +255,8 @@ export interface ProcessingJobRunnerDeps {
    */
   stalls?: StallThresholds;
   now?: () => number;
+  /** The title's original language, which leads the kept audio when known. */
+  originalLanguageFor?: OriginalLanguageLookup;
 }
 
 /**
@@ -399,6 +395,15 @@ export const PROCESSING_ERROR_CODES = {
    */
   mediaProgressTimeout: "MEDIA_PROGRESS_TIMEOUT",
   /**
+   * A network volume stopped answering mid-read and waiting did not bring it
+   * back.
+   *
+   * Requeued, unlike the two above: a cloud mount that was slow for a few
+   * minutes is usually quick again by the queue's next attempt, and nothing
+   * about the media or the encode is in doubt.
+   */
+  sourceReadStalled: "SOURCE_READ_STALLED",
+  /**
    * The package was built correctly but the folder it was told to publish into
    * belongs to a different title.
    *
@@ -445,7 +450,6 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
     packageFn = packageAdaptiveRendition,
     probeFn = probeMediaFile,
     freeBytesFn = freeBytesOn,
-    registryUnreadableWaitMs = REGISTRY_UNREADABLE_WAIT_MS,
     verifiedPackageFn = hasVerifiedScratchPackage,
     replaceablePackageFn = replaceableScratchPackageBytes,
     storageAvailableFn,
@@ -456,11 +460,17 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
     driveUploads,
     sourceDamagePolicy = sourceDamagePolicyFromEnvironment(),
     stalls = stallThresholds(),
+    originalLanguageFor,
   } = deps;
   // Older callers and isolated tests predate the dedicated scratch root.
   // Keeping their work under the state root preserves the same ownership
   // checks without ever falling back to an unscoped filesystem location.
   const workRoot = paths.workRoot ?? paths.stateRoot;
+  const registryStore =
+    deps.registry ??
+    createFileRenditionRegistryStore(
+      path.join(paths.stateRoot, "registry.json"),
+    );
 
   async function enterStage(
     job: ProcessingJobRecord,
@@ -917,6 +927,12 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
         return checkpoints + replaceable;
       })
       .catch(() => 0);
+    // Read now rather than at enqueue, so work queued before the language was
+    // recorded still gets it. Unreadable is only "not known": the policy then
+    // keeps the source default, as it always has.
+    const originalLanguage = await originalLanguageFor?.(job.itemId).catch(
+      () => undefined,
+    );
     const decision = decideProcessing({
       inheritedBytes,
       probe,
@@ -924,6 +940,7 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
       sizeBytes: input.sizeBytes,
       hardware,
       ...(freeBytes === undefined ? {} : { freeBytes }),
+      ...(originalLanguage ? { policy: { originalLanguage } } : {}),
     });
 
     /*
@@ -1304,35 +1321,22 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
      * under the catalogue's own file id would produce a perfectly valid
      * package in a directory nothing ever looks in.
      */
-    const registryPath = path.join(paths.stateRoot, "registry.json");
-    /*
-     * MSI reads the registry through its own rclone mount, which has reported
-     * the file as empty for a minute or more after it changed. Failing on the
-     * first empty read emptied the whole queue into ENCODE_FAILED, one title
-     * every five seconds, so the read waits it out here and, past that, the
-     * failure is retryable.
-     */
-    const registry = await loadRenditionRegistry(registryPath, {
-      unreadableWaitMs: registryUnreadableWaitMs,
-      ...(input.signal ? { signal: input.signal } : {}),
-      onUnreadable: (error) => {
-        void store
-          .appendEvent({
-            processingJobId: job.id,
-            stage: "waiting",
-            level: "warning",
-            message: `${error.message} Waiting for it to read back before encoding.`,
-          })
-          .catch(() => undefined);
-      },
-    });
-    const registryItem = upsertRegistrySource(registry, {
-      relativePath: input.relativePath,
-      size: input.sizeBytes,
-      mtimeMs: input.mtimeMs,
-      sourceFingerprint: job.sourceFingerprint,
-    });
-    await saveRenditionRegistry(registryPath, registry);
+    let registryItem: ReturnType<typeof upsertRegistrySource>;
+    try {
+      registryItem = await registryStore.update((registry) =>
+        upsertRegistrySource(registry, {
+          relativePath: input.relativePath,
+          size: input.sizeBytes,
+          mtimeMs: input.mtimeMs,
+          sourceFingerprint: job.sourceFingerprint,
+        }),
+      );
+    } catch (error) {
+      // Otherwise only the `finally` much further down stops the heartbeat,
+      // and a job that failed here kept republishing for the worker's life.
+      clearInterval(heartbeat);
+      throw error;
+    }
 
     /**
      * Cancellation has to reach FFmpeg, not just the loop around it.
@@ -2169,7 +2173,14 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
                     processingJobId: job.id,
                     stage: "video",
                     level: "warning",
-                    message: `Epoch ${event.index + 1} could not be read (attempt ${event.attempt} of ${event.maxAttempts}); the volume was re-checked and is still available, so the read is being retried.`,
+                    message:
+                      event.verdict === "network-stall"
+                        ? `Epoch ${event.index + 1} stalled on the network volume and a bounded read of the same stretch timed out (attempt ${event.attempt} of ${event.maxAttempts}). This is read as a slow connection, not damage, so ${
+                            event.attempt < event.maxAttempts
+                              ? "the read will be tried again after a wait."
+                              : "the queue will try the job again later."
+                          }`
+                        : `Epoch ${event.index + 1} could not be read (attempt ${event.attempt} of ${event.maxAttempts}); the volume was re-checked and is still available, so the read is being retried.`,
                     detail: {
                       epochIndex: event.index,
                       attempt: event.attempt,
@@ -2659,7 +2670,9 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
           ? PROCESSING_ERROR_CODES.sourceUnreadable
           : result.failureKind === "media-progress-timeout"
             ? PROCESSING_ERROR_CODES.mediaProgressTimeout
-            : PROCESSING_ERROR_CODES.encodeFailed;
+            : result.failureKind === "network-read-stall"
+              ? PROCESSING_ERROR_CODES.sourceReadStalled
+              : PROCESSING_ERROR_CODES.encodeFailed;
       return fail(
         code,
         result.error ?? "The package could not be produced.",
@@ -2715,6 +2728,43 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
         }.`,
     );
 
+    /*
+     * Playback finds the package only through this entry, so it is written
+     * before the job is called a success, and so before its upload is followed
+     * and its source can be removed. A write that fails leaves the job failed
+     * and requeued; the next attempt finds the verified package and only
+     * publishes it again.
+     *
+     * Applied to the registry as it is now, not to the copy read when the job
+     * started: that is hours old, and writing it back would undo every change
+     * made since. A removed entry or a replacement source must not be
+     * resurrected or marked ready by an encode that started before it.
+     */
+    try {
+      await registryStore.update((registry) => {
+        const readyItem = findRegistryItemById(registry, registryItem.id);
+        if (
+          !readyItem ||
+          readyItem.sourceFingerprint !== registryItem.sourceFingerprint
+        ) {
+          throw new Error(
+            "The registry source was removed or changed while this package was encoding.",
+          );
+        }
+        readyItem.adaptiveStatus = "ready";
+        readyItem.adaptiveProfileVersion = ADAPTIVE_PROFILE_VERSION;
+        delete readyItem.adaptiveLastError;
+      });
+    } catch (error) {
+      return fail(
+        PROCESSING_ERROR_CODES.encodeFailed,
+        `The package was published, but the rendition registry could not record it, so playback cannot find it yet: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        true,
+      );
+    }
+
     await store.update(job.id, {
       state: "succeeded",
       stage: "complete",
@@ -2748,10 +2798,6 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
       etaSeconds: 0,
       finishedAt: new Date(),
     });
-    registryItem.adaptiveStatus = "ready";
-    registryItem.adaptiveProfileVersion = ADAPTIVE_PROFILE_VERSION;
-    delete registryItem.adaptiveLastError;
-    await saveRenditionRegistry(registryPath, registry);
 
     /*
      * Published here means written into the mount's cache. The upload to

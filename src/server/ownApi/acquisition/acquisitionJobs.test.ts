@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ACQUISITION_JOB_TYPES,
   createAcquisitionJobHandlers,
+  type AutomaticReplacement,
 } from "./acquisitionJobs";
 import type {
   AcquisitionRepository,
@@ -213,5 +214,70 @@ describe("bringing the record back into agreement with SABnzbd", () => {
     ]);
     await handlers(f)[ACQUISITION_JOB_TYPES.reconcile]!(context({}));
     expect(f.updates).toHaveLength(0);
+  });
+});
+
+describe("submitting again a release whose retry is due", () => {
+  function withQueue(f: Fakes) {
+    const enqueue = vi.fn(async () => "task-1");
+    const automatic = {
+      fallback: {},
+      blocklist: {},
+      queue: { enqueue },
+    } as unknown as AutomaticReplacement;
+    return {
+      enqueue,
+      run: () =>
+        createAcquisitionJobHandlers(f.service, f.repository, automatic)[
+          ACQUISITION_JOB_TYPES.reconcile
+        ]!(context({})),
+    };
+  }
+
+  it("hands a due row back to the submit job, once per acquisition", async () => {
+    const f = fakes([
+      summary({
+        state: "awaiting_retry",
+        failureClass: "indexer-unavailable",
+        retryAfterMs: Date.now() - 1_000,
+      }),
+    ]);
+    const { enqueue, run } = withQueue(f);
+    expect(await run()).toMatchObject({ resubmitted: 1 });
+    expect(enqueue).toHaveBeenCalledWith({
+      jobType: ACQUISITION_JOB_TYPES.submit,
+      payload: { acquisitionId: "a1" },
+      // The key the routes use, so a hand retry and this collapse together.
+      dedupeKey: "acquisition.submit:a1",
+    });
+    // The submit job claims the row; the reconciler only asks for it.
+    expect(f.updates).toHaveLength(0);
+  });
+
+  it("leaves a row whose time has not come", async () => {
+    const f = fakes([
+      summary({
+        state: "awaiting_retry",
+        failureClass: "indexer-unavailable",
+        retryAfterMs: Date.now() + 60_000,
+      }),
+    ]);
+    const { enqueue, run } = withQueue(f);
+    expect(await run()).toMatchObject({ resubmitted: 0 });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it("treats a row parked with no time as due", async () => {
+    /*
+     * Before retries were scheduled, a transient failure was parked with no
+     * time and nothing ever picked it up again: House of the Dragon S02 sat
+     * "waiting to try again" for two days.
+     */
+    const f = fakes([
+      summary({ state: "awaiting_retry", failureClass: "indexer-unavailable" }),
+    ]);
+    const { enqueue, run } = withQueue(f);
+    await run();
+    expect(enqueue).toHaveBeenCalledTimes(1);
   });
 });

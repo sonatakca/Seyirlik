@@ -415,6 +415,13 @@ export interface AdaptivePackagerOptions {
    * Tests shorten it; nothing else should.
    */
   sourceIoBackoffMs?: readonly number[];
+  /**
+   * Whether the source is read over the network. Left out, the engine decides
+   * from the path, which is right for the UNC shares the Windows hosts use.
+   */
+  sourceOnNetworkVolume?: boolean;
+  /** Waits between re-reads of a quiet network source. Tests shorten it. */
+  networkStallBackoffMs?: readonly number[];
   driveSpaceProvider?: () => Promise<DriveSpace>;
   runEncoder?: (
     command: string,
@@ -847,6 +854,8 @@ export async function packageAdaptiveRendition(
     probeScratchIdentity,
     expectedScratchIdentity,
     sourceIoBackoffMs,
+    sourceOnNetworkVolume,
+    networkStallBackoffMs,
     missingRoots,
     driveSpaceProvider = () => getDriveSpace(paths.workRoot),
     runEncoder = runFfmpegProcess,
@@ -1756,6 +1765,10 @@ export async function packageAdaptiveRendition(
         ...(missingRoots ? { missingRoots } : {}),
         ...(onHardStorageFault ? { onHardStorageFault } : {}),
         ...(sourceIoBackoffMs ? { sourceIoBackoffMs } : {}),
+        ...(sourceOnNetworkVolume === undefined
+          ? {}
+          : { sourceOnNetworkVolume }),
+        ...(networkStallBackoffMs ? { networkStallBackoffMs } : {}),
         sourceDamagePolicy,
         stalls,
         /*
@@ -2010,6 +2023,9 @@ export async function packageAdaptiveRendition(
           sourcePath: request.sourcePath,
           audioOutputs: plannedAudioOutputs,
           sourceDurationSeconds: probe.durationSeconds,
+          // The ladder stops at the last frame; sound after it would make the
+          // audio outlast every rung. See `withVideoEnd`.
+          ...(videoEndSeconds === null ? {} : { endSeconds: videoEndSeconds }),
           ffmpegPath,
           ffprobePath,
           logPath: path.join(paths.logsRoot, `${request.mediaId}.adaptive.log`),
@@ -2076,7 +2092,9 @@ export async function packageAdaptiveRendition(
        * The encoder stopped producing while the source proved readable. Not
        * salvageable — replacing film to work around a wedged encoder would be
        * the worst outcome this feature could have — and not a retry either,
-       * because the next attempt would wedge in the same place.
+       * because the next attempt would wedge in the same place. The kind is
+       * passed through rather than assumed, because a network read stall
+       * arrives by this route too and is one the queue does retry.
        */
       if (error instanceof MediaProgressTimeoutError) {
         return {
@@ -2086,7 +2104,7 @@ export async function packageAdaptiveRendition(
             error.stalledForMs / 1000,
           )}s after reaching ${error.lastMediaSeconds.toFixed(1)}s. Every completed checkpoint is kept.`,
           issues: [error.failure.detail],
-          failureKind: "media-progress-timeout",
+          failureKind: error.failure.kind,
         };
       }
       if (error instanceof StorageInterruptedError) {

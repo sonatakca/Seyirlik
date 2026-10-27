@@ -16,6 +16,10 @@
  */
 import { randomUUID } from "node:crypto";
 import type { DatabasePool } from "../database/databasePool";
+import {
+  publicDriveUpload,
+  type DriveUploadStatus,
+} from "../processing/driveUploadStatus";
 import type {
   ImportFailureClass,
   ImportFileRole,
@@ -118,6 +122,8 @@ export interface ImportFileRecord {
   readonly destinationIdentity?: string;
   readonly failureClass?: string;
   readonly failureDetail?: string;
+  /** Its way to Google Drive after the import, where the helper follows it. */
+  readonly driveUpload?: DriveUploadStatus;
 }
 
 export interface PlannedImportFile {
@@ -269,6 +275,7 @@ interface FileRow {
   destination_identity: string | null;
   failure_class: string | null;
   failure_detail: string | null;
+  drive_upload: Record<string, unknown> | null;
 }
 
 const COLUMNS = `id, acquisition_id, idempotency_key, state, strategy,
@@ -279,7 +286,8 @@ const COLUMNS = `id, acquisition_id, idempotency_key, state, strategy,
 
 const FILE_COLUMNS = `id, import_id, role, source_relative,
   destination_relative, destination_key, state, strategy, size_bytes,
-  source_mtime_ms, destination_identity, failure_class, failure_detail`;
+  source_mtime_ms, destination_identity, failure_class, failure_detail,
+  drive_upload`;
 
 function numeric(value: string | number | null): number | undefined {
   if (value === null) return undefined;
@@ -319,6 +327,7 @@ function toRecord(row: Row): ImportRecord {
 function toFileRecord(row: FileRow): ImportFileRecord {
   const size = numeric(row.size_bytes);
   const mtime = numeric(row.source_mtime_ms);
+  const driveUpload = publicDriveUpload(row.drive_upload);
   return {
     id: row.id,
     importId: row.import_id,
@@ -337,6 +346,7 @@ function toFileRecord(row: FileRow): ImportFileRecord {
       : {}),
     ...(row.failure_class ? { failureClass: row.failure_class } : {}),
     ...(row.failure_detail ? { failureDetail: row.failure_detail } : {}),
+    ...(driveUpload ? { driveUpload } : {}),
   };
 }
 

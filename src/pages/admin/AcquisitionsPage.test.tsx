@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AcquisitionsPage } from "./AcquisitionsPage";
@@ -412,6 +412,44 @@ describe("the acquisitions page", () => {
     expect(screen.queryByText("admin.acquisitions.progress.paused")).toBeNull();
   });
 
+  it("calls a download no news server will serve stalled, and says why", async () => {
+    // The client's own slot still read "Downloading" at 94% for a day.
+    const error =
+      "Cannot connect to server news.newsdemon.com [502 Connection failure. Please contact technical support.]";
+    api.listAcquisitions.mockResolvedValue([
+      acquisition({ state: "downloading" }),
+    ]);
+    api.getDownloadProgress.mockResolvedValue({
+      reachable: true,
+      paused: false,
+      stalled: { servers: [{ name: "news.newsdemon.com", error }] },
+      remainingBytes: 1_026_000_000,
+      progress: [
+        {
+          acquisitionId: "a1",
+          stage: "stalled",
+          statusText: "Downloading",
+          percent: 94.8,
+          totalBytes: 19_812_000_000,
+          downloadedBytes: 18_786_000_000,
+          queuePosition: 1,
+        },
+      ],
+    });
+    renderPage();
+    expect(
+      await screen.findByText("admin.acquisitions.row.stalled"),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("admin.acquisitions.progress.stalled"),
+    ).toBeTruthy();
+    expect(screen.getByText("admin.acquisitions.client.stalled")).toBeTruthy();
+    expect(screen.getByText(error, { exact: false })).toBeTruthy();
+    expect(
+      screen.queryByText("admin.acquisitions.state.downloading"),
+    ).toBeNull();
+  });
+
   it("names the post-processing step once the bytes are down", async () => {
     api.listAcquisitions.mockResolvedValue([
       acquisition({ state: "processing" }),
@@ -458,6 +496,26 @@ describe("the acquisitions page", () => {
     expect(screen.queryByText(/0 MB \/ 0 MB|100%/)).toBeNull();
     await waitFor(() => expect(api.listAcquisitions).toHaveBeenCalledTimes(2));
   });
+
+  it.each(["queued", "downloading"] as const)(
+    "puts a live failure in Needs you while the stored state is %s",
+    async (state) => {
+      api.listAcquisitions.mockResolvedValue([acquisition({ state })]);
+      api.getDownloadProgress.mockResolvedValue({
+        reachable: true,
+        paused: false,
+        progress: [{ acquisitionId: "a1", stage: "failed", statusText: "Failed" }],
+      });
+      renderPage();
+      const heading = await screen.findByText("admin.acquisitions.bucket.needsAttention");
+      const section = heading.closest("section")!;
+      expect(within(section).getByText("admin.acquisitions.state.failed")).toBeTruthy();
+      expect(screen.queryByText(`admin.acquisitions.state.${state}`)).toBeNull();
+      expect(screen.queryByText("admin.acquisitions.unpacking.heading")).toBeNull();
+      expect(screen.queryByText("admin.acquisitions.queue.heading")).toBeNull();
+      expect(screen.queryByRole("progressbar")).toBeNull();
+    },
+  );
 
   it("says plainly when the download client is not answering", async () => {
     api.getDownloadProgress.mockResolvedValue({

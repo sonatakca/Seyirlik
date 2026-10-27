@@ -221,3 +221,73 @@ describe("assessSourceRead", () => {
     }
   });
 });
+
+/**
+ * The same silence on a cloud mount.
+ *
+ * On 2026-10-23 an epoch read over the Drive mount stalled for 26 s and the
+ * probe's 15 s did not answer either, so the rule above called it damage and
+ * quarantined the library. The stretch read cleanly afterwards.
+ */
+describe("assessSourceRead on a network volume", () => {
+  const clean = readSourceIoEvidence("");
+  const inputEio = readSourceIoEvidence(REAL_INCIDENT);
+
+  it("reads a stall the probe could not answer as a slow fetch", () => {
+    const assessment = assessSourceRead({
+      evidence: clean,
+      watchdogAborted: true,
+      probe: { verdict: "timeout" },
+      transientBudget: 4,
+      networkVolume: true,
+      networkStallBudget: 4,
+    });
+    expect(assessment.verdict).toBe("network-stall");
+    expect(assessment.fullReadBudget).toBe(4);
+  });
+
+  it("still calls an explicit read failure damage", () => {
+    const failed = assessSourceRead({
+      evidence: clean,
+      watchdogAborted: true,
+      probe: { verdict: "unreadable" },
+      transientBudget: 4,
+      networkVolume: true,
+      networkStallBudget: 4,
+    });
+    expect(failed.verdict).toBe("source-damage");
+
+    const named = assessSourceRead({
+      evidence: inputEio,
+      watchdogAborted: true,
+      probe: { verdict: "timeout" },
+      transientBudget: 4,
+      networkVolume: true,
+      networkStallBudget: 4,
+    });
+    expect(named.verdict).toBe("source-damage");
+  });
+
+  it("leaves a wedged encoder a media-progress timeout", () => {
+    const assessment = assessSourceRead({
+      evidence: clean,
+      watchdogAborted: true,
+      probe: { verdict: "readable" },
+      transientBudget: 4,
+      networkVolume: true,
+      networkStallBudget: 4,
+    });
+    expect(assessment.verdict).toBe("media-progress-timeout");
+  });
+
+  it("changes nothing for a local disk", () => {
+    const assessment = assessSourceRead({
+      evidence: clean,
+      watchdogAborted: true,
+      probe: { verdict: "timeout" },
+      transientBudget: 4,
+    });
+    expect(assessment.verdict).toBe("source-damage");
+    expect(assessment.fullReadBudget).toBe(1);
+  });
+});

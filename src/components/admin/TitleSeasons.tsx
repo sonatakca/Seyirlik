@@ -1,4 +1,5 @@
-import { Captions, Images, Search } from "lucide-react";
+import { useState } from "react";
+import { Captions, Images, Search, Timer } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
 import type { TranslationKey } from "../../i18n/translations";
 import {
@@ -14,6 +15,7 @@ import { Facts } from "./libraryPresentation";
 import { actionButton, TONE_STYLE } from "./libraryStyle";
 import { Tooltip } from "../ui/Tooltip";
 import { SubtitleUploadButton } from "./SubtitleUploadControl";
+import { SubtitleSyncPanel } from "./SubtitleSyncPanel";
 import { getThumbImageUrl } from "../../lib/mediaApi";
 
 /** The episode's own still when the catalogue has one, TMDB's when it does not. */
@@ -51,6 +53,12 @@ export interface SeasonActions {
    * offers no upload rather than guessing a language.
    */
   onUploadSubtitle?: (itemId: string, file: File) => void;
+  /**
+   * Called after an episode's subtitle was retimed. Its presence is what
+   * offers the sync: a show's subtitles are timed one episode at a time, so the
+   * episode row is the only place a sync can be asked for.
+   */
+  onSynced?: () => void | Promise<void>;
   /** Searches for a season's missing episodes; absent where it is not offered. */
   onSearchMissing?: (season: number) => void;
   /** A search for this title's missing episodes is still running. */
@@ -67,6 +75,7 @@ function EpisodeRow({
   actions: SeasonActions;
 }) {
   const { t } = useLanguage();
+  const [syncing, setSyncing] = useState(false);
   // A show's aired episode that is not on disk is missing, whatever the
   // show's own wanted flag says; only one unmonitored on purpose is grey.
   const tone = toneOf(
@@ -135,6 +144,28 @@ function EpisodeRow({
               onPick={(file) => actions.onUploadSubtitle?.(episode.id!, file)}
             />
           ) : null}
+          {actions.onSynced ? (
+            <Tooltip content={t("library.syncSubtitle")}>
+              <button
+                type="button"
+                className={actionButton}
+                aria-expanded={syncing}
+                onClick={() => setSyncing(!syncing)}
+                aria-label={`${t("library.syncSubtitle")} · ${code}`}
+              >
+                <Timer size={13} aria-hidden="true" />
+              </button>
+            </Tooltip>
+          ) : null}
+        </div>
+      ) : null}
+      {syncing && episode.id && actions.onSynced ? (
+        <div className="w-full">
+          <SubtitleSyncPanel
+            itemId={episode.id}
+            initiallyOpen
+            onSynced={actions.onSynced}
+          />
         </div>
       ) : null}
     </li>

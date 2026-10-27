@@ -86,6 +86,7 @@ function toSubtitle(stream: MediaStreamRow): SubtitleStreamAnalysis {
   const codecName = stream.codec ?? "";
   return {
     index: stream.streamIndex,
+    ...(stream.isExternal ? { isExternal: true } : {}),
     codecName,
     ...(stream.language === null ? {} : { language: stream.language }),
     ...(stream.title === null ? {} : { title: stream.title }),

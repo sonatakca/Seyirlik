@@ -11,7 +11,7 @@ import {
   type DatabasePool,
 } from "./database/databasePool";
 import { parseDatabaseConfig } from "./database/databaseConfig";
-import { validateMigrationsCurrent } from "./database/migrationRunner";
+import { validateMigrationsApplied } from "./database/migrationRunner";
 import { createUserRepository } from "./users/userRepository";
 import { createSessionRepository } from "./auth/sessionRepository";
 import { createArgon2PasswordHasher } from "./auth/passwords";
@@ -46,6 +46,12 @@ import { createBookMarkRoutes } from "./books/bookMarkRoutes";
 import { createBookSearch } from "./books/bookSearch";
 import { createBookSearchProcess } from "./books/bookSearchProcess";
 import { createBookSearchRoutes } from "./books/bookSearchRoutes";
+import { createNarrationRepository } from "./books/narration/narrationRepository";
+import {
+  createNarrationRoutes,
+  createNarratorResolver,
+} from "./books/narration/narrationRoutes";
+import { createNarrationStore } from "./books/narration/narrationStore";
 import { startBookPreindexing } from "./books/bookPreindexing";
 import { createBookUploader } from "./books/bookUpload";
 import { createMetadataRepository } from "./metadata/metadataRepository";
@@ -66,7 +72,7 @@ import {
   parseLibraryDefinitions,
 } from "./libraries/libraryRepository";
 import { createJobQueue } from "./tasks/jobQueue";
-import { createWorker } from "./tasks/worker";
+import { createWorker, type WorkerControl } from "./tasks/worker";
 import { createJobHandlers, JOB_TYPES } from "./tasks/jobHandlers";
 import {
   ownsLibrary,
@@ -74,6 +80,7 @@ import {
   parseWorkerRole,
   workerLanes,
 } from "./tasks/workerRole";
+import { createLibraryChangeMonitor } from "./scanner/libraryChanges";
 import { parseDeleteMissing, parseRescanMinutes } from "./scanner/scanSettings";
 import {
   deviceLossEvidence,
@@ -94,6 +101,10 @@ import {
   createImportProcessingStore,
   createImportProcessingSweep,
 } from "./imports/importProcessing";
+import {
+  createDatabaseImportUploadStore,
+  followImportUploads,
+} from "./imports/importUploads";
 import { createProcessingJobRunner } from "./processing/jobRunner";
 import {
   createDatabaseDriveUploadStore,
@@ -162,6 +173,7 @@ import {
 import { parseNfoConfig, writesFiles } from "./nfo/nfoConfig";
 import { parseOrganizeMode } from "./scanner/organizeConfig";
 import { createQueuedWorkRetargeter } from "./processing/retargetQueuedWork";
+import { createOriginalLanguageLookup } from "./processing/originalLanguage";
 import { createNfoRepository } from "./nfo/nfoRepository";
 import { createNfoWriter } from "./nfo/nfoWriter";
 import { createNfoService } from "./nfo/nfoService";
@@ -192,6 +204,7 @@ import {
   missingEpisodePlan,
 } from "./acquisition/missingEpisodes";
 import { createLibraryAdminRoutes } from "./catalogue/libraryAdminRoutes";
+import { createDatabaseRenditionRegistryStore } from "./processing/renditionRegistryStore";
 import { createTitleRemoval } from "./catalogue/titleRemoval";
 import { createMonitoringRoutes } from "./releases/monitoringRoutes";
 import { parseSabnzbdConfig } from "./acquisition/acquisitionConfig";
@@ -206,6 +219,20 @@ import { createAcquisitionRoutes } from "./acquisition/acquisitionRoutes";
 import { parseImportConfig } from "./imports/importConfig";
 import { parseSubtitleConfig } from "./subtitles/subtitleConfig";
 import {
+  createSubtitleAnalysisHandler,
+  createSubtitleAnalysisStore,
+  parseAsrConfig,
+  parseEmbeddingConfig,
+  SUBTITLE_ANALYSIS_JOB_TYPE,
+  transcriptAnchors,
+} from "./subtitles/subtitleAnalysis";
+import {
+  createTransformersEmbedder,
+  DEFAULT_SUBTITLE_EMBEDDING_MODEL,
+  SUBTITLE_EMBEDDING_MODELS,
+} from "./subtitles/subtitleEmbedder";
+import type { MeaningEvidence } from "./subtitles/subtitleSync";
+import {
   createSubtitleRuntime,
   disabledSubtitleJobTypes,
 } from "./subtitles/subtitleRuntime";
@@ -213,6 +240,11 @@ import { createSubtitleRoutes } from "./subtitles/subtitleRoutes";
 import type { TitleReferences } from "./subtitles/subtitleReferences";
 import { createSubtitleUploader } from "./subtitles/subtitleUpload";
 import { createProviderSessionVault } from "./subtitles/providerSessionVault";
+import { createOpenSubtitlesAccounts } from "./subtitles/openSubtitlesAccounts";
+import {
+  createOpenSubtitlesProvider,
+  OPENSUBTITLES_ID,
+} from "./subtitles/openSubtitlesProvider";
 import {
   createTurkceAltyaziProvider,
   SEYIRLIK_USER_AGENT,
@@ -275,6 +307,11 @@ export interface NativeRuntime {
   resolveRouteTemplate(pathname: string): string | undefined;
   databaseCheck(): Promise<"available" | "unavailable">;
   jobsCheck(): Promise<"available" | "unavailable">;
+  /**
+   * The job loop, for a dedicated worker process that hands itself over to a
+   * newer release between jobs. Absent when this process runs no worker.
+   */
+  worker?: WorkerControl;
   close(): Promise<void>;
 }
 
@@ -419,7 +456,7 @@ export async function createNativeRuntime({
     startup?.update("database", { operation: "verify-schema" });
     await validateNativeIdentitySchema(pool);
     startup?.update("database", { operation: "verify-migrations" });
-    await validateMigrationsCurrent(pool);
+    await validateMigrationsApplied(pool);
   } catch (error) {
     await pool.end().catch(() => undefined);
     throw new Error(
@@ -441,6 +478,7 @@ export async function createNativeRuntime({
   });
 
   const libraries = createLibraryRepository(pool);
+  const originalLanguageFor = createOriginalLanguageLookup(pool);
   const definitions = parseLibraryDefinitions(environment.SEYIRLIK_LIBRARIES);
 
   /*
@@ -449,8 +487,16 @@ export async function createNativeRuntime({
    * `workerRole.ts` and `ReconcileOptions.deleteMissing`.
    */
   const workerRole = parseWorkerRole(environment.SEYIRLIK_WORKER_ROLE);
-  const processingWorker = ownsProcessing(runWorker, workerRole);
-  const libraryWorker = ownsLibrary(runWorker, workerRole);
+  /*
+   * A bridge (`releaseBridge.ts`) runs beside a worker that still holds an
+   * encode. That worker owns everything a role owns; the bridge only claims
+   * short jobs, so it must not also recover "interrupted" encodes or run the
+   * timers, or it would act on the encode still running next to it.
+   */
+  const bridgeWorker = environment.SEYIRLIK_WORKER_BRIDGE === "1";
+  const processingWorker =
+    !bridgeWorker && ownsProcessing(runWorker, workerRole);
+  const libraryWorker = !bridgeWorker && ownsLibrary(runWorker, workerRole);
   const deleteMissingTitles = parseDeleteMissing(
     environment.SEYIRLIK_CATALOGUE_DELETE_MISSING,
   );
@@ -469,6 +515,12 @@ export async function createNativeRuntime({
   const images = createImageRepository(pool);
   const userState = createUserStateRepository(pool);
   const bookPositions = createBookPositionRepository(pool);
+  // Books read aloud by a narrator outside the server; their audio goes to
+  // generated storage beside the book search indexes.
+  const narrations = createNarrationRepository(pool);
+  const narrationStore = createNarrationStore(
+    path.join(generatedStoragePath, "narrations"),
+  );
   const bookMarks = createBookMarkRepository(pool);
   // Nothing starts until a book is first searched: the model downloads into
   // generated storage then, and runs in its own low-priority process.
@@ -483,6 +535,13 @@ export async function createNativeRuntime({
     : null;
   const playbackSessions = createPlaybackSessionStore(pool);
   const queue = createJobQueue(pool);
+  const libraryChanges = createLibraryChangeMonitor({
+    mediaRoot,
+    libraries,
+    queue,
+    fileSystem: createNodeScannerFileSystem(mediaRoot),
+    onError: (message) => console.warn(`[Seyirlik Library] ${message}`),
+  });
 
   const imageStorage = createImageStorage({
     imageRoot: path.join(generatedStoragePath, "images"),
@@ -544,6 +603,15 @@ export async function createNativeRuntime({
   const renditionStateRoot =
     environment.SEYIRLIK_RENDITION_STATE_ROOT?.trim() ||
     path.join(mediaRoot, ".seyirlik", "state");
+  /**
+   * The rendition registry lives in the database both machines share, not in
+   * `registry.json` on the Drive mount each of them writes through; see
+   * migration 041. Import the file explicitly before activating this release.
+   */
+  const renditionRegistry = createDatabaseRenditionRegistryStore(pool, {
+    writer: environment.SEYIRLIK_WORKER_NAME?.trim() || hostname(),
+    requireExisting: true,
+  });
   const renditionWorkRoot =
     environment.SEYIRLIK_RENDITION_WORK_ROOT?.trim() ||
     path.join(mediaRoot, ".seyirlik", "work");
@@ -760,6 +828,7 @@ export async function createNativeRuntime({
          */
         const recovery = await readCheckpointRecovery({
           paths: renditionPaths,
+          registry: renditionRegistry,
           workspaceId: job.id,
           relativePath: file.relativePath,
           sourceFingerprint: job.sourceFingerprint,
@@ -1130,6 +1199,8 @@ export async function createNativeRuntime({
           ffmpegPath ?? environment.SEYIRLIK_FFMPEG_PATH ?? "ffmpeg",
         ),
         storageGuard,
+        registry: renditionRegistry,
+        originalLanguageFor,
       })
     : null;
 
@@ -1143,6 +1214,7 @@ export async function createNativeRuntime({
           jobs: processingJobs,
           enqueuer: workerEnqueuer,
           store: createDatabaseSourceCleanupStore(pool),
+          registry: renditionRegistry,
           verifyOnDrive: (titleRoot, manifest) =>
             packageGapsOnDrive({
               client: driveRcClient,
@@ -1186,6 +1258,19 @@ export async function createNativeRuntime({
         })
       : undefined;
   if (driveUploads) void driveUploads.resume().catch(() => undefined);
+  /*
+   * Imported files, followed the same way onto their own rows. Never marked
+   * for deletion: an imported file is the source, not something made from it.
+   */
+  const importUploads =
+    driveRc && driveRcClient
+      ? createDriveUploadTracker({
+          config: { ...driveRc, deleteSource: false },
+          client: driveRcClient,
+          store: createDatabaseImportUploadStore(pool),
+        })
+      : undefined;
+  if (importUploads) void importUploads.resume().catch(() => undefined);
   // Uploads that finished while no worker was left to decide their source.
   if (sourceCleanup) void sourceCleanup.resume().catch(() => undefined);
 
@@ -1197,6 +1282,7 @@ export async function createNativeRuntime({
     mediaRoot,
     renditionRoot,
     stateRoot: renditionStateRoot,
+    registry: renditionRegistry,
     mediaResolver: {
       resolveMedia: () => {
         throw new Error("The native playback routes resolve media themselves.");
@@ -1364,8 +1450,22 @@ export async function createNativeRuntime({
    * sessions are sealed in. Constructed only when subtitles are configured, so
    * a server that never enabled them never reads or writes a session row.
    */
+  const openSubtitlesAccounts = subtitleConfig
+    ? createOpenSubtitlesAccounts({
+        db: pool,
+        secret: authConfig.sessionHashSecret,
+      })
+    : undefined;
   const availableSubtitleProviders = subtitleProviders ?? [
     createTurkceAltyaziProvider(),
+    // Ranked below TürkçeAltyazı: asked only when it had nothing.
+    ...(openSubtitlesAccounts
+      ? [
+          createOpenSubtitlesProvider({
+            credentials: openSubtitlesAccounts.credentials,
+          }),
+        ]
+      : []),
   ];
   const subtitleVault = subtitleConfig
     ? createProviderSessionVault({
@@ -1375,6 +1475,117 @@ export async function createNativeRuntime({
         anonymous: { [TURKCE_ALTYAZI_ID]: { userAgent: SEYIRLIK_USER_AGENT } },
       })
     : undefined;
+  /*
+   * What a subtitle is timed against, from the package first: its audio
+   * rendition (the same print as the source, read through its playlist in
+   * about twenty seconds over the Drive mount, where a DTS source can take
+   * minutes) and its copies of the video's own text subtitles. The source
+   * only for a title not packaged yet: processing removes it.
+   */
+  const titleReferences: TitleReferences = (() => {
+    const located = async (mediaFileId: string, relativePath: string) => {
+      const file = await catalogue.getFileById(mediaFileId);
+      if (!file || file.relativePath !== relativePath) return null;
+      const root = path.resolve(mediaRoot);
+      const sourcePath = path.resolve(root, ...relativePath.split("/"));
+      if (!sourcePath.startsWith(root + path.sep)) return null;
+      return {
+        file,
+        sourcePath,
+        media: {
+          mediaId: file.id,
+          filePath: sourcePath,
+          size: Number(file.sizeBytes),
+          mtimeMs: Number(file.mtimeMs),
+        },
+      };
+    };
+    return {
+      audio: async ({ mediaFileId, relativePath, sourceStreamIndex }) => {
+        const found = await located(mediaFileId, relativePath);
+        if (!found) return null;
+        const packaged = await renditions
+          .findPackagedAudio(found.media, sourceStreamIndex)
+          .catch(() => null);
+        if (packaged)
+          return {
+            path: packaged.playlistPath,
+            streamIndex: 0,
+            isPackagePlaylist: true,
+          };
+        const present = await stat(found.sourcePath).then(
+          (stats) => stats.isFile(),
+          () => false,
+        );
+        if (!present) return null;
+        const audio = (await catalogue.listStreams(found.file.id)).filter(
+          (stream) => stream.kind === "audio" && !stream.isExternal,
+        );
+        const chosen =
+          audio.find((stream) => stream.streamIndex === sourceStreamIndex) ??
+          audio.find((stream) => stream.isDefault) ??
+          audio[0];
+        return chosen
+          ? { path: found.sourcePath, streamIndex: chosen.streamIndex }
+          : null;
+      },
+      embeddedSubtitles: async ({ mediaFileId, relativePath }) => {
+        const found = await located(mediaFileId, relativePath);
+        if (!found || !renditions.findPackagedSubtitles) return [];
+        return (await renditions.findPackagedSubtitles(found.media))
+          .filter((subtitle) => !subtitle.fromSidecar)
+          .map((subtitle) => ({
+            streamIndex: subtitle.streamIndex,
+            language: subtitle.language ?? null,
+            path: subtitle.path,
+          }));
+      },
+    } satisfies TitleReferences;
+  })();
+
+  /*
+   * Speech recognition and meaning, both optional (see subtitleAnalysis.ts).
+   * The recogniser runs where SEYIRLIK_SUBTITLE_ASR names one — the encoding
+   * laptop — and only there claims transcription jobs. The embedding model
+   * runs where SEYIRLIK_SUBTITLE_EMBEDDINGS names a directory for it, which is
+   * where subtitles are synced; it is loaded on first use and let go after
+   * ten idle minutes, like the reader's search model.
+   */
+  const subtitleAsr = parseAsrConfig(environment);
+  const subtitleEmbeddings = parseEmbeddingConfig(environment);
+  const subtitleAnalyses = createSubtitleAnalysisStore(pool);
+  const subtitleMeaning: MeaningEvidence | undefined = subtitleEmbeddings
+    ? (() => {
+        const embedder = createTransformersEmbedder({
+          model: SUBTITLE_EMBEDDING_MODELS[DEFAULT_SUBTITLE_EMBEDDING_MODEL],
+          cacheDir: subtitleEmbeddings.modelDir,
+          threads: subtitleEmbeddings.threads,
+        });
+        let idle: NodeJS.Timeout | null = null;
+        const touch = () => {
+          if (idle) clearTimeout(idle);
+          idle = setTimeout(() => void embedder.dispose(), 10 * 60_000);
+          idle.unref?.();
+        };
+        return {
+          anchorsFor: async (input) => {
+            touch();
+            return transcriptAnchors({
+              store: subtitleAnalyses,
+              embedder,
+              ...input,
+            });
+          },
+          requestTranscript: ({ mediaFileId, sourceStreamIndex }) =>
+            queue.enqueue({
+              jobType: SUBTITLE_ANALYSIS_JOB_TYPE,
+              payload: { mediaFileId, sourceStreamIndex },
+              dedupeKey: `subtitle-analyse:${mediaFileId}:${sourceStreamIndex ?? "default"}`,
+            }),
+        } satisfies MeaningEvidence;
+      })()
+    : undefined;
+
   const subtitles = createSubtitleRuntime({
     config: subtitleConfig,
     pool,
@@ -1382,6 +1593,7 @@ export async function createNativeRuntime({
     sessions: subtitleSessions ?? subtitleVault?.manager,
     playback: playbackRefresh,
     catalogue: scanStore,
+    onFilesChanged: (relativePath) => libraryChanges.notifyPath(relativePath),
     /*
      * Re-timing an existing subtitle needs two things searching for one does
      * not: the catalogue's own list of a file's tracks, which is what an
@@ -1390,68 +1602,8 @@ export async function createNativeRuntime({
      * so a deployment without them mounts no sync routes at all.
      */
     sync: { catalogue, ffmpegPath: ffmpegPath ?? "ffmpeg" },
-    /*
-     * What a subtitle is timed against, from the package first: its audio
-     * rendition (the same print as the source, read through its playlist in
-     * about twenty seconds over the Drive mount, where a DTS source can take
-     * minutes) and its copies of the video's own text subtitles. The source
-     * only for a title not packaged yet: processing removes it.
-     */
-    references: (() => {
-      const located = async (mediaFileId: string, relativePath: string) => {
-        const file = await catalogue.getFileById(mediaFileId);
-        if (!file || file.relativePath !== relativePath) return null;
-        const root = path.resolve(mediaRoot);
-        const sourcePath = path.resolve(root, ...relativePath.split("/"));
-        if (!sourcePath.startsWith(root + path.sep)) return null;
-        return {
-          file,
-          sourcePath,
-          media: {
-            mediaId: file.id,
-            filePath: sourcePath,
-            size: Number(file.sizeBytes),
-            mtimeMs: Number(file.mtimeMs),
-          },
-        };
-      };
-      return {
-        audio: async ({ mediaFileId, relativePath, sourceStreamIndex }) => {
-          const found = await located(mediaFileId, relativePath);
-          if (!found) return null;
-          const packaged = await renditions
-            .findPackagedAudio(found.media, sourceStreamIndex)
-            .catch(() => null);
-          if (packaged) return { path: packaged.playlistPath, streamIndex: 0 };
-          const present = await stat(found.sourcePath).then(
-            (stats) => stats.isFile(),
-            () => false,
-          );
-          if (!present) return null;
-          const audio = (await catalogue.listStreams(found.file.id)).filter(
-            (stream) => stream.kind === "audio" && !stream.isExternal,
-          );
-          const chosen =
-            audio.find((stream) => stream.streamIndex === sourceStreamIndex) ??
-            audio.find((stream) => stream.isDefault) ??
-            audio[0];
-          return chosen
-            ? { path: found.sourcePath, streamIndex: chosen.streamIndex }
-            : null;
-        },
-        embeddedSubtitles: async ({ mediaFileId, relativePath }) => {
-          const found = await located(mediaFileId, relativePath);
-          if (!found || !renditions.findPackagedSubtitles) return [];
-          return (await renditions.findPackagedSubtitles(found.media))
-            .filter((subtitle) => !subtitle.fromSidecar)
-            .map((subtitle) => ({
-              streamIndex: subtitle.streamIndex,
-              language: subtitle.language ?? null,
-              path: subtitle.path,
-            }));
-        },
-      } satisfies TitleReferences;
-    })(),
+    references: titleReferences,
+    ...(subtitleMeaning ? { meaning: subtitleMeaning } : {}),
   });
 
   /*
@@ -1584,11 +1736,7 @@ export async function createNativeRuntime({
       ),
     );
     if (!library) return;
-    await queue.enqueue({
-      jobType: JOB_TYPES.libraryScan,
-      payload: { libraryId: library.id },
-      dedupeKey: `${JOB_TYPES.libraryScan}:${library.id}`,
-    });
+    await libraryChanges.notifyPath(library.roots[0]!);
   };
 
   /*
@@ -1656,7 +1804,17 @@ export async function createNativeRuntime({
      * A `light` or `heavy` worker runs only its half of these; see
      * `workerRole.ts`.
      */
-    lanes: workerLanes(workerRole, disabledSubtitleJobTypes(subtitleConfig)),
+    lanes: workerLanes(
+      workerRole,
+      [
+        ...disabledSubtitleJobTypes(subtitleConfig),
+        // Claimed only where a recogniser is declared.
+        ...(subtitleAsr ? [] : [SUBTITLE_ANALYSIS_JOB_TYPE]),
+      ],
+      {
+        bridge: bridgeWorker,
+      },
+    ),
     handlers: {
       ...createJobHandlers({
         libraries,
@@ -1672,6 +1830,7 @@ export async function createNativeRuntime({
           ...(driveUploads ? { driveUploads } : {}),
           store: processingJobs,
           paths: renditionPaths,
+          registry: renditionRegistry,
           mediaRoot,
           // Polls rather than reading the cached flag: an encode can fail
           // within the same second the volume goes, before the watchdog's
@@ -1702,6 +1861,7 @@ export async function createNativeRuntime({
           ...(softwareTranscodeThreads === undefined
             ? {}
             : { softwareThreads: softwareTranscodeThreads }),
+          originalLanguageFor,
         }),
         scanStore,
         catalogue,
@@ -1727,6 +1887,29 @@ export async function createNativeRuntime({
       }),
       ...createNfoJobHandlers(nfoService),
       ...(subtitles?.handlers ?? {}),
+      ...(subtitleAsr
+        ? {
+            [SUBTITLE_ANALYSIS_JOB_TYPE]: createSubtitleAnalysisHandler({
+              ffmpegPath: ffmpegPath ?? "ffmpeg",
+              whisper: subtitleAsr,
+              store: subtitleAnalyses,
+              references: titleReferences,
+              mediaFileRelativePath: async (id) =>
+                (await catalogue.getFileById(id))?.relativePath ?? null,
+              audioLanguage: async (id, streamIndex) => {
+                const audio = (await catalogue.listStreams(id)).filter(
+                  (stream) => stream.kind === "audio",
+                );
+                return (
+                  (streamIndex === null
+                    ? (audio.find((stream) => stream.isDefault) ?? audio[0])
+                    : audio.find((stream) => stream.streamIndex === streamIndex)
+                  )?.language ?? null
+                );
+              },
+            }),
+          }
+        : {}),
       ...(acquisition
         ? createAcquisitionJobHandlers(
             acquisition.service,
@@ -1755,7 +1938,16 @@ export async function createNativeRuntime({
             ...(handOffFinishedDownloads
               ? { handOff: handOffFinishedDownloads }
               : {}),
-            onImported: scanAfterImport,
+            onImported: async (record) => {
+              await scanAfterImport(record);
+              if (importUploads) {
+                await followImportUploads(
+                  importUploads,
+                  record,
+                  await importing.repository.listFiles(record.id),
+                );
+              }
+            },
             ...(queueImportedProcessing
               ? { queueProcessing: queueImportedProcessing }
               : {}),
@@ -1765,6 +1957,7 @@ export async function createNativeRuntime({
     logger: console,
   });
   if (runWorker) worker.start();
+  libraryChanges.start(libraryWorker);
   startup?.complete("processing");
 
   /**
@@ -1801,6 +1994,7 @@ export async function createNativeRuntime({
     mediaRoot,
     renditionRoot,
     stateRoot: renditionStateRoot,
+    registry: renditionRegistry,
     removeImage: (storageKey) => imageStorage.remove(storageKey),
     ...(acquisition
       ? {
@@ -1863,6 +2057,12 @@ export async function createNativeRuntime({
         : {}),
     }),
     ...createBookSearchRoutes({ search: bookSearch, catalogue, mediaRoot }),
+    ...createNarrationRoutes({
+      narrations,
+      store: narrationStore,
+      catalogue,
+      mediaRoot,
+    }),
     ...createTrickplayRoutes({ trickplay, catalogue, queue }),
     ...createSyncplayRoutes({ runtime: syncplay, catalogue }),
     ...(subtitles
@@ -1875,6 +2075,10 @@ export async function createNativeRuntime({
                   subtitleConfig.providerIds.includes(provider.id),
                 ),
                 vault: subtitleVault,
+                ...(openSubtitlesAccounts &&
+                subtitleConfig.providerIds.includes(OPENSUBTITLES_ID)
+                  ? { openSubtitles: { accounts: openSubtitlesAccounts } }
+                  : {}),
               }
             : undefined,
           subtitleConfig
@@ -1884,6 +2088,11 @@ export async function createNativeRuntime({
                 // Recorded against the file at once, so an uploaded subtitle is
                 // offered by the player without waiting for a library scan.
                 catalogue: scanStore,
+                onFilesChanged: (relativePath) =>
+                  libraryChanges.notifyPath(relativePath),
+                ...(subtitles.revisions
+                  ? { revisions: subtitles.revisions }
+                  : {}),
               })
             : undefined,
           subtitles.sync,
@@ -2036,6 +2245,8 @@ export async function createNativeRuntime({
       // A `light` worker here means encodes run on another machine, whose own
       // scratch is what a job will spend.
       processingElsewhere: workerRole === "light",
+      registry: renditionRegistry,
+      originalLanguageFor,
       packageIndex,
     }),
     ...(tmdb
@@ -2062,6 +2273,7 @@ export async function createNativeRuntime({
   const router = createOwnApiRouter({
     routes,
     resolveSession,
+    resolveNarrator: createNarratorResolver(narrations),
     csrfSecret: authConfig.csrfSecret,
     csrfCookieName: authConfig.csrfCookieName,
     ...(publicOrigin ? { publicOrigin } : {}),
@@ -2252,6 +2464,8 @@ export async function createNativeRuntime({
 
     resolveRouteTemplate: router.resolveTemplate,
 
+    ...(runWorker ? { worker } : {}),
+
     databaseCheck: () => checkDatabaseReadiness(pool),
 
     jobsCheck: async () => {
@@ -2280,6 +2494,7 @@ export async function createNativeRuntime({
       if (garbageTimer) clearInterval(garbageTimer);
       storageWatchdog.stop();
       if (releaseTimer) clearInterval(releaseTimer);
+      await libraryChanges.close();
       await worker.stop();
       await pool.end();
     },

@@ -11,6 +11,10 @@ import {
 } from "../../../renditions/adaptive/layout";
 import { TITLE_PACKAGE_DIRECTORY } from "../../../renditions/adaptive/titleLayout";
 import {
+  type LocalPlaylistCopy,
+  writeLocalPackagePlaylist,
+} from "../../../renditions/adaptive/localPlaylist";
+import {
   resolveTitleRoot,
   titleRootLayoutForKind,
 } from "../../../renditions/adaptive/titleRoot";
@@ -99,6 +103,8 @@ export function isTrickplayCandidate(
 /** What FFmpeg is pointed at, and the facts the layout and colour come from. */
 interface SamplingInput {
   path: string;
+  /** A package's HLS playlist, which FFmpeg is handed a local copy of. */
+  isPackagePlaylist?: boolean;
   map: string;
   durationMs: number;
   width: number;
@@ -152,6 +158,56 @@ export class TrickplayUnsupportedError extends Error {
     this.name = "TrickplayUnsupportedError";
   }
 }
+
+/**
+ * Said when there is nothing left to sample: the source is gone and no ready
+ * package stands in for it.
+ *
+ * Without this the missing source path went to FFmpeg anyway, which failed in
+ * a second, three times, as "Trickplay generation failed." A package that is
+ * complete on disk but whose registry entry lost its ready status lands here
+ * too, so the failure stays retryable rather than permanent.
+ */
+export const TRICKPLAY_NOTHING_TO_SAMPLE =
+  "Trickplay generation failed: the source file is gone and no ready package was found to sample instead.";
+
+/**
+ * The reason FFmpeg gave, in words that are safe to store on a job.
+ *
+ * The stderr tail itself never leaves the process: it names the source path.
+ * What does is one fixed sentence per failure worth telling apart, so a failed
+ * job says more than that it failed.
+ */
+export function trickplayFailureMessage(stderr: string): string {
+  if (/No such file or directory/i.test(stderr)) {
+    return TRICKPLAY_FFMPEG_FAILURES.fileMissing;
+  }
+  if (/Permission denied|Operation not permitted/i.test(stderr)) {
+    return TRICKPLAY_FFMPEG_FAILURES.accessDenied;
+  }
+  if (/No space left on device/i.test(stderr)) {
+    return TRICKPLAY_FFMPEG_FAILURES.volumeFull;
+  }
+  if (
+    /Invalid data found when processing input|moov atom not found/i.test(stderr)
+  ) {
+    return TRICKPLAY_FFMPEG_FAILURES.unreadable;
+  }
+  return "Trickplay generation failed.";
+}
+
+/**
+ * The sentences `trickplayFailureMessage` stores, named so the task views can
+ * key their codes on the very strings stored rather than on copies of them.
+ */
+export const TRICKPLAY_FFMPEG_FAILURES = {
+  fileMissing:
+    "Trickplay generation failed: FFmpeg could not find a file it needed.",
+  accessDenied:
+    "Trickplay generation failed: FFmpeg was refused access to a file.",
+  volumeFull: "Trickplay generation failed: the volume is full.",
+  unreadable: "Trickplay generation failed: FFmpeg could not read the video.",
+} as const;
 
 export interface TrickplayFilterSource {
   colorTransfer: string | null;
@@ -486,8 +542,9 @@ export function createTrickplayService({
         child.on("close", (code) => {
           if (code === 0) resolve();
           // The stderr tail carries the source path, so it is deliberately not
-          // included in the error that reaches a job record.
-          else reject(new Error("Trickplay generation failed."));
+          // included in the error that reaches a job record — only a fixed
+          // sentence chosen from it.
+          else reject(new Error(trickplayFailureMessage(stderr)));
         });
       }));
 
@@ -562,6 +619,7 @@ export function createTrickplayService({
            * nothing. See `PackagedVideo.playlistPath`.
            */
           path: packaged.playlistPath,
+          isPackagePlaylist: true,
           // A rendition carries exactly one video stream.
           map: "0:v:0",
           durationMs: Math.round(packaged.durationSeconds * 1_000),
@@ -573,6 +631,12 @@ export function createTrickplayService({
       }
     }
 
+    /*
+     * Not the source path regardless. A probed title whose source is gone and
+     * whose package is not (or no longer) recorded as ready used to fall
+     * through to it, and FFmpeg was handed a file that does not exist.
+     */
+    if (!sourcePresent) throw new Error(TRICKPLAY_NOTHING_TO_SAMPLE);
     return probed ? fromSource() : null;
   }
 
@@ -678,11 +742,16 @@ export function createTrickplayService({
       // rendition; the check is here because this is the sole decoder.
       if (isGeneratedMediaPath(file.relativePath)) return null;
 
-      const input = await samplingInputFor(file);
-      if (!input) return null;
-
+      /*
+       * Before the input is looked for, since a title with nothing left to
+       * sample is now an error — and one that already has sheets has no need
+       * of anything to sample.
+       */
       const existing = await findByMediaFile(file.id);
       if (existing && !options.force) return existing;
+
+      const input = await samplingInputFor(file);
+      if (!input) return null;
 
       const placement = await trickplayDirectoryForFile(file);
       if (!placement) return null;
@@ -743,7 +812,17 @@ export function createTrickplayService({
        */
       const framesPerSegment = new Array<number>(segments.length).fill(0);
 
+      /*
+       * A package's playlist goes to FFmpeg as a decoded copy in local temp
+       * storage — see `localPackagePlaylist` — removed however the pass ends.
+       */
+      let localPlaylist: LocalPlaylistCopy | null = null;
       try {
+        let inputPath = input.path;
+        if (input.isPackagePlaylist) {
+          localPlaylist = await writeLocalPackagePlaylist(input.path);
+          inputPath = localPlaylist.path;
+        }
         const outcomes = await Promise.allSettled(
           segments.map((segment, index) =>
             execute(
@@ -769,7 +848,7 @@ export function createTrickplayService({
                   ? []
                   : ["-t", segment.durationSeconds.toFixed(6)]),
                 "-i",
-                input.path,
+                inputPath,
                 "-map",
                 input.map,
                 "-vf",
@@ -823,6 +902,8 @@ export function createTrickplayService({
       } catch (error) {
         await discardTrickplayStaging(staging);
         throw error;
+      } finally {
+        await localPlaylist?.remove();
       }
 
       /*

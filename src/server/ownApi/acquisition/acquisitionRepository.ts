@@ -18,6 +18,7 @@ import type {
   AcquisitionState,
   FailureClass,
 } from "./acquisitionState";
+import { importUnderWaySql } from "../imports/importLanding";
 import { isTerminal } from "./acquisitionState";
 
 export interface AcquisitionTarget {
@@ -139,6 +140,7 @@ interface Row {
   idempotency_key: string;
   external_id: string | null;
   attempt: number;
+  retry_after: Date | null;
   download_path: string | null;
   size_bytes: string | number | null;
   failure_class: string | null;
@@ -155,7 +157,7 @@ interface Row {
 }
 
 const COLUMNS = `id, state, indexer_id, release_guid, release_title,
-  idempotency_key, external_id, attempt, download_path, size_bytes,
+  idempotency_key, external_id, attempt, retry_after, download_path, size_bytes,
   failure_class, failure_detail, target_title, target_kind, target_item_id,
   target_year, target_season, target_episode, origin, created_at, updated_at`;
 
@@ -170,6 +172,7 @@ function toSummary(row: Row): AcquisitionSummary {
     idempotencyKey: row.idempotency_key,
     ...(row.external_id ? { externalId: row.external_id } : {}),
     attempt: row.attempt,
+    ...(row.retry_after ? { retryAfterMs: row.retry_after.getTime() } : {}),
     ...(row.download_path ? { downloadPath: row.download_path } : {}),
     ...(size === undefined || Number.isNaN(size) ? {} : { sizeBytes: size }),
     ...(row.failure_class ? { failureClass: row.failure_class } : {}),
@@ -424,7 +427,8 @@ export function createAcquisitionRepository(
        *
        * `downloaded` never changes again, so it cannot mean "still coming" on
        * its own. A finished download covers its target while its import is
-       * under way, or for a day while it waits for one; after that, whatever
+       * under way — which lasts until the library scan has registered what it
+       * filed — or for a day while it waits for one; after that, whatever
        * the import did not file is missing again. A season pack that filed
        * half its episodes used to block every later search of its season.
        */
@@ -435,7 +439,7 @@ export function createAcquisitionRepository(
               AND (
                 a.state <> 'downloaded'
                 OR EXISTS (SELECT 1 FROM imports i WHERE i.acquisition_id = a.id
-                             AND i.state NOT IN ('complete','cancelled','failed'))
+                             AND ${importUnderWaySql("i")})
                 OR (NOT EXISTS (SELECT 1 FROM imports i WHERE i.acquisition_id = a.id)
                     AND a.completed_at > now() - interval '1 day')
               )
@@ -526,10 +530,15 @@ export function createAcquisitionRepository(
     async listReadyForImport(limit = 100) {
       // The handoff. Everything the import phase needs to find the bytes, and
       // nothing this phase is allowed to do with them.
+      //
+      // `downloaded` never changes again, so without the import check the
+      // oldest hundred downloads, long since imported, filled every page and
+      // each one finished after them was never handed off.
       const result = await pool.query<Row>(
-        `SELECT ${COLUMNS} FROM acquisitions
-          WHERE state = 'downloaded' AND download_path IS NOT NULL
-          ORDER BY completed_at
+        `SELECT ${COLUMNS} FROM acquisitions a
+          WHERE a.state = 'downloaded' AND a.download_path IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM imports i WHERE i.acquisition_id = a.id)
+          ORDER BY a.completed_at
           LIMIT $1`,
         [Math.min(Math.max(limit, 1), 500)],
       );

@@ -118,12 +118,17 @@ export function SwapText({ value, className = "" }: SwapTextProps) {
       {settled ? (
         <span aria-hidden="true">{layers[0]!.text}</span>
       ) : (
-        <span className="relative inline-grid align-baseline">
-          {layers.map((layer) => (
+        // Only the newest reading holds a place in the layout, so the label
+        // takes its new width at once (AnimatedWidth carries the change) and
+        // does not snap when the old reading is finally removed.
+        <span className="relative inline-block align-baseline">
+          {layers.map((layer, index) => (
             <span
               key={layer.id}
               aria-hidden="true"
-              className="col-start-1 row-start-1 whitespace-nowrap leading-[inherit] will-change-[opacity]"
+              className={`whitespace-nowrap leading-[inherit] will-change-[opacity] ${
+                index === layers.length - 1 ? "" : "absolute left-0 top-0"
+              }`}
               style={{
                 transition: `opacity ${FADE_MS}ms ease-in-out`,
                 opacity: layer.visible ? 1 : 0,

@@ -79,6 +79,15 @@ export interface SabQueueSnapshot {
   readonly freeBytes?: number;
 }
 
+/** One news server, as SABnzbd's downloader holds it right now. */
+export interface SabServerStatus {
+  readonly name: string;
+  /** False while SABnzbd has set the server aside after a failure. */
+  readonly active: boolean;
+  /** SABnzbd's last word about it, such as a refused connection. */
+  readonly error?: string;
+}
+
 export interface SabSubmission {
   readonly bytes: Uint8Array;
   /** Becomes the job name, and is how a lost response is recovered. */
@@ -94,6 +103,11 @@ export interface SabnzbdClient {
   /** The queue with its speed and paused state, in the same single call. */
   queueSnapshot(signal?: AbortSignal): Promise<SabQueueSnapshot>;
   listHistory(limit?: number, signal?: AbortSignal): Promise<SabJob[]>;
+  /**
+   * The news servers and whether SABnzbd can use them. A queue whose slots
+   * all say "Downloading" moves nothing when none of these can.
+   */
+  servers(signal?: AbortSignal): Promise<SabServerStatus[]>;
   /** Returns the job's identifier when SABnzbd reports one. */
   submit(
     submission: SabSubmission,
@@ -401,6 +415,36 @@ export function createSabnzbdClient({
       return parseHistory(
         await call({ mode: "history", limit: String(limit) }, signal),
       );
+    },
+
+    async servers(signal) {
+      // The dashboard is SABnzbd measuring its own machine; nothing here
+      // needs it, and it is the slow part of the answer.
+      const payload = await call(
+        { mode: "status", skip_dashboard: "1" },
+        signal,
+      );
+      const servers = (payload as { status?: { servers?: unknown } })?.status
+        ?.servers;
+      if (!Array.isArray(servers)) return [];
+      return servers.flatMap((raw): SabServerStatus[] => {
+        const server = raw as Record<string, unknown>;
+        const name =
+          typeof server.servername === "string" ? server.servername : "";
+        if (!name) return [];
+        const error =
+          typeof server.servererror === "string" && server.servererror.trim()
+            ? server.servererror.trim()
+            : undefined;
+        return [
+          {
+            name,
+            active:
+              server.serveractive === true || server.serveractive === "true",
+            ...(error === undefined ? {} : { error }),
+          },
+        ];
+      });
     },
 
     async submit(submission, signal) {

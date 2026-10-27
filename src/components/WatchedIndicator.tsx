@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useLanguage } from "../i18n/LanguageContext";
 import type { MediaItem } from "../lib/types";
 import { isItemCompleted } from "../lib/watchStatus";
+import { AnimatedText } from "./AnimatedText";
+import { AnimatedWidth } from "./AnimatedWidth";
 import "./WatchedIndicator.css";
 
 /**
@@ -58,7 +60,9 @@ export function WatchedIndicator({
       className={`watched-seal ${className}`}
     >
       <span className="watched-seal__label">
-        <span>{t("details.watched")}</span>
+        <AnimatedWidth value={t("details.watched")}>
+          <AnimatedText value={t("details.watched")} />
+        </AnimatedWidth>
       </span>
       <span className="watched-seal__mark" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none">

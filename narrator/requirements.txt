@@ -1,0 +1,8 @@
+# The narrator runs on Apple Silicon only (MLX). Python 3.12.
+mlx==0.32.4
+mlx-audio[tts]==0.6.1
+numpy==2.3.5
+scipy==1.18.1
+soundfile==0.14.0
+huggingface_hub==2.3.0
+transformers==5.20.2

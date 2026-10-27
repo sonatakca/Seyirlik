@@ -17,6 +17,7 @@ import {
 } from "../releases/monitoring";
 import { normalizeLanguage } from "../../../renditions/processing/languages";
 import type { ProcessingPackageState } from "../processing/packageIndex";
+import { importUnderWaySql } from "../imports/importLanding";
 import { MEDIA_STATUS_SQL, mediaAvailableSql } from "./mediaAvailability";
 
 export type LibraryTitleKind = "movie" | "series" | "book";
@@ -104,7 +105,7 @@ const HOLDING_COLUMNS = `
   (SELECT count(*)::int FROM acquisitions a JOIN items fam ON fam.id = a.target_item_id
     WHERE ${FAMILY("item")} AND a.state NOT IN ('downloaded', 'cancelled', 'superseded', 'failed')) AS downloading,
   (SELECT count(*)::int FROM imports imp JOIN items fam ON fam.id = imp.target_item_id
-    WHERE ${FAMILY("item")} AND imp.state NOT IN ('complete', 'cancelled', 'failed')) AS importing,
+    WHERE ${FAMILY("item")} AND ${importUnderWaySql("imp")}) AS importing,
   (SELECT count(*)::int FROM processing_jobs p JOIN items fam ON fam.id = p.item_id
     WHERE ${FAMILY("item")} AND p.state IN ('running', 'queued', 'pending', 'paused')) AS processing,
   (SELECT COALESCE(sum(f.size_bytes), 0)::bigint FROM media_files f JOIN items fam ON fam.id = f.item_id
@@ -389,7 +390,7 @@ export function createLibraryAdminRepository(
          SELECT 'importing', imp.target_season, imp.target_episode
            FROM imports imp
           WHERE imp.target_item_id = $1 AND imp.target_kind IN ('season', 'episode')
-            AND imp.state NOT IN ('complete', 'cancelled', 'failed')`,
+            AND ${importUnderWaySql("imp")}`,
         [seriesId],
       );
       return result.rows;

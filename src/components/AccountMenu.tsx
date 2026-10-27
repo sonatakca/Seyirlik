@@ -262,13 +262,19 @@ export function AccountMenu({
               <LogOut size={16} className="shrink-0" />
               {t("nav.logout")}
             </button>
-            <p
-              className="px-3 pb-1 pt-2 text-[0.6875rem] font-medium tabular-nums text-white/40"
-              title={RUNNING_BUILD.commit ?? undefined}
-            >
-              {t("appUpdate.version")}{" "}
-              {formatBuildLabel(RUNNING_BUILD, language)}
-            </p>
+            {/* Which build this is, then what the release changed. */}
+            <div className="px-3 pb-1 pt-2 text-[0.6875rem] font-medium text-white/40">
+              <p
+                className="tabular-nums"
+                title={RUNNING_BUILD.commit ?? undefined}
+              >
+                {t("appUpdate.version")}{" "}
+                {formatBuildLabel(RUNNING_BUILD, language)}
+              </p>
+              {RUNNING_BUILD.note ? (
+                <p>{RUNNING_BUILD.note[language]}</p>
+              ) : null}
+            </div>
           </motion.div>
         ) : null}
       </AnimatePresence>

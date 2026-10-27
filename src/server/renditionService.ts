@@ -19,8 +19,10 @@ import {
   classifyQualityHeight,
 } from "../renditions/policy";
 import {
-  loadRenditionRegistry,
+  createFileRenditionRegistryStore,
+  findRegistryItemForSource,
   type RenditionRegistry,
+  type RenditionRegistryStore,
 } from "../renditions/registry";
 import { inspectCompletedRendition } from "../renditions/validation";
 import { inspectAdaptivePackage } from "../renditions/adaptive/inspect";
@@ -110,6 +112,8 @@ export interface RenditionServiceOptions {
   mediaRoot: string;
   renditionRoot: string;
   stateRoot: string;
+  /** Where the registry is kept; `<stateRoot>/registry.json` when omitted. */
+  registry?: RenditionRegistryStore;
   mediaResolver: PlaybackMediaResolver;
   basePath?: string;
 }
@@ -367,37 +371,49 @@ export function createRenditionService({
   mediaRoot,
   renditionRoot,
   stateRoot,
+  registry = createFileRenditionRegistryStore(
+    path.join(stateRoot, "registry.json"),
+  ),
   mediaResolver,
   basePath = "/api/playback/renditions",
 }: RenditionServiceOptions): RenditionService {
   const accessByToken = new Map<string, RenditionAccess>();
-  const registryPath = path.join(stateRoot, "registry.json");
   let cachedRegistry:
-    | { signature: string; items: RenditionRegistry["items"] }
+    | { revision: string; items: RenditionRegistry["items"] }
     | undefined;
+  let lastRegistryFailure: string | undefined;
 
   /**
-   * The registry covers the whole library, so it is re-read only when the
-   * offline CLI has actually rewritten it. Playback requests otherwise reuse the
-   * parsed copy instead of parsing the full inventory per request.
+   * The registry covers the whole library, so it is re-read only when its
+   * revision says it changed. Playback requests otherwise reuse the parsed
+   * copy instead of parsing the full inventory per request.
+   *
+   * A registry that cannot be read keeps the last copy that could. Playback
+   * of everything already packaged must not hang on one bad read: on
+   * 2026-10-20 the file on the Drive mount read as empty, and every lookup
+   * after it would have thrown. Only a service that has never read the
+   * registry has nothing to fall back on.
    */
   const loadRegistryItems = async (): Promise<RenditionRegistry["items"]> => {
-    let signature = "missing";
-
     try {
-      const registryStats = await stat(registryPath);
-      signature = `${registryStats.size}:${registryStats.mtimeMs}`;
+      const revision = await registry.revision();
+      if (cachedRegistry?.revision === revision) return cachedRegistry.items;
+      const { items } = await registry.read();
+      cachedRegistry = { revision, items };
+      lastRegistryFailure = undefined;
+      return items;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-
-    if (cachedRegistry?.signature === signature) {
+      if (!cachedRegistry) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (message !== lastRegistryFailure) {
+        lastRegistryFailure = message;
+        console.warn("rendition_registry.read_failed_using_last_good", {
+          error: message,
+          items: cachedRegistry.items.length,
+        });
+      }
       return cachedRegistry.items;
     }
-
-    const { items } = await loadRenditionRegistry(registryPath);
-    cachedRegistry = { signature, items };
-    return items;
   };
 
   const pruneAccess = () => {
@@ -431,19 +447,10 @@ export function createRenditionService({
   ): Promise<RenditionRegistry["items"][number] | undefined> => {
     const relativePath = mediaRelativePath(mediaRoot, media.filePath);
     if (!relativePath) return undefined;
-    const registryItems = await loadRegistryItems();
-    const registryItem = registryItems.find(
-      (item) => item.relativePath.toLowerCase() === relativePath.toLowerCase(),
+    return findRegistryItemForSource(
+      { items: await loadRegistryItems() },
+      { relativePath, size: media.size, mtimeMs: media.mtimeMs },
     );
-    const registeredMtime = Math.trunc(registryItem?.mtimeMs ?? 0);
-    if (
-      !registryItem ||
-      registryItem.size !== media.size ||
-      (registeredMtime > 0 && registeredMtime !== Math.trunc(media.mtimeMs))
-    ) {
-      return undefined;
-    }
-    return registryItem;
   };
 
   /** The complete, current package these source bytes were built into. */
