@@ -75,11 +75,45 @@ def turkish_lower(text: str) -> str:
     return text.replace("I", "ı").replace("İ", "i").lower()
 
 
-def tts_text(text: str) -> str:
-    """What the model is asked to say: the same words, without invisible format characters."""
+def pronunciation_key(word: str) -> str:
+    """How a word is looked up in the pronunciation list: as written, in lower case."""
+    return turkish_lower(unicodedata.normalize("NFC", word)).strip()
+
+
+def say_as(word: str, pronunciations: dict[str, str]) -> str:
+    """The word as the voice should be given it: its listed pronunciation, if it has one.
+
+    The list names words as the dictionary would ("Sergievi"); one written
+    with a suffix after an apostrophe ("Sergievi’nde") keeps its suffix.
+    """
+    stem, mark, suffix = (re.split(r"(['’])", word, maxsplit=1) + ["", ""])[:3]
+    spoken = pronunciations.get(pronunciation_key(stem))
+    if spoken is None:
+        return word
+    if stem[:1].isupper():
+        spoken = turkish_upper(spoken[:1]) + spoken[1:]
+    return spoken + mark + suffix
+
+
+def turkish_upper(text: str) -> str:
+    return text.replace("i", "İ").replace("ı", "I").upper()
+
+
+def tts_text(text: str, pronunciations: dict[str, str] | None = None) -> str:
+    """What the model is asked to say: the same words, without invisible format
+    characters, and any word on the pronunciation list said as it lists it."""
     text = unicodedata.normalize("NFC", text)
     text = "".join(c for c in text if unicodedata.category(c) != "Cf")
+    if pronunciations:
+        text = WORD.sub(lambda m: say_as(m.group(), pronunciations), text)
     return " ".join(text.split())
+
+
+def spoken_chunk_words(chunk: "Chunk", pronunciations: dict[str, str] | None = None) -> list[Word]:
+    """The chunk's words as the voice says them, at the book's offsets: what the take is timed by."""
+    if not pronunciations:
+        return chunk.words
+    return [Word(w.start, w.end, say_as(w.text, pronunciations)) for w in chunk.words]
 
 
 _ONES = ["", "bir", "iki", "üç", "dört", "beş", "altı", "yedi", "sekiz", "dokuz"]
@@ -113,6 +147,8 @@ def number_words(digits: str) -> list[str]:
 
 def spoken_words(word: str) -> list[str]:
     """How a written word sounds, lower-cased and spelled out: "1933'te" → bin dokuz yüz otuz üçte."""
+    if len(word.split()) > 1:  # a pronunciation may say one word as two
+        return [part for piece in word.split() for part in spoken_words(piece)]
     parts: list[str] = []
     pending = ""
     for piece in re.split(r"(\d+)", turkish_lower(word)):

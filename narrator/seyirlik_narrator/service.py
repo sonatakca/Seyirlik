@@ -87,7 +87,7 @@ class Lost(Exception):
 class Reading:
     """One book, from its script to its last section, with the server kept informed."""
 
-    def __init__(self, api: NarratorApi, job: Job, work: WorkDir, narrate: Callable[[dict, WorkDir, Callable[[dict], None]], None]):
+    def __init__(self, api: NarratorApi, job: Job, work: WorkDir, narrate: Callable[[dict, WorkDir, Callable[[dict], None], Job], None]):
         self.api = api
         self.job = job
         self.work = work
@@ -140,9 +140,6 @@ class Reading:
             audio = self.work.section(number, ".m4a")
             words = self.work.section(number, ".words.json")
             have = self.job.uploaded.get(number)
-            if have and audio.exists() and words.exists() and file_sha256(audio) == have:
-                self._set(sectionsDone=index + 1, fraction=round((before + weights[index]) / total, 4))
-                continue
 
             def progress(event: dict, before: int = before, weight: int = weights[index]) -> None:
                 if event.get("type") != "progress":
@@ -153,19 +150,25 @@ class Reading:
                     activity="reading",
                 )
 
-            self.narrate(section, self.work, progress)
-            self._set(activity="uploading")
-            self._send()
-            timings = read_json(words)
+            # Reads only what the section still needs: nothing, when the book
+            # was asked for again because of a line in another section.
+            self.narrate(section, self.work, progress, self.job)
+            sha = file_sha256(audio)
+            check = self.work.section(number, ".check.json")
             try:
-                self.api.upload_section(self.job.item_id, number, audio, timings)
+                if sha != have:
+                    self._set(activity="uploading")
+                    self._send()
+                    self.api.upload_section(self.job.item_id, number, audio, read_json(words))
+                    log(f"section {number} uploaded ({index + 1}/{len(sections)})")
+                if check.exists() and self.job.checked.get(number) != sha:
+                    self.api.upload_check(self.job.item_id, number, sha, read_json(check))
             except ApiError as error:
                 if error.code == "NARRATION_NOT_HELD":
                     raise Lost() from None
                 raise
             self._set(sectionsDone=index + 1, fraction=round((before + weights[index]) / total, 4), activity="reading")
             self._send()
-            log(f"section {number} uploaded ({index + 1}/{len(sections)})")
 
         try:
             self.api.finish(self.job.item_id, ready=True)
@@ -186,17 +189,26 @@ class Narrator:
         self.voice_dir = voice_dir
         self.models = None
 
-    def __call__(self, section: dict, work: WorkDir, progress: Callable[[dict], None]) -> None:
+    def _load(self):
         from .models import Listener, Speaker, Voice
-        from .narrate import Narration
 
         if self.models is None:
             log("loading the speech models")
-            voice = Voice.load(self.voice_dir)
-            self.models = (Speaker(voice), Listener())
-        speaker, listener = self.models
+            self.models = (Speaker(Voice.load(self.voice_dir)), Listener())
+        return self.models
+
+    def __call__(self, section: dict, work: WorkDir, progress: Callable[[dict], None], job: Job) -> None:
+        from .models import Voice
+        from .narrate import Narration
+
         script = read_json(work.root / "script.json")
-        Narration(script, work, speaker, listener, progress).run_section(section)
+        # The models load only once a chunk has to be read: a section with
+        # nothing new in it (the book was asked for again for another one) is only checked.
+        narration = Narration(
+            script, work, Voice.load(self.voice_dir).fingerprint(), self._load, progress,
+            pronunciations=job.pronunciations, retakes=job.retakes,
+        )
+        narration.run_section(section)
 
 
 def serve(api: NarratorApi, voice: str, voices: Path, work_root: Path, narrate=None, once: bool = False) -> None:

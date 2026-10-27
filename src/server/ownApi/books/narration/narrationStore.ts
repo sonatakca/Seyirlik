@@ -27,6 +27,7 @@ import { isUuid } from "../../api/validation";
  *   <root>/<itemId>/staging/<section>.part
  *   <root>/<itemId>/<section>-<sha256>.m4a
  *   <root>/<itemId>/<section>-<sha256>.words.json
+ *   <root>/<itemId>/<section>-<sha256>.check.json   every line as the narrator heard it
  */
 export const MAX_NARRATION_PART_BYTES = 32 * 1024 * 1024;
 /** Far longer than any section: 64 kbit/s for a day. */
@@ -43,6 +44,7 @@ export class StagedAudioError extends Error {}
 export interface NarrationFiles {
   audio: string;
   words: string;
+  check: string;
 }
 
 export interface NarrationStore {
@@ -67,6 +69,13 @@ export interface NarrationStore {
     words: string,
   ): Promise<number>;
   files(itemId: string, section: number, sha256: string): NarrationFiles;
+  /** Writes the lines of an upload already in place, whole or not at all. */
+  writeCheck(
+    itemId: string,
+    section: number,
+    sha256: string,
+    check: string,
+  ): Promise<void>;
   removeVersion(itemId: string, section: number, sha256: string): Promise<void>;
   removeAll(itemId: string): Promise<void>;
 }
@@ -87,7 +96,11 @@ export function createNarrationStore(root: string): NarrationStore {
       directory(itemId),
       `${Math.trunc(section)}-${sha256}`,
     );
-    return { audio: `${base}.m4a`, words: `${base}.words.json` };
+    return {
+      audio: `${base}.m4a`,
+      words: `${base}.words.json`,
+      check: `${base}.check.json`,
+    };
   };
   /** One part at a time per section: two at once could not both end where the file ends. */
   const busy = new Set<string>();
@@ -214,10 +227,23 @@ export function createNarrationStore(root: string): NarrationStore {
       return size;
     },
 
+    writeCheck: async (itemId, section, sha256, check) => {
+      const target = files(itemId, section, sha256);
+      const temporary = `${target.check}.${randomUUID()}.tmp`;
+      const handle = await open(temporary, "w");
+      try {
+        await handle.writeFile(check, "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await rename(temporary, target.check);
+    },
+
     removeVersion: async (itemId, section, sha256) => {
       const target = files(itemId, section, sha256);
       await Promise.all(
-        [target.audio, target.words].map((file) =>
+        [target.audio, target.words, target.check].map((file) =>
           unlink(file).catch(() => undefined),
         ),
       );

@@ -47,3 +47,42 @@ class JudgeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+PUDER = "Ortalara doğru gözlerim, katalogda gördüğüm kelimelerin üzerinde mıhlanıp kaldı: Maria Puder..."
+
+
+class ToneTest(unittest.TestCase):
+    def test_refuses_a_name_cried_out_where_the_book_trails_off(self):
+        heard = "Ortalara doğru gözlerim katalogda gördüğüm kelimelerin üzerinde mıhlanıp kaldı. Maria Puder!"
+        verdict = judge(PUDER, heard, sure(), seconds=7.0)
+        self.assertTrue(verdict.exclaimed)
+        self.assertEqual(verdict.reasons(), ["tone"])
+        self.assertFalse(verdict.accepted)
+
+    def test_refuses_a_loud_end_the_text_gives_no_reason_for(self):
+        heard = "Ortalara doğru gözlerim katalogda gördüğüm kelimelerin üzerinde mıhlanıp kaldı. Maria Puder."
+        self.assertFalse(judge(PUDER, heard, sure(), seconds=7.0, lift=9.4).accepted)
+        self.assertTrue(judge(PUDER, heard, sure(), seconds=7.0, lift=4.8).accepted)
+
+    def test_lets_an_exclamation_the_book_has_be_loud(self):
+        book = "Şaka değil ama. İç ve gül!.."
+        verdict = judge(book, "Şaka değil ama. İç ve gül!", sure(), seconds=2.5, lift=12.1)
+        self.assertTrue(verdict.accepted, verdict)
+
+    def test_prefers_the_calmer_of_two_complete_takes(self):
+        heard = "Ortalara doğru gözlerim katalogda gördüğüm kelimelerin üzerinde mıhlanıp kaldı. Maria Puder."
+        loud = judge(PUDER, heard + "!", sure(), seconds=7.0, lift=9.4)
+        calm = judge(PUDER, heard, sure(), seconds=7.0, lift=1.0)
+        self.assertGreater(calm.rank(), loud.rank())
+
+    def test_measures_the_last_words_against_the_middle_one(self):
+        import numpy as np
+
+        from seyirlik_narrator.verify import end_lift
+
+        rate = 100
+        audio = np.concatenate([np.full(100, 0.1), np.full(100, 0.1), np.full(100, 0.1), np.full(100, 0.4)]).astype(np.float32)
+        words = [TimedWord(0, 1, i, i + 1, 0.99) for i in range(4)]
+        self.assertAlmostEqual(end_lift(audio, rate, words), 12.0, delta=0.1)
+        self.assertIsNone(end_lift(audio, rate, words[:2]))

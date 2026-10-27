@@ -21,6 +21,7 @@ narrator (Mac) ── POST /narrator/claim ──▶ server: narrating, held by 
                ── POST /narrator/jobs/:id/progress      every minute, and as it reads
                ── PUT  /narrator/jobs/:id/sections/:n/audio?offset=   16 MiB parts
                ── POST /narrator/jobs/:id/sections/:n   hash + word timings: the section goes live
+               ── PUT  /narrator/jobs/:id/sections/:n/check   every line as Whisper heard it
                ── POST /narrator/jobs/:id/finish        ready, or failed and why
 reader ── GET /books/:id/narration[/sections/:n/words|audio]
 ```
@@ -52,10 +53,44 @@ while a narration is on its way.
   outdated and is not played. A narration taken again in another voice or
   from another script drops the sections it had.
 
+## Putting a narration right
+
+Every take is judged before it is kept: Whisper's hearing of it against the
+book (skipped words), the aligner's score of each word (garbled ones), its
+length, and its **tone**. A take is cried out when Whisper hears a `!` the
+book does not have, or its last words are 8 dB or more louder than its middle
+word where the last sentence has no `!` (`LOUD_END` in `verify.py`). A take
+that fails any check is made again, up to three times, and the best kept; the
+calmer one wins between equals. When the checks grow (`CHECKS` in
+`narrate.py`), lines finished before are judged again from their takes the
+next time their book is read, and read again only if none passes.
+
+What no check catches is for a person, at **Seslendirme denetimi**
+(`/admin/narration`, or _Seslendirmeyi denetle_ in the reader's ··· menu).
+It lists every line beside what Whisper heard, word for word, worst first:
+the narrator's own doubts, then words heard furthest from the book. How
+Whisper writes is not a difference (circumflexes, numbers as digits, "ile"
+joined on, its "Altyazı M.K." on silence). Two fixes, both picked up within
+the narrator's minute of polling:
+
+- **A pronunciation**: a word and how to say it ("Sergievi" → "sergi evi").
+  It holds for every book. The voice is given the spoken form, the words are
+  still timed at the book's own, and the books that have the word go back to
+  the narrator, which reads again only the lines with it. Taking one off
+  brings the old takes back without reading anything.
+- **Read again**: one line, made afresh. The times a line was asked for are
+  part of what it is read as, so the count only grows.
+
+A narration given back is queued again with its sections, which go on
+playing; one being read when asked goes back to the queue when it finishes
+(`read_again`). The narrator reads each section only for what changed, loads
+the models only if a line must be made, and uploads only sections whose
+recording changed.
+
 ## Setting it up
 
-Apply migration `045_book_narrations.sql` **before** shipping code that has
-it. The services refuse to start on a database that lacks it (see
+Apply migrations `045_book_narrations.sql` and `046_narration_review.sql`
+**before** shipping code that has them. The services refuse to start on a database that lacks it (see
 `windows-deployment.md`).
 
 1. Make a key, on the server, where its settings are:
@@ -83,7 +118,7 @@ it. The services refuse to start on a database that lacks it (see
    `mk` unless `connect --voice` says otherwise. Voices are never committed:
    the repository is public.
 
-3. In the reader, an administrator's ··· menu now shows *Sesli kitap*:
+3. In the reader, an administrator's ··· menu now shows _Sesli kitap_:
    whether a narrator is connected, a button to narrate the book, and its
    progress once it has started.
 
@@ -105,5 +140,4 @@ it. The services refuse to start on a database that lacks it (see
 
 ## Not done yet
 
-A screen to review the words the narrator was unsure of and read them again,
-a pronunciation list, and the user manual come next.
+The user manual comes next.

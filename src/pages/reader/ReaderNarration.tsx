@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Headphones, RotateCcw, Trash2 } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Headphones, ListChecks, RotateCcw, Trash2 } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
 import {
   getNarratorSeenAt,
@@ -21,6 +22,7 @@ export function ReaderNarrationControl({
   failed,
   onRequest,
   onRemove,
+  reviewHref = null,
 }: {
   narration: BookNarration | null;
   busy: boolean;
@@ -28,6 +30,8 @@ export function ReaderNarrationControl({
   failed: boolean;
   onRequest: () => void;
   onRemove: () => void;
+  /** The review page, where its lines are listened to and put right. */
+  reviewHref?: string | null;
 }) {
   const { t, language } = useLanguage();
   // The state a removal was asked to be confirmed in: once it moves on (the
@@ -170,6 +174,12 @@ export function ReaderNarrationControl({
             ? t("reader.narration.retry")
             : t("reader.narration.create")}
         </button>
+      ) : null}
+      {reviewHref && narration && narration.sections.length > 0 ? (
+        <Link to={reviewHref} role="menuitem" className="rd-menu-item">
+          <ListChecks size={18} aria-hidden="true" />
+          {t("admin.narration.open")}
+        </Link>
       ) : null}
       {narration ? (
         <button

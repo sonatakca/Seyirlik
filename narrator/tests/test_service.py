@@ -34,6 +34,9 @@ class FakeServer:
         self.held = True
         self.job_given = False
         self.parts: list[tuple[int, int, int]] = []
+        self.checks: dict[int, dict] = {}
+        self.pronunciations = [{"word": "sergievi", "spoken": "sergi evi"}]
+        self.retakes = [{"chunk": "2-0-0", "count": 1}]
         server = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -65,8 +68,14 @@ class FakeServer:
                     if server.job_given:
                         return self._send(200, {"job": None})
                     server.job_given = True
-                    sections = [{"section": n, "audioSha256": s} for n, s in server.sections.items()]
-                    return self._send(200, {"job": {"itemId": BOOK, "voice": "mk", "scriptVersion": 1, "sections": sections}})
+                    sections = [
+                        {"section": n, "audioSha256": s, "checkSha256": server.checks.get(n, {}).get("sha256")}
+                        for n, s in server.sections.items()
+                    ]
+                    return self._send(200, {"job": {
+                        "itemId": BOOK, "voice": "mk", "scriptVersion": 1, "sections": sections,
+                        "pronunciations": server.pronunciations, "retakes": server.retakes,
+                    }})
                 prefix = f"/narrator/jobs/{BOOK}"
                 if not server.held:
                     return self._send(409, code="NARRATION_NOT_HELD")
@@ -93,6 +102,12 @@ class FakeServer:
                     current.extend(body)
                     server.parts.append((number, offset, len(body)))
                     return self._send(200, {"size": len(current)})
+                if rest == "check" and method == "PUT":
+                    sent = json.loads(body)
+                    if server.sections.get(number) != sent["sha256"]:
+                        return self._send(409, code="NARRATION_CHECK_STALE")
+                    server.checks[number] = sent
+                    return self._send(204)
                 if rest == "" and method == "POST":
                     sent = json.loads(body)
                     if hashlib.sha256(bytes(server.staged.get(number, b""))).hexdigest() != sent["sha256"]:
@@ -123,14 +138,23 @@ class FakeServer:
 def fake_narrate(audio_for):
     """Writes a section's audio and words as Narration.assemble does, without the models."""
     narrated = []
+    jobs = []
 
-    def narrate(section, work: WorkDir, progress):
+    def narrate(section, work: WorkDir, progress, job):
         number = section["section"]
         narrated.append(number)
+        jobs.append(job)
+        audio = audio_for(number)
+        path = work.section(number, ".m4a")
+        # As Narration.run_section does: a section already made of these takes is left as it is.
+        if path.exists() and path.read_bytes() == audio:
+            return
         progress({"type": "progress", "fraction": 0.5, "etaSeconds": 30})
-        work.section(number, ".m4a").write_bytes(audio_for(number))
+        path.write_bytes(audio)
         write_json(work.section(number, ".words.json"), {"version": 1, "section": number, "duration": 2.0, "words": [[0, 0, 3, 0, 500]], "review": []})
+        write_json(work.section(number, ".check.json"), {"version": 1, "section": number, "signature": "s", "lines": [{"chunk": f"{number}-0-0"}]})
 
+    narrate.jobs = jobs
     return narrate, narrated
 
 
@@ -162,6 +186,12 @@ class ServiceTest(unittest.TestCase):
 
         self.assertEqual(narrated, [0, 2])
         self.assertEqual(self.server.sections, {n: hashlib.sha256(a).hexdigest() for n, a in audio.items()})
+        # Each section's lines go up after it, for the audio they describe.
+        self.assertEqual({n: c["sha256"] for n, c in self.server.checks.items()}, self.server.sections)
+        self.assertEqual(self.server.checks[2]["lines"], [{"chunk": "2-0-0"}])
+        # The narration is told how words are said and which lines to read again.
+        self.assertEqual(narrate.jobs[0].pronunciations, {"sergievi": "sergi evi"})
+        self.assertEqual(narrate.jobs[0].retakes, {"2-0-0": 1})
         # 2500 bytes go up as three parts of at most 1000.
         self.assertEqual([p for p in self.server.parts if p[0] == 0], [(0, 0, 1000), (0, 1000, 1000), (0, 2000, 500)])
         self.assertEqual(self.server.finished, [{"ready": True}])
@@ -179,7 +209,9 @@ class ServiceTest(unittest.TestCase):
         narrate, narrated = fake_narrate(lambda n: audio[n])
         self.serve(narrate)
 
-        self.assertEqual(narrated, [2])
+        # Every section is asked what it still needs; section 0 needed nothing and is not sent again.
+        self.assertEqual(narrated, [0, 2])
+        self.assertEqual([p for p in self.server.parts if p[0] == 0], [])
         self.assertEqual([p for p in self.server.parts if p[0] == 2], [(2, 1000, 1000), (2, 2000, 500)])
         self.assertEqual(self.server.finished, [{"ready": True}])
 
@@ -192,7 +224,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(self.server.finished, [{"ready": True}])
 
     def test_stops_a_book_taken_away_and_never_calls_it_finished(self):
-        def narrate(section, work, progress):
+        def narrate(section, work, progress, job):
             self.server.held = False
             progress({"type": "progress", "fraction": 0.1, "etaSeconds": None})
             # The heartbeat is told the book is gone; the next report stops the reading.
@@ -208,7 +240,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(self.server.finished, [])
 
     def test_says_why_a_book_could_not_be_read(self):
-        def narrate(section, work, progress):
+        def narrate(section, work, progress, job):
             raise RuntimeError("ffmpeg is missing")
 
         self.serve(narrate)

@@ -38,6 +38,31 @@ export interface NarrationSection {
   durationSeconds: number;
   wordCount: number;
   uploadedAt: Date;
+  /** Whether the narrator sent every line of this upload as it heard it. */
+  checked: boolean;
+}
+
+/** How a word is to be said: see narration_pronunciations. */
+export interface NarrationPronunciation {
+  word: string;
+  spoken: string;
+  updatedAt: Date;
+}
+
+/** A line asked to be read again, and how many times it has been. */
+export interface NarrationRetake {
+  chunk: string;
+  count: number;
+}
+
+/** A narrated book, as the review page lists it. */
+export interface NarratedBookSummary {
+  itemId: string;
+  title: string;
+  state: NarrationState;
+  sections: number;
+  duration: number;
+  requestedAt: Date;
 }
 
 export interface NarratorKey {
@@ -105,8 +130,15 @@ export interface NarrationRepository {
   commitSection(
     itemId: string,
     keyId: string,
-    section: Omit<NarrationSection, "uploadedAt">,
+    section: Omit<NarrationSection, "uploadedAt" | "checked">,
   ): Promise<{ replaced: string | null } | null>;
+  /** Notes that the lines of this very upload were sent; false if it is no longer this narrator's, or not this upload. */
+  markChecked(
+    itemId: string,
+    keyId: string,
+    section: number,
+    audioSha256: string,
+  ): Promise<boolean>;
   /**
    * Ends a narration the narrator holds: ready, once every section in
    * `sections` is uploaded, or failed with what went wrong. Returns false
@@ -119,6 +151,22 @@ export interface NarrationRepository {
       | { ready: true; sections: number[] }
       | { ready: false; error: string },
   ): Promise<boolean>;
+
+  /**
+   * Gives a narration back to the narrator to read what changed in it,
+   * keeping its sections: one read through is queued again, and one being
+   * read goes back to the queue when that reading finishes. False when it is
+   * neither (queued already, failed, or none).
+   */
+  readAgain(itemId: string): Promise<boolean>;
+  /** Every narration, with its book's title, the latest asked for first. */
+  list(): Promise<NarratedBookSummary[]>;
+  retakes(itemId: string): Promise<NarrationRetake[]>;
+  /** Asks for a line to be read again; returns how many times it now has been. */
+  addRetake(itemId: string, chunk: string, userId: string): Promise<number>;
+  pronunciations(): Promise<NarrationPronunciation[]>;
+  setPronunciation(word: string, spoken: string, userId: string): Promise<void>;
+  removePronunciation(word: string): Promise<boolean>;
 
   /** The active key with this SHA-256, or null. */
   findKey(hash: Buffer): Promise<NarratorKey | null>;
@@ -174,6 +222,7 @@ interface RawSectionRow {
   duration_seconds: number;
   word_count: number;
   uploaded_at: Date;
+  checked: boolean;
 }
 
 function toSection(row: RawSectionRow): NarrationSection {
@@ -184,6 +233,7 @@ function toSection(row: RawSectionRow): NarrationSection {
     durationSeconds: Number(row.duration_seconds),
     wordCount: row.word_count,
     uploadedAt: row.uploaded_at,
+    checked: row.checked,
   };
 }
 
@@ -208,7 +258,7 @@ async function sectionsOf(
   itemId: string,
 ): Promise<NarrationSection[]> {
   const result = await client.query<RawSectionRow>(
-    `SELECT section, audio_sha256, audio_bytes, duration_seconds, word_count, uploaded_at
+    `SELECT section, audio_sha256, audio_bytes, duration_seconds, word_count, uploaded_at, checked
      FROM book_narration_sections WHERE item_id = $1 ORDER BY section`,
     [itemId],
   );
@@ -311,7 +361,7 @@ export function createNarrationRepository(
           const updated = await client.query<RawNarrationRow>(
             `UPDATE book_narrations SET
                state = 'narrating', narrator_key_id = $2, heartbeat_at = now(),
-               voice = $3, script_version = $4, book_file_id = $5,
+               read_again = false, voice = $3, script_version = $4, book_file_id = $5,
                book_fingerprint = $6, error = NULL, finished_at = NULL,
                updated_at = now()
              WHERE item_id = $1
@@ -373,7 +423,10 @@ export function createNarrationRepository(
              audio_bytes = EXCLUDED.audio_bytes,
              duration_seconds = EXCLUDED.duration_seconds,
              word_count = EXCLUDED.word_count,
-             uploaded_at = now()`,
+             uploaded_at = now(),
+             -- The lines sent were another upload's.
+             checked = book_narration_sections.checked
+               AND book_narration_sections.audio_sha256 = EXCLUDED.audio_sha256`,
           [
             itemId,
             section.section,
@@ -408,9 +461,12 @@ export function createNarrationRepository(
           if (outcome.sections.some((section) => !uploaded.has(section)))
             return false;
         }
+        // Asked to be read again meanwhile: back to the queue, for the
+        // narrator to read what changed since it took the book.
         await client.query(
-          `UPDATE book_narrations SET state = $2, error = $3, finished_at = now(),
-             updated_at = now()
+          `UPDATE book_narrations SET
+             state = CASE WHEN $2 = 'ready' AND read_again THEN 'queued' ELSE $2 END,
+             read_again = false, error = $3, finished_at = now(), updated_at = now()
            WHERE item_id = $1`,
           [
             itemId,
@@ -420,6 +476,113 @@ export function createNarrationRepository(
         );
         return true;
       }),
+
+    markChecked: async (itemId, keyId, section, audioSha256) => {
+      const result = await pool.query(
+        `UPDATE book_narration_sections SET checked = true
+         WHERE item_id = $1 AND section = $3 AND audio_sha256 = $4
+           AND EXISTS (SELECT 1 FROM book_narrations
+                       WHERE item_id = $1 AND state = 'narrating' AND narrator_key_id = $2)`,
+        [itemId, keyId, section, audioSha256],
+      );
+      return (result.rowCount ?? 0) > 0;
+    },
+
+    readAgain: async (itemId) => {
+      const result = await pool.query(
+        `UPDATE book_narrations SET
+           state = CASE WHEN state = 'ready' THEN 'queued' ELSE state END,
+           read_again = (state = 'narrating'),
+           requested_at = CASE WHEN state = 'ready' THEN now() ELSE requested_at END,
+           finished_at = CASE WHEN state = 'ready' THEN NULL ELSE finished_at END,
+           updated_at = now()
+         WHERE item_id = $1 AND state IN ('ready', 'narrating')`,
+        [itemId],
+      );
+      return (result.rowCount ?? 0) > 0;
+    },
+
+    list: async () => {
+      const result = await pool.query<{
+        item_id: string;
+        title: string;
+        state: NarrationState;
+        sections: string;
+        duration: number | null;
+        requested_at: Date;
+      }>(
+        `SELECT n.item_id, i.title, n.state, n.requested_at,
+                count(s.section) AS sections, sum(s.duration_seconds) AS duration
+         FROM book_narrations n
+         JOIN items i ON i.id = n.item_id
+         LEFT JOIN book_narration_sections s ON s.item_id = n.item_id
+         GROUP BY n.item_id, i.title
+         ORDER BY n.requested_at DESC`,
+      );
+      return result.rows.map((row) => ({
+        itemId: row.item_id,
+        title: row.title,
+        state: row.state,
+        sections: Number(row.sections),
+        duration: Number(row.duration ?? 0),
+        requestedAt: row.requested_at,
+      }));
+    },
+
+    retakes: async (itemId) => {
+      const result = await pool.query<{ chunk: string; count: number }>(
+        `SELECT chunk, count FROM book_narration_retakes WHERE item_id = $1 ORDER BY chunk`,
+        [itemId],
+      );
+      return result.rows;
+    },
+
+    addRetake: async (itemId, chunk, userId) => {
+      const result = await pool.query<{ count: number }>(
+        `INSERT INTO book_narration_retakes (item_id, chunk, count, requested_by)
+         VALUES ($1, $2, 1, $3)
+         ON CONFLICT (item_id, chunk) DO UPDATE SET
+           count = book_narration_retakes.count + 1,
+           requested_by = EXCLUDED.requested_by,
+           requested_at = now()
+         RETURNING count`,
+        [itemId, chunk, userId],
+      );
+      return (result.rows[0] as { count: number }).count;
+    },
+
+    pronunciations: async () => {
+      const result = await pool.query<{
+        word: string;
+        spoken: string;
+        updated_at: Date;
+      }>(
+        "SELECT word, spoken, updated_at FROM narration_pronunciations ORDER BY word",
+      );
+      return result.rows.map((row) => ({
+        word: row.word,
+        spoken: row.spoken,
+        updatedAt: row.updated_at,
+      }));
+    },
+
+    setPronunciation: async (word, spoken, userId) => {
+      await pool.query(
+        `INSERT INTO narration_pronunciations (word, spoken, created_by)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (word) DO UPDATE SET
+           spoken = EXCLUDED.spoken, created_by = EXCLUDED.created_by, updated_at = now()`,
+        [word, spoken, userId],
+      );
+    },
+
+    removePronunciation: async (word) => {
+      const result = await pool.query(
+        "DELETE FROM narration_pronunciations WHERE word = $1",
+        [word],
+      );
+      return (result.rowCount ?? 0) > 0;
+    },
 
     findKey: async (hash) => {
       const result = await pool.query<RawKeyRow>(

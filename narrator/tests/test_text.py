@@ -5,7 +5,9 @@ from seyirlik_narrator.text import (
     Chunk,
     chunk_section,
     number_words,
+    spoken_chunk_words,
     spoken_words,
+    tts_text,
     turkish_lower,
     words_in,
 )
@@ -97,3 +99,22 @@ class ChunkTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PronunciationTest(unittest.TestCase):
+    LIST = {"sergievi": "sergi evi"}
+
+    def test_says_a_listed_word_as_listed_keeping_its_capital_and_suffix(self):
+        self.assertEqual(
+            tts_text("Sergievi’nde bir sergi vardı; sergievi kapalıydı.", self.LIST),
+            "Sergi evi’nde bir sergi vardı; sergi evi kapalıydı.",
+        )
+
+    def test_leaves_words_that_only_contain_a_listed_one(self):
+        self.assertEqual(tts_text("Sergievinde.", self.LIST), "Sergievinde.")
+
+    def test_times_the_book_word_by_how_it_is_said(self):
+        [chunk] = chunk_section({"section": 0, "blocks": [{"block": 0, "text": "Lützow Sergievi."}]})
+        words = spoken_chunk_words(chunk, self.LIST)
+        self.assertEqual([(w.start, w.end, w.text) for w in words], [(0, 6, "Lützow"), (7, 15, "Sergi evi")])
+        self.assertEqual(spoken_words("Sergi evi"), ["sergi", "evi"])

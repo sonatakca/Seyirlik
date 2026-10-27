@@ -36,6 +36,14 @@ import {
   type NarrationStore,
 } from "./narrationStore";
 import { TimingsError, checkTimings } from "./narrationTimings";
+import {
+  CheckError,
+  checkLines,
+  pronunciationKey,
+  scriptHasWord,
+  spokenForm,
+  type NarrationCheckLine,
+} from "./narrationReview";
 
 /** A narrator's key: `snk_` and 32 random bytes, of which only the SHA-256 is kept. */
 export const NARRATOR_KEY_PREFIX = "snk_";
@@ -43,6 +51,9 @@ export const NARRATOR_KEY_PREFIX = "snk_";
 export const NARRATOR_STALE_SECONDS = 15 * 60;
 /** The word timings of one section, with room: a long novel's are a few MB. */
 const MAX_TIMINGS_BYTES = 32 * 1024 * 1024;
+/** Every line of a section as it was heard: a long novel's are about a megabyte. */
+const MAX_CHECK_BYTES = 32 * 1024 * 1024;
+const CHUNK_ID = /^\d{1,6}-\d{1,7}-\d{1,5}$/;
 const MAX_SECTION = 100_000;
 
 export function newNarratorKey(): string {
@@ -345,6 +356,207 @@ export function createNarrationRoutes({
     },
   ];
 
+  /**
+   * Gives back to the narrator every narration a change of this word's
+   * pronunciation touches: read through, or being read, of the edition the
+   * book is now, with the word in its text. Returns how many.
+   */
+  const readAgainWith = async (key: string) => {
+    let count = 0;
+    for (const book of await narrations.list()) {
+      if (book.state !== "ready" && book.state !== "narrating") continue;
+      const found = await narrations.get(book.itemId);
+      if (!found || (await isOutdated(found.narration))) continue;
+      const script = await scriptOf(
+        book.itemId,
+        found.narration.bookFingerprint,
+      ).catch(() => null);
+      if (
+        script &&
+        scriptHasWord(script, key) &&
+        (await narrations.readAgain(book.itemId))
+      )
+        count += 1;
+    }
+    return count;
+  };
+
+  const reviewRoutes: RouteDefinition[] = [
+    {
+      // The narrated books, for the review page to choose from.
+      method: "GET",
+      path: "/admin/narrations",
+      access: "admin",
+      handle: async (context) => {
+        sendData(
+          context.response,
+          context.requestId,
+          (await narrations.list()).map((book) => ({
+            itemId: book.itemId,
+            title: book.title,
+            state: book.state,
+            sections: book.sections,
+            duration: book.duration,
+            requestedAt: book.requestedAt.toISOString(),
+          })),
+        );
+      },
+    },
+    {
+      // Every line of the narration beside the book's text, as the narrator heard it.
+      method: "GET",
+      path: "/admin/books/:itemId/narration/review",
+      access: "admin",
+      handle: async (context) => {
+        const { itemId } = await visibleBook(context);
+        const found = await narrations.get(itemId);
+        if (!found) throw notFound();
+        const outdated = await isOutdated(found.narration);
+        const script = outdated
+          ? null
+          : await scriptOf(itemId, found.narration.bookFingerprint).catch(
+              () => null,
+            );
+        const asked = new Map(
+          (await narrations.retakes(itemId)).map((row) => [
+            row.chunk,
+            row.count,
+          ]),
+        );
+        const sections = await Promise.all(
+          found.sections.map(async (row) => {
+            const read = script?.sections.find(
+              (candidate) => candidate.section === row.section,
+            );
+            const lines: NarrationCheckLine[] | null =
+              row.checked && read
+                ? await readFile(
+                    store.files(itemId, row.section, row.audioSha256).check,
+                    "utf8",
+                  ).then(
+                    (raw) => JSON.parse(raw) as NarrationCheckLine[],
+                    () => null,
+                  )
+                : null;
+            const texts = new Map(
+              (read?.blocks ?? []).map((block) => [block.block, block.text]),
+            );
+            return {
+              section: row.section,
+              duration: row.durationSeconds,
+              version: row.audioSha256.slice(0, 16),
+              // Null when the narrator has not sent this upload's lines.
+              lines:
+                lines?.map((line) => ({
+                  ...line,
+                  text: (texts.get(line.block) ?? "").slice(
+                    line.start,
+                    line.end,
+                  ),
+                  asked: asked.get(line.chunk) ?? 0,
+                })) ?? null,
+            };
+          }),
+        );
+        sendData(context.response, context.requestId, {
+          narration: await toDto(found.narration, found.sections, true),
+          sections,
+          pronunciations: (await narrations.pronunciations()).map((row) => ({
+            word: row.word,
+            spoken: row.spoken,
+            updatedAt: row.updatedAt.toISOString(),
+          })),
+        });
+      },
+    },
+    {
+      // Asks for one line to be read again; the narrator reads it, and nothing else, next.
+      method: "POST",
+      path: "/admin/books/:itemId/narration/retakes",
+      access: "admin",
+      handle: async (context) => {
+        const { itemId, principal } = await visibleBook(context);
+        const body = asObjectBody(await context.readJson(), ["chunk"]);
+        if (typeof body.chunk !== "string" || !CHUNK_ID.test(body.chunk))
+          throw validationError("chunk is invalid.");
+        const found = await narrations.get(itemId);
+        if (!found || (await isOutdated(found.narration))) throw notFound();
+        const section = Number(body.chunk.split("-")[0]);
+        if (!found.sections.some((row) => row.section === section))
+          throw new OwnApiError(
+            "NARRATION_SECTION_UNKNOWN",
+            "That line is in a section not read yet.",
+            409,
+          );
+        const count = await narrations.addRetake(
+          itemId,
+          body.chunk,
+          principal.userId,
+        );
+        await narrations.readAgain(itemId);
+        sendData(context.response, context.requestId, {
+          chunk: body.chunk,
+          count,
+        });
+      },
+    },
+    {
+      method: "GET",
+      path: "/admin/narration/pronunciations",
+      access: "admin",
+      handle: async (context) => {
+        sendData(
+          context.response,
+          context.requestId,
+          (await narrations.pronunciations()).map((row) => ({
+            word: row.word,
+            spoken: row.spoken,
+            updatedAt: row.updatedAt.toISOString(),
+          })),
+        );
+      },
+    },
+    {
+      // Says a word another way in every book, and has the books with it read where it is.
+      method: "PUT",
+      path: "/admin/narration/pronunciations/:word",
+      access: "admin",
+      handle: async (context) => {
+        const principal = context.requirePrincipal();
+        const word = pronunciationKey(context.params.word ?? "");
+        if (!word) throw validationError("That is not one word.");
+        const body = asObjectBody(await context.readJson(), ["spoken"]);
+        const spoken = spokenForm(body.spoken);
+        if (!spoken)
+          throw validationError("Say how the word sounds, in letters.");
+        await narrations.setPronunciation(word, spoken, principal.userId);
+        sendData(context.response, context.requestId, {
+          word,
+          spoken,
+          books: await readAgainWith(word),
+        });
+      },
+    },
+    {
+      method: "DELETE",
+      path: "/admin/narration/pronunciations/:word",
+      access: "admin",
+      handle: async (context) => {
+        const word = pronunciationKey(context.params.word ?? "");
+        if (!word || !(await narrations.removePronunciation(word)))
+          throw new OwnApiError(
+            "PRONUNCIATION_NOT_FOUND",
+            "That word is not on the list.",
+            404,
+          );
+        sendData(context.response, context.requestId, {
+          word,
+          books: await readAgainWith(word),
+        });
+      },
+    },
+  ];
+
   const adminRoutes: RouteDefinition[] = [
     {
       // Whether a narrator is there to read, before a book is asked for.
@@ -453,7 +665,14 @@ export function createNarrationRoutes({
                 sections: claim.sections.map((row) => ({
                   section: row.section,
                   audioSha256: row.audioSha256,
+                  checkSha256: row.checked ? row.audioSha256 : null,
                 })),
+                // How words are said, and the lines asked for again: both
+                // are part of what the narrator reads a line as.
+                pronunciations: (await narrations.pronunciations()).map(
+                  (row) => ({ word: row.word, spoken: row.spoken }),
+                ),
+                retakes: await narrations.retakes(claim.narration.itemId),
               }
             : null,
         });
@@ -627,6 +846,66 @@ export function createNarrationRoutes({
       },
     },
     {
+      // Every line of an upload as the narrator heard it, for the review page.
+      method: "PUT",
+      path: "/narrator/jobs/:itemId/sections/:section/check",
+      access: "narrator",
+      handle: async (context) => {
+        const { itemId, narrator, narration, sections } = await held(context);
+        const section = readSection(context.params.section);
+        const body = asObjectBody(await context.readJson(MAX_CHECK_BYTES), [
+          "sha256",
+          "lines",
+        ]);
+        const row = sections.find((candidate) => candidate.section === section);
+        if (!row || row.audioSha256 !== body.sha256)
+          throw new OwnApiError(
+            "NARRATION_CHECK_STALE",
+            "These lines are not of the section's audio as it is now.",
+            409,
+          );
+        const script = await scriptOf(itemId, narration.bookFingerprint);
+        const read = script.sections.find(
+          (candidate) => candidate.section === section,
+        );
+        if (!read)
+          throw new OwnApiError(
+            "NARRATION_SECTION_UNKNOWN",
+            "The script has no such section.",
+            422,
+          );
+        let lines;
+        try {
+          lines = checkLines(read, body.lines, row.durationSeconds);
+        } catch (error) {
+          if (error instanceof CheckError)
+            throw new OwnApiError(
+              "NARRATION_CHECK_REJECTED",
+              error.message,
+              422,
+            );
+          throw error;
+        }
+        await store.writeCheck(
+          itemId,
+          section,
+          row.audioSha256,
+          JSON.stringify(lines),
+        );
+        if (
+          !(await narrations.markChecked(
+            itemId,
+            narrator.keyId,
+            section,
+            row.audioSha256,
+          ))
+        )
+          throw notHeld();
+        context.response.statusCode = 204;
+        context.response.end();
+      },
+    },
+    {
       method: "POST",
       path: "/narrator/jobs/:itemId/finish",
       access: "narrator",
@@ -665,5 +944,5 @@ export function createNarrationRoutes({
     },
   ];
 
-  return [...readerRoutes, ...adminRoutes, ...narratorRoutes];
+  return [...readerRoutes, ...adminRoutes, ...reviewRoutes, ...narratorRoutes];
 }

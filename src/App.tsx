@@ -66,6 +66,10 @@ const IntegrationsPage = lazy(async () => ({
 const ImportsPage = lazy(async () => ({
   default: (await import("./pages/admin/ImportsPage")).ImportsPage,
 }));
+const NarrationReviewPage = lazy(async () => ({
+  default: (await import("./pages/admin/NarrationReviewPage"))
+    .NarrationReviewPage,
+}));
 const SubtitlesPage = lazy(async () => ({
   default: (await import("./pages/admin/SubtitlesPage")).SubtitlesPage,
 }));
@@ -472,6 +476,14 @@ export default function App() {
                     element={<ReleaseDecisionsPage />}
                   />
                   <Route path="/admin/subtitles" element={<SubtitlesPage />} />
+                  <Route
+                    path="/admin/narration"
+                    element={<NarrationReviewPage />}
+                  />
+                  <Route
+                    path="/admin/narration/:itemId"
+                    element={<NarrationReviewPage />}
+                  />
                   <Route path="/admin/imports" element={<ImportsPage />} />
                   <Route path="/admin/library" element={<AdminLibraryPage />} />
                   <Route

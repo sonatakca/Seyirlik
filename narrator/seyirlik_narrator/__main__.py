@@ -68,7 +68,7 @@ def main() -> int:
     listener = Listener()
     report({"type": "loaded", "seconds": round(time.monotonic() - started, 1)})
 
-    narration = Narration(script, work, speaker, listener, report)
+    narration = Narration(script, work, voice.fingerprint(), lambda: (speaker, listener), report)
     for section in script["sections"]:
         if args.section and section["section"] not in args.section:
             continue

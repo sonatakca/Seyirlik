@@ -84,6 +84,7 @@ integration("book narrations in PostgreSQL", () => {
 
   beforeEach(async () => {
     await pool.query("DELETE FROM book_narrations");
+    await pool.query("DELETE FROM narration_pronunciations");
   });
 
   afterAll(async () => {
@@ -237,6 +238,100 @@ integration("book narrations in PostgreSQL", () => {
     const left = await pool.query("SELECT 1 FROM book_narration_sections");
     expect(left.rowCount).toBe(0);
     expect(await narrations.commitSection(book, mac, section(1))).toBeNull();
+  });
+
+  it("gives a book back to read what changed, keeping its sections", async () => {
+    await narrations.request(book, admin);
+    await claim(mac);
+    await narrations.commitSection(book, mac, section(0));
+
+    // Asked for while it is read: it is read again once this reading ends.
+    expect(await narrations.readAgain(book)).toBe(true);
+    expect((await narrations.get(book))?.narration.state).toBe("narrating");
+    expect(
+      await narrations.finish(book, mac, { ready: true, sections: [0] }),
+    ).toBe(true);
+    expect((await narrations.get(book))?.narration.state).toBe("queued");
+
+    const again = await claim(mac);
+    expect(again?.reset).toBe(false);
+    expect(again?.sections.map((row) => row.section)).toEqual([0]);
+    await narrations.finish(book, mac, { ready: true, sections: [0] });
+    expect((await narrations.get(book))?.narration.state).toBe("ready");
+
+    // Read through: queued again at once. Queued or failed: nothing to give back.
+    expect(await narrations.readAgain(book)).toBe(true);
+    expect((await narrations.get(book))?.narration).toMatchObject({
+      state: "queued",
+      finishedAt: null,
+    });
+    expect(await narrations.readAgain(book)).toBe(false);
+    expect(await narrations.readAgain(other)).toBe(false);
+  });
+
+  it("knows which upload's lines were sent, and forgets on a new upload", async () => {
+    await narrations.request(book, admin);
+    await claim(mac);
+    await narrations.commitSection(book, mac, section(0));
+    expect(await narrations.markChecked(book, spare, 0, sha("audio-0"))).toBe(
+      false,
+    );
+    expect(await narrations.markChecked(book, mac, 0, sha("other"))).toBe(
+      false,
+    );
+    expect(await narrations.markChecked(book, mac, 0, sha("audio-0"))).toBe(
+      true,
+    );
+    expect((await narrations.get(book))?.sections[0]?.checked).toBe(true);
+
+    // The same audio sent again keeps its lines; another does not.
+    await narrations.commitSection(book, mac, section(0));
+    expect((await narrations.get(book))?.sections[0]?.checked).toBe(true);
+    await narrations.commitSection(book, mac, section(0, "retake"));
+    expect((await narrations.get(book))?.sections[0]?.checked).toBe(false);
+  });
+
+  it("counts the times a line is asked for, and lists the narrated books", async () => {
+    await narrations.request(book, admin);
+    await claim(mac);
+    await narrations.commitSection(book, mac, section(0));
+    expect(await narrations.addRetake(book, "0-12-1", admin)).toBe(1);
+    expect(await narrations.addRetake(book, "0-12-1", admin)).toBe(2);
+    expect(await narrations.addRetake(book, "0-3-0", admin)).toBe(1);
+    expect(await narrations.retakes(book)).toEqual([
+      { chunk: "0-12-1", count: 2 },
+      { chunk: "0-3-0", count: 1 },
+    ]);
+    await expect(narrations.addRetake(book, "0-12", admin)).rejects.toThrow();
+
+    expect(await narrations.list()).toMatchObject([
+      {
+        itemId: book,
+        title: "Kürk",
+        state: "narrating",
+        sections: 1,
+        duration: 60,
+      },
+    ]);
+    // A removed narration takes its requests with it.
+    await narrations.remove(book);
+    expect(await narrations.retakes(book)).toEqual([]);
+  });
+
+  it("keeps one pronunciation a word, written as its lookup key", async () => {
+    await narrations.setPronunciation("sergievi", "sergi evi", admin);
+    await narrations.setPronunciation("sergievi", "sergi-evi", admin);
+    expect(await narrations.pronunciations()).toMatchObject([
+      { word: "sergievi", spoken: "sergi-evi" },
+    ]);
+    await expect(
+      narrations.setPronunciation("Sergievi", "x", admin),
+    ).rejects.toThrow();
+    await expect(
+      narrations.setPronunciation("iki kelime", "x", admin),
+    ).rejects.toThrow();
+    expect(await narrations.removePronunciation("sergievi")).toBe(true);
+    expect(await narrations.removePronunciation("sergievi")).toBe(false);
   });
 
   it("finds a key by its hash until it is revoked, and knows when a narrator was last there", async () => {

@@ -11,7 +11,7 @@ import hashlib
 import json
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +41,12 @@ class Job:
     script_version: int
     # Sections the server already has, by the SHA-256 of their audio.
     uploaded: dict[int, str]
+    # The audio each section's check (the review page's lines) was sent for.
+    checked: dict[int, str] = field(default_factory=dict)
+    # Words said otherwise than they are written, by pronunciation_key.
+    pronunciations: dict[str, str] = field(default_factory=dict)
+    # How many times a person asked for each chunk to be read again.
+    retakes: dict[str, int] = field(default_factory=dict)
 
 
 def file_sha256(path: Path) -> str:
@@ -94,6 +100,9 @@ class NarratorApi:
             voice=job["voice"],
             script_version=job["scriptVersion"],
             uploaded={s["section"]: s["audioSha256"] for s in job["sections"]},
+            checked={s["section"]: s["checkSha256"] for s in job["sections"] if s.get("checkSha256")},
+            pronunciations={p["word"]: p["spoken"] for p in job.get("pronunciations", [])},
+            retakes={r["chunk"]: r["count"] for r in job.get("retakes", [])},
         )
 
     def script(self, item_id: str) -> dict:
@@ -104,6 +113,10 @@ class NarratorApi:
 
     def finish(self, item_id: str, ready: bool, error: str | None = None) -> None:
         self._json("POST", f"/narrator/jobs/{item_id}/finish", {"ready": True} if ready else {"ready": False, "error": error})
+
+    def upload_check(self, item_id: str, section: int, sha256: str, check: dict) -> None:
+        """Every line of an uploaded section as it was judged, for the review page."""
+        self._json("PUT", f"/narrator/jobs/{item_id}/sections/{section}/check", {"sha256": sha256, "lines": check["lines"]})
 
     def upload_section(self, item_id: str, section: int, audio: Path, timings: dict) -> str:
         """Sends a section's audio in parts, going on from what the server already has, then its words."""

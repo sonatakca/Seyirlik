@@ -11,7 +11,10 @@ should listen to.
 from __future__ import annotations
 
 import difflib
+import re
 from dataclasses import dataclass, field
+
+import numpy as np
 
 from .align import TimedWord
 from .text import spoken_words, words_in
@@ -27,6 +30,11 @@ MAX_UNSURE = 1
 # Speech rate sanity: seconds per spoken character, from the first samples.
 SLOWEST, FASTEST = 0.16, 0.03
 EDGE_ALLOWANCE = 0.6
+# A take whose last words are this much louder (dB) than its middle word was
+# cried out. Measured on Kürk Mantolu Madonna: a line's last words sit about
+# 2 dB under its median, and "...mıhlanıp kaldı: Maria Puder..." said as
+# "Maria Puder!" sat 9.4 dB over it.
+LOUD_END = 8.0
 
 
 @dataclass
@@ -36,6 +44,16 @@ class Verdict:
     unsure: list[int] = field(default_factory=list)  # indexes into the chunk's words
     rate_ok: bool = True
     heard: str = ""
+    # The tone: Whisper heard an exclamation the book does not have, or the
+    # line ends loud where its text gives no reason to. Takes judged before
+    # these were measured have neither.
+    exclaimed: bool = False
+    loud_end: bool = False
+    lift: float | None = None
+
+    @property
+    def toned(self) -> bool:
+        return self.exclaimed or self.loud_end
 
     @property
     def accepted(self) -> bool:
@@ -44,11 +62,12 @@ class Verdict:
             and self.match >= GOOD_MATCH
             and self.missed_run <= MAX_MISSED_RUN
             and len(self.unsure) <= MAX_UNSURE
+            and not self.toned
         )
 
     def rank(self) -> tuple:
-        """Larger is better: a sane length first, then fewest skipped and unsure words."""
-        return (self.rate_ok, -self.missed_run, -len(self.unsure), self.match)
+        """Larger is better: a sane length first, then fewest skipped and unsure words, then the calmer."""
+        return (self.rate_ok, -self.missed_run, -len(self.unsure), not self.toned, self.match, -(self.lift or 0.0))
 
     def reasons(self) -> list[str]:
         out = []
@@ -58,6 +77,8 @@ class Verdict:
             out.append("skipped-words")
         if self.unsure:
             out.append("pronunciation")
+        if self.toned:
+            out.append("tone")
         return out
 
 
@@ -68,7 +89,31 @@ def comparable(text: str) -> str:
     return "".join(s for w in words_in(text) for s in spoken_words(w.text))
 
 
-def judge(expected: str, heard: str, timed: list[TimedWord], seconds: float) -> Verdict:
+def end_lift(audio: np.ndarray, rate: int, timed: list[TimedWord]) -> float | None:
+    """How much louder, in dB, the loudest of the last two words is than the take's median word."""
+    if len(timed) < 3:
+        return None
+    levels = []
+    for word in timed:
+        x = audio[int(word.t0 * rate):int(word.t1 * rate)]
+        levels.append(20 * float(np.log10(np.sqrt(np.mean(np.square(x, dtype=np.float64))) + 1e-9)) if len(x) else -180.0)
+    return round(max(levels[-2:]) - float(np.median(levels)), 1)
+
+
+def last_sentence(text: str) -> str:
+    return re.split(r"(?<=[.?…])\s+", text.strip())[-1]
+
+
+def tone(expected: str, heard: str, lift: float | None) -> dict:
+    """The tone fields of a verdict: what was cried out that the book says quietly."""
+    return {
+        "exclaimed": heard.count("!") > expected.count("!"),
+        "loud_end": lift is not None and lift >= LOUD_END and "!" not in last_sentence(expected),
+        "lift": lift,
+    }
+
+
+def judge(expected: str, heard: str, timed: list[TimedWord], seconds: float, lift: float | None = None) -> Verdict:
     a, b = comparable(expected), comparable(heard)
     matcher = difflib.SequenceMatcher(None, a, b, autojunk=False)
     missed = max(
@@ -83,4 +128,5 @@ def judge(expected: str, heard: str, timed: list[TimedWord], seconds: float) -> 
         # A take carries some silence at its edges, which a one-word take would otherwise be judged by.
         rate_ok=FASTEST <= max(0.0, seconds - EDGE_ALLOWANCE) / characters <= SLOWEST,
         heard=heard,
+        **tone(expected, heard, lift),
     )

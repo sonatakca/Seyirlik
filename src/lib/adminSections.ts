@@ -82,6 +82,7 @@ export type AdminIconName =
   | "download"
   | "fileVideo"
   | "hardDrive"
+  | "headphones"
   | "heartPulse"
   | "images"
   | "languages"
@@ -169,6 +170,17 @@ export const ADMIN_SECTIONS: readonly AdminSection[] = [
     descriptionKey: "devtools.card.libraryMaintenance.description",
     tagKey: "devtools.card.libraryMaintenance.tag",
     icon: "databaseZap",
+  },
+  {
+    // Listening through a book read aloud for the lines the voice got wrong,
+    // and putting them right: a word's pronunciation, a line read again.
+    id: "narration",
+    group: "library",
+    path: "/admin/narration",
+    titleKey: "admin.narration.title",
+    descriptionKey: "admin.narration.description",
+    tagKey: "admin.narration.tag",
+    icon: "headphones",
   },
   {
     // Going down the whole list choosing covers and logos is its own errand;

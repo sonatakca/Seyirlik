@@ -52,7 +52,10 @@ const person = (userId: string, isAdministrator: boolean): RoutePrincipal => ({
 /** The repository's rules as the integration test proves them in SQL, kept to what these routes rely on. */
 function memoryNarrations() {
   let narration: BookNarration | null = null;
+  let readAgain = false;
   const sections = new Map<number, NarrationSection>();
+  const retakes = new Map<string, number>();
+  const pronunciations = new Map<string, string>();
   const repository: NarrationRepository = {
     get: async (itemId) =>
       narration && narration.itemId === itemId
@@ -116,7 +119,13 @@ function memoryNarrations() {
       if (narration?.state !== "narrating" || narration.narratorKeyId !== keyId)
         return null;
       const before = sections.get(row.section)?.audioSha256 ?? null;
-      sections.set(row.section, { ...row, uploadedAt: new Date() });
+      sections.set(row.section, {
+        ...row,
+        uploadedAt: new Date(),
+        checked:
+          (sections.get(row.section)?.checked ?? false) &&
+          before === row.audioSha256,
+      });
       return { replaced: before === row.audioSha256 ? null : before };
     },
     finish: async (itemId, keyId, outcome) => {
@@ -126,11 +135,63 @@ function memoryNarrations() {
         return false;
       narration = {
         ...narration,
-        state: outcome.ready ? "ready" : "failed",
+        state: outcome.ready ? (readAgain ? "queued" : "ready") : "failed",
         error: outcome.ready ? null : outcome.error,
       };
+      readAgain = false;
       return true;
     },
+    markChecked: async (itemId, keyId, section, audioSha256) => {
+      const row = sections.get(section);
+      if (
+        narration?.state !== "narrating" ||
+        narration.narratorKeyId !== keyId ||
+        row?.audioSha256 !== audioSha256
+      )
+        return false;
+      sections.set(section, { ...row, checked: true });
+      return true;
+    },
+    readAgain: async () => {
+      if (narration?.state === "ready") {
+        narration = { ...narration, state: "queued" };
+        return true;
+      }
+      if (narration?.state === "narrating") {
+        readAgain = true;
+        return true;
+      }
+      return false;
+    },
+    list: async () =>
+      narration
+        ? [
+            {
+              itemId: narration.itemId,
+              title: "Kürk Mantolu Madonna",
+              state: narration.state,
+              sections: sections.size,
+              duration: 3,
+              requestedAt: narration.requestedAt,
+            },
+          ]
+        : [],
+    retakes: async () =>
+      [...retakes].map(([chunk, count]) => ({ chunk, count })),
+    addRetake: async (_itemId, chunk) => {
+      retakes.set(chunk, (retakes.get(chunk) ?? 0) + 1);
+      return retakes.get(chunk)!;
+    },
+    pronunciations: async () =>
+      [...pronunciations].map(([word, spoken]) => ({
+        word,
+        spoken,
+        updatedAt: new Date("2026-10-27T05:00:00Z"),
+      })),
+    setPronunciation: async (word, spoken) => {
+      pronunciations.set(word, spoken);
+    },
+    removePronunciation: async (word) => pronunciations.delete(word),
     findKey: async () => null,
     touchKey: async () => undefined,
     createKey: async () => {
@@ -551,6 +612,233 @@ describe("narration routes", () => {
       { params: { section: "0" } },
     );
     expect(audioNow.error?.statusCode).toBe(404);
+  });
+
+  const line = (overrides: Record<string, unknown> = {}) => ({
+    chunk: "1-0-0",
+    block: 0,
+    start: 0,
+    end: 21,
+    at: 0,
+    duration: 2000,
+    heard: "Frau Tiedemann güldü!",
+    spoken: null,
+    match: 0.97,
+    lift: 9.1,
+    reasons: ["tone"],
+    unsure: [[5, 14]],
+    takes: 3,
+    retakes: 0,
+    ...overrides,
+  });
+
+  const sendCheck = (section: number, lines: unknown, bytes = audio) =>
+    narrator("PUT", "/narrator/jobs/:itemId/sections/:section/check", {
+      params: { section: String(section) },
+      json: { sha256: sha(bytes), lines },
+    });
+
+  /** A book read through: both sections uploaded, section 1 with its lines. */
+  async function readThrough() {
+    await claimed();
+    await upload(0);
+    await commit(0, [[0, 0, 3, 0, 100]]);
+    await upload(1);
+    await commit(1, [[0, 0, 4, 0, 100]]);
+    expect((await sendCheck(1, [line()])).response.statusCode).toBe(204);
+    await narrator("POST", "/narrator/jobs/:itemId/finish", {
+      json: { ready: true },
+    });
+  }
+
+  it("keeps every line as the narrator heard it, beside the book's text", async () => {
+    await readThrough();
+    const review = await call("GET", "/admin/books/:itemId/narration/review");
+    expect(review.error).toBeNull();
+    const [zero, one] = review.response.json.data.sections;
+    // Section 0 was sent before its lines: there are none to show.
+    expect(zero.lines).toBeNull();
+    expect(one.lines).toEqual([
+      { ...line(), text: "Frau Tiedemann güldü.", asked: 0 },
+    ]);
+    // Told to the narrator, so it sends no section's lines twice.
+    await call("POST", "/admin/books/:itemId/narration/retakes", {
+      json: { chunk: "1-0-0" },
+    });
+    const job = (
+      await narrator("POST", "/narrator/claim", { json: { voice: "mk" } })
+    ).response.json.data.job;
+    expect(
+      job.sections.map(
+        (row: { checkSha256: string | null }) => row.checkSha256,
+      ),
+    ).toEqual([null, sha(audio)]);
+  });
+
+  it("takes no lines of another upload, or outside the book", async () => {
+    await claimed();
+    await upload(1);
+    await commit(1, [[0, 0, 4, 0, 100]]);
+    const other = Buffer.concat([audio, Buffer.from("older")]);
+    expect((await sendCheck(1, [line()], other)).error?.code).toBe(
+      "NARRATION_CHECK_STALE",
+    );
+    for (const bad of [
+      line({ end: 99 }),
+      line({ chunk: "0-0-0" }),
+      line({ reasons: ["shouting"] }),
+      line({ heard: "x".repeat(6000) }),
+      { ...line(), block: 7 },
+    ])
+      expect((await sendCheck(1, [bad])).error?.code).toBe(
+        "NARRATION_CHECK_REJECTED",
+      );
+    // A section uploaded again has not had its new lines sent.
+    expect((await sendCheck(1, [line()])).response.statusCode).toBe(204);
+    const again = Buffer.concat([audio, Buffer.from("again")]);
+    await upload(1, again);
+    await commit(1, [[0, 0, 4, 0, 100]], again);
+    const review = await call("GET", "/admin/books/:itemId/narration/review");
+    expect(review.response.json.data.sections[0].lines).toBeNull();
+  });
+
+  it("reads a line again on request, and gives the book back to the narrator for it", async () => {
+    await readThrough();
+    const asked = await call("POST", "/admin/books/:itemId/narration/retakes", {
+      json: { chunk: "1-0-0" },
+    });
+    expect(asked.response.json.data).toEqual({ chunk: "1-0-0", count: 1 });
+    expect(
+      (await call("GET", "/books/:itemId/narration")).response.json.data.state,
+    ).toBe("queued");
+    const job = (
+      await narrator("POST", "/narrator/claim", { json: { voice: "mk" } })
+    ).response.json.data.job;
+    expect(job.retakes).toEqual([{ chunk: "1-0-0", count: 1 }]);
+    // Its sections stay: the narrator sends only what it read again.
+    expect(job.sections).toHaveLength(2);
+
+    expect(
+      (
+        await call("POST", "/admin/books/:itemId/narration/retakes", {
+          json: { chunk: "7-0-0" },
+        })
+      ).error?.code,
+    ).toBe("NARRATION_SECTION_UNKNOWN");
+    expect(
+      (
+        await call("POST", "/admin/books/:itemId/narration/retakes", {
+          json: { chunk: "1-0-0", extra: 1 },
+        })
+      ).error?.statusCode,
+    ).toBe(422);
+  });
+
+  it("leaves reviewing and correcting a narration to administrators", () => {
+    const review = routes.filter(
+      (route) =>
+        route.path.startsWith("/admin/narration") ||
+        route.path.startsWith("/admin/books/") ||
+        route.path === "/admin/narrations",
+    );
+    expect(
+      review.map((route) => `${route.method} ${route.path}`).sort(),
+    ).toEqual([
+      "DELETE /admin/narration/pronunciations/:word",
+      "GET /admin/books/:itemId/narration/review",
+      "GET /admin/narration/pronunciations",
+      "GET /admin/narrations",
+      "POST /admin/books/:itemId/narration/retakes",
+      "PUT /admin/narration/pronunciations/:word",
+    ]);
+    expect(review.every((route) => route.access === "admin")).toBe(true);
+    expect(routes.find((route) => route.path.endsWith("/check"))?.access).toBe(
+      "narrator",
+    );
+  });
+
+  it("lists how a word is said, and reads again the books that have it", async () => {
+    await readThrough();
+    const put = (word: string, spoken: unknown) =>
+      call("PUT", "/admin/narration/pronunciations/:word", {
+        params: { word },
+        json: { spoken },
+      });
+
+    // A word the book does not have changes nothing in it.
+    expect((await put("Sergievi", "sergi evi")).response.json.data).toEqual({
+      word: "sergievi",
+      spoken: "sergi evi",
+      books: 0,
+    });
+    expect(
+      (await call("GET", "/books/:itemId/narration")).response.json.data.state,
+    ).toBe("ready");
+
+    // One it has, written with a suffix, is looked up as the narrator would.
+    const tiedemann = await put("Tiedemann’ın", "  Tiidemann  ");
+    expect(tiedemann.response.json.data).toEqual({
+      word: "tiedemann",
+      spoken: "Tiidemann",
+      books: 1,
+    });
+    expect(
+      (await call("GET", "/books/:itemId/narration")).response.json.data.state,
+    ).toBe("queued");
+    const job = (
+      await narrator("POST", "/narrator/claim", { json: { voice: "mk" } })
+    ).response.json.data.job;
+    expect(job.pronunciations).toEqual([
+      { word: "sergievi", spoken: "sergi evi" },
+      { word: "tiedemann", spoken: "Tiidemann" },
+    ]);
+
+    expect((await put("iki kelime", "x")).error?.statusCode).toBe(422);
+    expect((await put("Sergievi", "   ")).error?.statusCode).toBe(422);
+    expect((await put("Sergievi", "123")).error?.statusCode).toBe(422);
+
+    const removed = await call(
+      "DELETE",
+      "/admin/narration/pronunciations/:word",
+      { params: { word: "Sergievi" } },
+    );
+    expect(removed.response.json.data).toEqual({ word: "sergievi", books: 0 });
+    expect(
+      (
+        await call("DELETE", "/admin/narration/pronunciations/:word", {
+          params: { word: "Sergievi" },
+        })
+      ).error?.code,
+    ).toBe("PRONUNCIATION_NOT_FOUND");
+    expect(
+      (await call("GET", "/admin/narration/pronunciations")).response.json.data,
+    ).toEqual([
+      {
+        word: "tiedemann",
+        spoken: "Tiidemann",
+        updatedAt: "2026-10-27T05:00:00.000Z",
+      },
+    ]);
+  });
+
+  it("puts a book asked for again while it is read back in the queue once that reading ends", async () => {
+    await claimed();
+    await upload(0);
+    await commit(0, [[0, 0, 3, 0, 100]]);
+    await upload(1);
+    await commit(1, [[0, 0, 4, 0, 100]]);
+    await call("POST", "/admin/books/:itemId/narration/retakes", {
+      json: { chunk: "1-0-0" },
+    });
+    expect(
+      (await call("GET", "/books/:itemId/narration")).response.json.data.state,
+    ).toBe("narrating");
+    await narrator("POST", "/narrator/jobs/:itemId/finish", {
+      json: { ready: true },
+    });
+    expect(
+      (await call("GET", "/books/:itemId/narration")).response.json.data.state,
+    ).toBe("queued");
   });
 
   it("removes a narration and its files", async () => {

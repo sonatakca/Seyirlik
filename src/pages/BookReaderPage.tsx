@@ -3462,6 +3462,9 @@ export function BookReaderPage() {
               failed={narrationFailed}
               onRequest={() => void changeNarration("request")}
               onRemove={() => void changeNarration("remove")}
+              reviewHref={
+                activeItemId ? `/admin/narration/${activeItemId}` : null
+              }
             />
           ) : null
         }
