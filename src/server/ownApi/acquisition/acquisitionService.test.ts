@@ -346,6 +346,33 @@ describe("reconciling with SABnzbd", () => {
     });
   });
 
+  it("waits for SABnzbd to name the path before calling it downloaded", async () => {
+    // History can say Completed before `storage` is filled.
+    const { store, current } = makeStore({
+      state: "processing",
+      externalId: "nzo-1",
+    });
+    const job: SabJob = {
+      nzoId: "nzo-1",
+      name: KEY,
+      state: "completed",
+      source: "history",
+    };
+    const runner = service(store, makeSab({ jobs: [job] }));
+    expect((await runner.reconcile()).changed).toBe(0);
+    expect(current().state).toBe("processing");
+
+    const later = service(
+      store,
+      makeSab({ jobs: [{ ...job, storagePath: "C:/downloads/complete/x" }] }),
+    );
+    await later.reconcile();
+    expect(current()).toMatchObject({
+      state: "downloaded",
+      downloadPath: "C:/downloads/complete/x",
+    });
+  });
+
   it("finds a lost submission by name and adopts it", async () => {
     // Seyirlik never learned the id; SABnzbd has the job under our name.
     const { store, current } = makeStore({ state: "submitting" });

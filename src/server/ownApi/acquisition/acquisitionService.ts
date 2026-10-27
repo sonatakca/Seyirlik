@@ -112,7 +112,15 @@ export interface AcquisitionServiceOptions {
 
 const DEFAULT_SUBMIT_GRACE_MS = 60_000;
 
-/** SABnzbd's state, as an acquisition state. */
+/**
+ * SABnzbd's state, as an acquisition state.
+ *
+ * A completed job is `downloaded` only once SABnzbd names where it put it.
+ * History can say "Completed" a moment before `storage` is filled, and a row
+ * that reached `downloaded` then would never be read again: the reconciler
+ * stops at `downloaded` and the import hand-off needs the path, so the file
+ * would sit on disk unimported. Until the path appears it is still processing.
+ */
 export function stateFromSabJob(job: SabJob): AcquisitionState {
   switch (job.state) {
     case "queued":
@@ -123,7 +131,7 @@ export function stateFromSabJob(job: SabJob): AcquisitionState {
     case "processing":
       return "processing";
     case "completed":
-      return "downloaded";
+      return job.storagePath ? "downloaded" : "processing";
     case "failed":
       return "failed";
     default:
