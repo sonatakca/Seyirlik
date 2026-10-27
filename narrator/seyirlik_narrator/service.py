@@ -92,19 +92,28 @@ class Reading:
         self.job = job
         self.work = work
         self.narrate = narrate
-        self.report = {"fraction": 0.0, "sectionsDone": 0, "sectionsTotal": 0, "etaSeconds": None, "activity": "starting"}
+        # Every key from the start: the heartbeat reads this while the reading changes it.
+        self.report = {
+            "fraction": 0.0, "sectionsDone": 0, "sectionsTotal": 0, "etaSeconds": None, "activity": "starting",
+            # Where it is, for a person following a line asked for again.
+            "section": None, "reading": [], "sent": None,
+        }
         self.lost = False
         self._stop = threading.Event()
+        # The heartbeat and the reading both report, and both write the state
+        # file through the same temporary file: one at a time.
+        self._sending = threading.Lock()
 
     def _send(self) -> None:
-        try:
-            self.api.progress(self.job.item_id, self.report)
-        except ApiError as error:
-            if error.code == "NARRATION_NOT_HELD":
-                self.lost = True
-        except Unreachable:
-            pass  # said again at the next beat
-        write_json(STATE, {"itemId": self.job.item_id, "at": time.time(), **self.report})
+        with self._sending:
+            try:
+                self.api.progress(self.job.item_id, self.report)
+            except ApiError as error:
+                if error.code == "NARRATION_NOT_HELD":
+                    self.lost = True
+            except Unreachable:
+                pass  # said again at the next beat
+            write_json(STATE, {"itemId": self.job.item_id, "at": time.time(), **self.report})
 
     def _beat(self) -> None:
         # The server hears from the narrator even while one long step (a model
@@ -124,6 +133,8 @@ class Reading:
             self._run()
         finally:
             self._stop.set()
+            # Nothing reports for this book once its reading has returned.
+            beat.join()
 
     def _run(self) -> None:
         script = self.api.script(self.job.item_id)
@@ -141,15 +152,27 @@ class Reading:
             words = self.work.section(number, ".words.json")
             have = self.job.uploaded.get(number)
 
-            def progress(event: dict, before: int = before, weight: int = weights[index]) -> None:
-                if event.get("type") != "progress":
-                    return
-                self._set(
-                    fraction=round((before + event["fraction"] * weight) / total, 4),
-                    etaSeconds=event.get("etaSeconds"),
-                    activity="reading",
-                )
+            def progress(event: dict, before: int = before, weight: int = weights[index], number: int = number) -> None:
+                kind = event.get("type")
+                if kind == "progress":
+                    # A batch is done: its lines are no longer being read.
+                    self._set(
+                        fraction=round((before + event["fraction"] * weight) / total, 4),
+                        etaSeconds=event.get("etaSeconds"),
+                        activity="reading",
+                        section=number,
+                        reading=[],
+                    )
+                elif kind in ("loading", "speaking", "assembling"):
+                    # Said at once: each is a step a person may be waiting through.
+                    self._set(
+                        activity={"loading": "loading", "speaking": "reading", "assembling": "assembling"}[kind],
+                        section=number,
+                        reading=event.get("chunks", []),
+                    )
+                    self._send()
 
+            self._set(section=number, reading=[], sent=None)
             # Reads only what the section still needs: nothing, when the book
             # was asked for again because of a line in another section.
             self.narrate(section, self.work, progress, self.job)
@@ -157,9 +180,14 @@ class Reading:
             check = self.work.section(number, ".check.json")
             try:
                 if sha != have:
-                    self._set(activity="uploading")
+                    self._set(activity="uploading", reading=[], sent=0.0)
                     self._send()
-                    self.api.upload_section(self.job.item_id, number, audio, read_json(words))
+
+                    def sent(fraction: float) -> None:
+                        self._set(sent=round(fraction, 4))
+                        self._send()
+
+                    self.api.upload_section(self.job.item_id, number, audio, read_json(words), sent)
                     log(f"section {number} uploaded ({index + 1}/{len(sections)})")
                 if check.exists() and self.job.checked.get(number) != sha:
                     self.api.upload_check(self.job.item_id, number, sha, read_json(check))
@@ -167,7 +195,9 @@ class Reading:
                 if error.code == "NARRATION_NOT_HELD":
                     raise Lost() from None
                 raise
-            self._set(sectionsDone=index + 1, fraction=round((before + weights[index]) / total, 4), activity="reading")
+            self._set(
+                sectionsDone=index + 1, fraction=round((before + weights[index]) / total, 4), activity="reading", sent=None
+            )
             self._send()
 
         try:
@@ -176,8 +206,9 @@ class Reading:
             if error.code == "NARRATION_NOT_HELD":
                 raise Lost() from None
             raise
-        self.report.update(fraction=1.0, activity="done", etaSeconds=0)
-        write_json(STATE, {"itemId": self.job.item_id, "at": time.time(), **self.report})
+        with self._sending:
+            self.report.update(fraction=1.0, activity="done", etaSeconds=0, section=None, reading=[], sent=None)
+            write_json(STATE, {"itemId": self.job.item_id, "at": time.time(), **self.report})
 
 
 # -- the service ----------------------------------------------------------------
@@ -189,11 +220,13 @@ class Narrator:
         self.voice_dir = voice_dir
         self.models = None
 
-    def _load(self):
+    def _load(self, progress: Callable[[dict], None] | None = None):
         from .models import Listener, Speaker, Voice
 
         if self.models is None:
             log("loading the speech models")
+            if progress:
+                progress({"type": "loading"})
             self.models = (Speaker(Voice.load(self.voice_dir)), Listener())
         return self.models
 
@@ -205,7 +238,7 @@ class Narrator:
         # The models load only once a chunk has to be read: a section with
         # nothing new in it (the book was asked for again for another one) is only checked.
         narration = Narration(
-            script, work, Voice.load(self.voice_dir).fingerprint(), self._load, progress,
+            script, work, Voice.load(self.voice_dir).fingerprint(), lambda: self._load(progress), progress,
             pronunciations=job.pronunciations, retakes=job.retakes,
         )
         narration.run_section(section)

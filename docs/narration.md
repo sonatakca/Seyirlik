@@ -79,7 +79,15 @@ the narrator's minute of polling:
   the narrator, which reads again only the lines with it. Taking one off
   brings the old takes back without reading anything.
 - **Read again**: one line, made afresh. The times a line was asked for are
-  part of what it is read as, so the count only grows.
+  part of what it is read as, so the count only grows. The line shows its way
+  back as the narrator reports it (queued, the voice loading, the parts
+  before checked, each take, its part joined and sent, with how much of the
+  upload is there), then what is heard in the new reading beside what was
+  heard before.
+
+A line that is right as it is can be **approved**: it leaves _Dinlenmeli_.
+An approval is of one reading (what was heard in it, and for how long), so a
+line read again for any reason is to be listened to again.
 
 A narration given back is queued again with its sections, which go on
 playing; one being read when asked goes back to the queue when it finishes
@@ -89,7 +97,8 @@ recording changed.
 
 ## Setting it up
 
-Apply migrations `045_book_narrations.sql` and `046_narration_review.sql`
+Apply migrations `045_book_narrations.sql`, `046_narration_review.sql` and
+`047_narration_approvals.sql`
 **before** shipping code that has them. The services refuse to start on a database that lacks it (see
 `windows-deployment.md`).
 

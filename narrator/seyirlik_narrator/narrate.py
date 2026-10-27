@@ -194,6 +194,11 @@ class Narration:
         queue = sorted(pending, key=lambda c: len(c.text))
         while queue:
             batch, queue = queue[:BATCH], queue[BATCH:]
+            # Which lines the voice reads now, so a person waiting for one can follow it.
+            self.report({
+                "type": "speaking", "section": section["section"],
+                "chunks": [{"chunk": c.id, "take": len(tries[c.id]) + 1} for c in batch],
+            })
             speaker, _ = self.models()
             audios = speaker.say([tts_text(c.text, self.pronunciations) for c in batch])
             for chunk, audio in zip(batch, audios):

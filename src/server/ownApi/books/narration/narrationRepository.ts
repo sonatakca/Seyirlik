@@ -12,8 +12,14 @@ export interface NarrationProgress {
   sectionsTotal: number;
   /** About how long the rest will take, when the narrator can say. */
   etaSeconds: number | null;
-  /** What it is doing now, in a word: "loading", "reading", "uploading". */
+  /** What it is doing now, in a word: "loading", "reading", "assembling", "uploading". */
   activity: string | null;
+  /** The section it is working in, when it says. */
+  section?: number | null;
+  /** The lines the voice is reading now, and which take of each. */
+  reading?: Array<{ chunk: string; take: number }>;
+  /** How much of the section's audio is uploaded, 0 to 1, while uploading. */
+  sent?: number | null;
 }
 
 export interface BookNarration {
@@ -53,6 +59,13 @@ export interface NarrationPronunciation {
 export interface NarrationRetake {
   chunk: string;
   count: number;
+}
+
+/** A line a person listened to and found right, in the reading they heard. */
+export interface NarrationApproval {
+  chunk: string;
+  heard: string;
+  duration: number;
 }
 
 /** A narrated book, as the review page lists it. */
@@ -164,6 +177,15 @@ export interface NarrationRepository {
   retakes(itemId: string): Promise<NarrationRetake[]>;
   /** Asks for a line to be read again; returns how many times it now has been. */
   addRetake(itemId: string, chunk: string, userId: string): Promise<number>;
+  approvals(itemId: string): Promise<NarrationApproval[]>;
+  /** Takes a line as right in the reading heard (`heard`, `duration`), replacing an older approval. */
+  approve(
+    itemId: string,
+    approval: NarrationApproval,
+    userId: string,
+  ): Promise<void>;
+  /** True if the line was approved. */
+  unapprove(itemId: string, chunk: string): Promise<boolean>;
   pronunciations(): Promise<NarrationPronunciation[]>;
   setPronunciation(word: string, spoken: string, userId: string): Promise<void>;
   removePronunciation(word: string): Promise<boolean>;
@@ -549,6 +571,35 @@ export function createNarrationRepository(
         [itemId, chunk, userId],
       );
       return (result.rows[0] as { count: number }).count;
+    },
+
+    approvals: async (itemId) => {
+      const result = await pool.query<NarrationApproval>(
+        `SELECT chunk, heard, duration FROM book_narration_approvals WHERE item_id = $1 ORDER BY chunk`,
+        [itemId],
+      );
+      return result.rows;
+    },
+
+    approve: async (itemId, { chunk, heard, duration }, userId) => {
+      await pool.query(
+        `INSERT INTO book_narration_approvals (item_id, chunk, heard, duration, approved_by)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (item_id, chunk) DO UPDATE SET
+           heard = EXCLUDED.heard,
+           duration = EXCLUDED.duration,
+           approved_by = EXCLUDED.approved_by,
+           approved_at = now()`,
+        [itemId, chunk, heard, duration, userId],
+      );
+    },
+
+    unapprove: async (itemId, chunk) => {
+      const result = await pool.query(
+        `DELETE FROM book_narration_approvals WHERE item_id = $1 AND chunk = $2`,
+        [itemId, chunk],
+      );
+      return (result.rowCount ?? 0) > 0;
     },
 
     pronunciations: async () => {

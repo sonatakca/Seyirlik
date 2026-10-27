@@ -198,6 +198,36 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(self.server.progress[-1]["sectionsDone"], 2)
         self.assertEqual(self.server.progress[-1]["fraction"], 1.0)
 
+    def test_says_which_line_it_reads_and_how_much_of_an_upload_is_sent(self):
+        audio = {0: b"\x00" * 10, 2: b"\x01" * 2500}
+        plain, _ = fake_narrate(lambda n: audio[n])
+
+        def narrate(section, work, progress, job):
+            if section["section"] == 2:
+                progress({"type": "loading"})
+                progress({"type": "speaking", "section": 2, "chunks": [{"chunk": "2-0-0", "take": 1}]})
+                progress({"type": "progress", "fraction": 1.0, "etaSeconds": 0})
+                progress({"type": "assembling", "section": 2})
+            plain(section, work, progress, job)
+
+        self.serve(narrate)
+        said = [(p["activity"], p["section"], p["reading"], p["sent"]) for p in self.server.progress]
+        steps = [step for i, step in enumerate(said) if i == 0 or said[i - 1] != step]
+        for step in [
+            ("loading", 2, [], None),
+            ("reading", 2, [{"chunk": "2-0-0", "take": 1}], None),
+            ("assembling", 2, [], None),
+            ("uploading", 2, [], 0.0),
+            ("uploading", 2, [], 0.4),
+            ("uploading", 2, [], 0.8),
+            ("uploading", 2, [], 1.0),
+        ]:
+            self.assertIn(step, steps)
+        # In that order, and nothing is said to be read or sent once the section is done.
+        order = [steps.index(s) for s in steps if s[0] in ("loading", "assembling") or s[3] == 1.0]
+        self.assertEqual(order, sorted(order))
+        self.assertEqual((said[-1][2], said[-1][3]), ([], None))
+
     def test_goes_on_from_what_the_server_already_has(self):
         audio = {0: b"\x00" * 2500, 2: b"\x02" * 2500}
         work = WorkDir(self.root / "work" / BOOK)

@@ -13,7 +13,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # Below the server's 32 MiB, and well below the ~100 MB a request through the tunnel can carry.
 PART_BYTES = 16 * 1024 * 1024
@@ -118,8 +118,11 @@ class NarratorApi:
         """Every line of an uploaded section as it was judged, for the review page."""
         self._json("PUT", f"/narrator/jobs/{item_id}/sections/{section}/check", {"sha256": sha256, "lines": check["lines"]})
 
-    def upload_section(self, item_id: str, section: int, audio: Path, timings: dict) -> str:
-        """Sends a section's audio in parts, going on from what the server already has, then its words."""
+    def upload_section(
+        self, item_id: str, section: int, audio: Path, timings: dict, sent: Callable[[float], None] | None = None
+    ) -> str:
+        """Sends a section's audio in parts, going on from what the server already has, then its words.
+        `sent` hears how much of the audio the server has after every part."""
         sha = file_sha256(audio)
         size = audio.stat().st_size
         path = f"/narrator/jobs/{item_id}/sections/{section}"
@@ -136,6 +139,8 @@ class NarratorApi:
                     part = f.read(PART_BYTES)
                     try:
                         offset = self._request("PUT", f"{path}/audio?offset={offset}", part, "application/octet-stream")["size"]
+                        if sent:
+                            sent(min(offset / size, 1.0) if size else 1.0)
                     except ApiError as error:
                         if error.code != "NARRATION_PART_OFFSET":
                             raise

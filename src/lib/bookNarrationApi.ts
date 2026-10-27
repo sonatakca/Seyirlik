@@ -24,6 +24,8 @@ export interface NarrationSectionInfo {
   duration: number;
   /** Names this upload of the section, in its files' URLs. */
   version: string;
+  /** Whether the narrator sent its lines for review; told to an administrator only. */
+  checked?: boolean;
 }
 
 /**
@@ -44,7 +46,14 @@ export interface NarrationProgress {
   sectionsDone: number;
   sectionsTotal: number;
   etaSeconds: number | null;
+  /** "starting", "loading", "reading", "assembling", "uploading", "done". */
   activity: string | null;
+  /** The section the narrator is in; absent from an older narrator. */
+  section?: number | null;
+  /** The lines the voice is reading now, and which take of each. */
+  reading?: Array<{ chunk: string; take: number }>;
+  /** How much of the section's audio is uploaded, 0 to 1, while uploading. */
+  sent?: number | null;
 }
 
 /** A book's narration: where it stands, and the sections there are to play, in reading order. */

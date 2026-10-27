@@ -102,7 +102,12 @@ class NarrationTest(unittest.TestCase):
     def test_a_line_asked_for_again_is_read_again_alone(self):
         self.narration().run_section(SECTION)
         self.speaker.said.clear()
-        self.assertTrue(self.narration(retakes={"1-1-0": 1}).run_section(SECTION))
+        events = []
+        narration = self.narration(retakes={"1-1-0": 1})
+        narration.report = events.append
+        self.assertTrue(narration.run_section(SECTION))
+        # Said before the voice reads it, so the page waiting for it can say so.
+        self.assertIn({"type": "speaking", "section": 1, "chunks": [{"chunk": "1-1-0", "take": 1}]}, events)
         self.assertEqual(self.speaker.said, ["Mıhlanıp kaldı: Maria Puder..."])
         self.assertEqual(read_json(self.work.section(1, ".check.json"))["lines"][1]["retakes"], 1)
 

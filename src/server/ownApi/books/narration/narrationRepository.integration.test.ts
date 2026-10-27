@@ -318,6 +318,40 @@ integration("book narrations in PostgreSQL", () => {
     expect(await narrations.retakes(book)).toEqual([]);
   });
 
+  it("keeps one approval a line, of the reading heard, and none of a removed narration", async () => {
+    await narrations.request(book, admin);
+    await narrations.approve(
+      book,
+      { chunk: "1-31-1", heard: "Maria Puder!", duration: 1200 },
+      admin,
+    );
+    await narrations.approve(
+      book,
+      { chunk: "1-31-1", heard: "Maria Puder.", duration: 1100 },
+      admin,
+    );
+    expect(await narrations.approvals(book)).toEqual([
+      { chunk: "1-31-1", heard: "Maria Puder.", duration: 1100 },
+    ]);
+    await expect(
+      narrations.approve(
+        book,
+        { chunk: "1-31", heard: "", duration: 0 },
+        admin,
+      ),
+    ).rejects.toThrow();
+    expect(await narrations.unapprove(book, "1-31-1")).toBe(true);
+    expect(await narrations.unapprove(book, "1-31-1")).toBe(false);
+
+    await narrations.approve(
+      book,
+      { chunk: "0-1-0", heard: "Bir", duration: 400 },
+      admin,
+    );
+    await narrations.remove(book);
+    expect(await narrations.approvals(book)).toEqual([]);
+  });
+
   it("keeps one pronunciation a word, written as its lookup key", async () => {
     await narrations.setPronunciation("sergievi", "sergi evi", admin);
     await narrations.setPronunciation("sergievi", "sergi-evi", admin);

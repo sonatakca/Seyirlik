@@ -55,6 +55,7 @@ function memoryNarrations() {
   let readAgain = false;
   const sections = new Map<number, NarrationSection>();
   const retakes = new Map<string, number>();
+  const approvals = new Map<string, { heard: string; duration: number }>();
   const pronunciations = new Map<string, string>();
   const repository: NarrationRepository = {
     get: async (itemId) =>
@@ -182,6 +183,12 @@ function memoryNarrations() {
       retakes.set(chunk, (retakes.get(chunk) ?? 0) + 1);
       return retakes.get(chunk)!;
     },
+    approvals: async () =>
+      [...approvals].map(([chunk, row]) => ({ chunk, ...row })),
+    approve: async (_itemId, { chunk, heard, duration }) => {
+      approvals.set(chunk, { heard, duration });
+    },
+    unapprove: async (_itemId, chunk) => approvals.delete(chunk),
     pronunciations: async () =>
       [...pronunciations].map(([word, spoken]) => ({
         word,
@@ -439,17 +446,40 @@ describe("narration routes", () => {
         })
       ).response.statusCode,
     ).toBe(204);
+    // An older narrator says nothing of the lines it reads.
     expect(
       (await call("GET", "/books/:itemId/narration")).response.json.data
         .progress,
-    ).toEqual(progress);
+    ).toEqual({ ...progress, section: null, reading: [], sent: null });
+    const reading = {
+      ...progress,
+      activity: "uploading",
+      section: 1,
+      reading: [{ chunk: "1-0-0", take: 2 }],
+      sent: 0.5,
+    };
+    await narrator("POST", "/narrator/jobs/:itemId/progress", {
+      json: reading,
+    });
     expect(
-      (
-        await narrator("POST", "/narrator/jobs/:itemId/progress", {
-          json: { ...progress, fraction: 2 },
-        })
-      ).error?.statusCode,
-    ).toBe(422);
+      (await call("GET", "/books/:itemId/narration")).response.json.data
+        .progress,
+    ).toEqual(reading);
+    for (const bad of [
+      { ...progress, fraction: 2 },
+      { ...progress, sent: 1.5 },
+      { ...progress, section: -1 },
+      { ...progress, reading: [{ chunk: "one", take: 1 }] },
+      { ...progress, reading: [{ chunk: "1-0-0", take: 0 }] },
+      { ...progress, reading: [{ chunk: "1-0-0", take: 1, extra: true }] },
+    ])
+      expect(
+        (
+          await narrator("POST", "/narrator/jobs/:itemId/progress", {
+            json: bad,
+          })
+        ).error?.statusCode,
+      ).toBe(422);
   });
 
   it("takes a section's audio in parts with its words, and the reader can play it", async () => {
@@ -659,8 +689,16 @@ describe("narration routes", () => {
     // Section 0 was sent before its lines: there are none to show.
     expect(zero.lines).toBeNull();
     expect(one.lines).toEqual([
-      { ...line(), text: "Frau Tiedemann güldü.", asked: 0 },
+      { ...line(), text: "Frau Tiedemann güldü.", asked: 0, approved: false },
     ]);
+    // The review page knows when a section's lines arrive.
+    expect(
+      (
+        await call("GET", "/books/:itemId/narration")
+      ).response.json.data.sections.map(
+        (row: { checked: boolean }) => row.checked,
+      ),
+    ).toEqual([false, true]);
     // Told to the narrator, so it sends no section's lines twice.
     await call("POST", "/admin/books/:itemId/narration/retakes", {
       json: { chunk: "1-0-0" },
@@ -734,6 +772,52 @@ describe("narration routes", () => {
     ).toBe(422);
   });
 
+  it("approves a line in the reading heard, until it is read again", async () => {
+    await readThrough();
+    const approvedNow = async () =>
+      (await call("GET", "/admin/books/:itemId/narration/review")).response.json
+        .data.sections[1].lines[0].approved;
+    const approve = (chunk: string) =>
+      call("PUT", "/admin/books/:itemId/narration/approvals/:chunk", {
+        params: { chunk },
+      });
+
+    expect((await approve("1-0-0")).response.json.data).toEqual({
+      chunk: "1-0-0",
+      approved: true,
+    });
+    expect(await approvedNow()).toBe(true);
+    await call("DELETE", "/admin/books/:itemId/narration/approvals/:chunk", {
+      params: { chunk: "1-0-0" },
+    });
+    expect(await approvedNow()).toBe(false);
+
+    // A line whose section's lines are not there, or that is no line, cannot be.
+    expect((await approve("0-0-0")).error?.code).toBe("NARRATION_LINE_UNKNOWN");
+    expect((await approve("1-0-9")).error?.code).toBe("NARRATION_LINE_UNKNOWN");
+    expect((await approve("1-0")).error?.statusCode).toBe(422);
+
+    // Asked for again, it is no longer approved...
+    await approve("1-0-0");
+    await call("POST", "/admin/books/:itemId/narration/retakes", {
+      json: { chunk: "1-0-0" },
+    });
+    expect(await approvedNow()).toBe(false);
+
+    // ...and an approval of an older reading does not hold for a new one.
+    await approve("1-0-0");
+    await narrator("POST", "/narrator/claim", { json: { voice: "mk" } });
+    const again = Buffer.concat([audio, Buffer.from("again")]);
+    await upload(1, again);
+    await commit(1, [[0, 0, 4, 0, 100]], again);
+    await sendCheck(
+      1,
+      [line({ heard: "Frau Tiedemann güldü.", retakes: 1, duration: 1800 })],
+      again,
+    );
+    expect(await approvedNow()).toBe(false);
+  });
+
   it("leaves reviewing and correcting a narration to administrators", () => {
     const review = routes.filter(
       (route) =>
@@ -744,11 +828,13 @@ describe("narration routes", () => {
     expect(
       review.map((route) => `${route.method} ${route.path}`).sort(),
     ).toEqual([
+      "DELETE /admin/books/:itemId/narration/approvals/:chunk",
       "DELETE /admin/narration/pronunciations/:word",
       "GET /admin/books/:itemId/narration/review",
       "GET /admin/narration/pronunciations",
       "GET /admin/narrations",
       "POST /admin/books/:itemId/narration/retakes",
+      "PUT /admin/books/:itemId/narration/approvals/:chunk",
       "PUT /admin/narration/pronunciations/:word",
     ]);
     expect(review.every((route) => route.access === "admin")).toBe(true);

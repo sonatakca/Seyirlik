@@ -34,6 +34,8 @@ export interface NarrationReviewLine {
   retakes: number;
   /** ...and the times it has been asked for now: more is a reading on its way. */
   asked: number;
+  /** A person listened to this very reading and found it right. */
+  approved: boolean;
 }
 
 export interface NarrationReviewSection {
@@ -89,6 +91,27 @@ export function requestNarrationRetake(
   return ownApiClient.request(
     `/admin/books/${encodeURIComponent(itemId)}/narration/retakes`,
     { method: "POST", body: { chunk } },
+  );
+}
+
+/** Takes the line, as it is heard now, as right: it is no longer one to listen to. */
+export function approveNarrationLine(
+  itemId: string,
+  chunk: string,
+): Promise<{ chunk: string; approved: boolean }> {
+  return ownApiClient.request(
+    `/admin/books/${encodeURIComponent(itemId)}/narration/approvals/${encodeURIComponent(chunk)}`,
+    { method: "PUT" },
+  );
+}
+
+export function unapproveNarrationLine(
+  itemId: string,
+  chunk: string,
+): Promise<{ chunk: string; approved: boolean }> {
+  return ownApiClient.request(
+    `/admin/books/${encodeURIComponent(itemId)}/narration/approvals/${encodeURIComponent(chunk)}`,
+    { method: "DELETE" },
   );
 }
 

@@ -25,6 +25,7 @@ import {
 } from "./narrationScript";
 import type {
   BookNarration,
+  NarrationApproval,
   NarrationProgress,
   NarrationRepository,
   NarrationSection,
@@ -101,7 +102,13 @@ export interface BookNarrationDto {
   error: string | null;
   /** When a narrator last asked for work; for an administrator only. */
   narratorSeenAt?: string | null;
-  sections: Array<{ section: number; duration: number; version: string }>;
+  sections: Array<{
+    section: number;
+    duration: number;
+    version: string;
+    /** Whether its lines were sent, for the review page; for an administrator only. */
+    checked?: boolean;
+  }>;
 }
 
 const notFound = () =>
@@ -120,19 +127,72 @@ function readSection(raw: string | undefined): number {
   return value;
 }
 
+function readChunk(raw: string | undefined): string {
+  if (typeof raw !== "string" || !CHUNK_ID.test(raw))
+    throw validationError("chunk is invalid.");
+  return raw;
+}
+
+/** Approved in this very reading: one read again is heard otherwise. */
+function isApproved(
+  approval: NarrationApproval | undefined,
+  line: NarrationCheckLine,
+): boolean {
+  return (
+    approval !== undefined &&
+    approval.heard === line.heard &&
+    approval.duration === line.duration
+  );
+}
+
 const finite = (value: unknown, min: number, max: number) =>
   typeof value === "number" &&
   Number.isFinite(value) &&
   value >= min &&
   value <= max;
 
+/** The most lines a narrator reads at once, with room (it reads four). */
+const MAX_READING = 16;
+
 function readProgress(raw: unknown): NarrationProgress {
   const body = asObjectBody(
     raw,
-    ["fraction", "sectionsDone", "sectionsTotal", "etaSeconds", "activity"],
+    [
+      "fraction",
+      "sectionsDone",
+      "sectionsTotal",
+      "etaSeconds",
+      "activity",
+      "section",
+      "reading",
+      "sent",
+    ],
     "The progress is invalid.",
   );
   const { fraction, sectionsDone, sectionsTotal, etaSeconds, activity } = body;
+  // Said only by narrators that know them; an older one leaves them out.
+  const { section = null, reading = [], sent = null } = body;
+  if (
+    !(
+      section === null ||
+      (Number.isInteger(section) && finite(section, 0, MAX_SECTION))
+    ) ||
+    !(sent === null || finite(sent, 0, 1)) ||
+    !Array.isArray(reading) ||
+    reading.length > MAX_READING ||
+    !reading.every((entry: unknown) => {
+      if (typeof entry !== "object" || entry === null) return false;
+      const { chunk, take, ...rest } = entry as Record<string, unknown>;
+      return (
+        Object.keys(rest).length === 0 &&
+        typeof chunk === "string" &&
+        CHUNK_ID.test(chunk) &&
+        Number.isInteger(take) &&
+        finite(take, 1, 100)
+      );
+    })
+  )
+    throw validationError("The progress is invalid.");
   if (
     !finite(fraction, 0, 1) ||
     !Number.isInteger(sectionsDone) ||
@@ -150,6 +210,11 @@ function readProgress(raw: unknown): NarrationProgress {
     sectionsTotal: sectionsTotal as number,
     etaSeconds: etaSeconds === null ? null : Math.round(etaSeconds as number),
     activity: activity as string | null,
+    section: section as number | null,
+    reading: (reading as Array<{ chunk: string; take: number }>).map(
+      ({ chunk, take }) => ({ chunk, take }),
+    ),
+    sent: sent as number | null,
   };
 }
 
@@ -264,6 +329,43 @@ export function createNarrationRoutes({
     return { itemId, narrator, ...found };
   };
 
+  /** A section's lines as the narrator sent them for its upload now, or null. */
+  const checkedLines = async (
+    itemId: string,
+    row: NarrationSection,
+  ): Promise<NarrationCheckLine[] | null> =>
+    row.checked
+      ? readFile(
+          store.files(itemId, row.section, row.audioSha256).check,
+          "utf8",
+        ).then(
+          (raw) => JSON.parse(raw) as NarrationCheckLine[],
+          () => null,
+        )
+      : null;
+
+  /** The line as it is heard in the narration now, or 409 when its section's lines are not there. */
+  const currentLine = async (itemId: string, chunk: string) => {
+    const found = await narrations.get(itemId);
+    if (!found || (await isOutdated(found.narration))) throw notFound();
+    const section = Number(chunk.split("-")[0]);
+    const row = found.sections.find(
+      (candidate) => candidate.section === section,
+    );
+    const line = row
+      ? (await checkedLines(itemId, row))?.find(
+          (candidate) => candidate.chunk === chunk,
+        )
+      : undefined;
+    if (!line)
+      throw new OwnApiError(
+        "NARRATION_LINE_UNKNOWN",
+        "That line is not heard in the narration as it is now.",
+        409,
+      );
+    return line;
+  };
+
   const toDto = async (
     narration: BookNarration,
     sections: NarrationSection[],
@@ -292,6 +394,9 @@ export function createNarrationRoutes({
             // In the files' URLs, so a section replaced by a new upload is
             // fetched afresh and an unchanged one comes from the cache.
             version: row.audioSha256.slice(0, 16),
+            // The review page follows a line read again by this: its new
+            // lines are there to read once the section is checked.
+            ...(administrator ? { checked: row.checked } : {}),
           })),
     };
   };
@@ -423,21 +528,15 @@ export function createNarrationRoutes({
             row.count,
           ]),
         );
+        const approvals = new Map(
+          (await narrations.approvals(itemId)).map((row) => [row.chunk, row]),
+        );
         const sections = await Promise.all(
           found.sections.map(async (row) => {
             const read = script?.sections.find(
               (candidate) => candidate.section === row.section,
             );
-            const lines: NarrationCheckLine[] | null =
-              row.checked && read
-                ? await readFile(
-                    store.files(itemId, row.section, row.audioSha256).check,
-                    "utf8",
-                  ).then(
-                    (raw) => JSON.parse(raw) as NarrationCheckLine[],
-                    () => null,
-                  )
-                : null;
+            const lines = read ? await checkedLines(itemId, row) : null;
             const texts = new Map(
               (read?.blocks ?? []).map((block) => [block.block, block.text]),
             );
@@ -454,6 +553,7 @@ export function createNarrationRoutes({
                     line.end,
                   ),
                   asked: asked.get(line.chunk) ?? 0,
+                  approved: isApproved(approvals.get(line.chunk), line),
                 })) ?? null,
             };
           }),
@@ -493,10 +593,46 @@ export function createNarrationRoutes({
           body.chunk,
           principal.userId,
         );
+        // Asked for again is not right as it is: the new reading is judged anew.
+        await narrations.unapprove(itemId, body.chunk);
         await narrations.readAgain(itemId);
         sendData(context.response, context.requestId, {
           chunk: body.chunk,
           count,
+        });
+      },
+    },
+    {
+      // Takes a line as right in the reading there is now: it is no longer one to listen to.
+      method: "PUT",
+      path: "/admin/books/:itemId/narration/approvals/:chunk",
+      access: "admin",
+      handle: async (context) => {
+        const { itemId, principal } = await visibleBook(context);
+        const chunk = readChunk(context.params.chunk);
+        const line = await currentLine(itemId, chunk);
+        await narrations.approve(
+          itemId,
+          { chunk, heard: line.heard, duration: line.duration },
+          principal.userId,
+        );
+        sendData(context.response, context.requestId, {
+          chunk,
+          approved: true,
+        });
+      },
+    },
+    {
+      method: "DELETE",
+      path: "/admin/books/:itemId/narration/approvals/:chunk",
+      access: "admin",
+      handle: async (context) => {
+        const { itemId } = await visibleBook(context);
+        const chunk = readChunk(context.params.chunk);
+        await narrations.unapprove(itemId, chunk);
+        sendData(context.response, context.requestId, {
+          chunk,
+          approved: false,
         });
       },
     },

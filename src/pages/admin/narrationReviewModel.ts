@@ -1,3 +1,4 @@
+import type { BookNarration } from "../../lib/bookNarrationApi";
 import type {
   NarrationLineReason,
   NarrationPronunciation,
@@ -288,6 +289,109 @@ export function lineIssues(
 /** A line asked for again whose new reading has not come yet. */
 export const awaitingRetake = (line: NarrationReviewLine) =>
   line.asked > line.retakes;
+
+/** A narrator not heard from for this long is not there to take a line. */
+export const NARRATOR_AWAY_MS = 3 * 60 * 1000;
+
+/**
+ * Where a line asked for again is on its way back, from the narrator's last
+ * report. The narrator reads every part of the book again but only reads
+ * aloud what changed: it checks the parts before, reads the line (up to three
+ * takes, the best kept), joins its part's audio again, sends it, and then the
+ * lines it heard in it.
+ */
+export type RetakeStep =
+  | { step: "waiting"; away: boolean }
+  | { step: "loading" }
+  /** In another part first; null before it says which. */
+  | { step: "elsewhere"; section: number | null }
+  | { step: "reading"; take: number }
+  /** In the line's part, the line not in the voice right now. */
+  | { step: "section" }
+  | { step: "assembling" }
+  | { step: "sending"; sent: number }
+  /** Sent: the lines heard in the new audio are on their way. */
+  | { step: "checking" }
+  | { step: "failed"; error: string | null };
+
+/** The four stages the page draws a line's way back in. */
+export const RETAKE_STAGES = [
+  "waiting",
+  "reading",
+  "assembling",
+  "sending",
+] as const;
+
+export function retakeStage(step: RetakeStep): number {
+  switch (step.step) {
+    case "waiting":
+    case "loading":
+    case "elsewhere":
+    case "failed":
+      return 0;
+    case "reading":
+    case "section":
+      return 1;
+    case "assembling":
+      return 2;
+    case "sending":
+    case "checking":
+      return 3;
+  }
+}
+
+export function retakeStep(
+  line: NarrationReviewLine,
+  section: number,
+  narration: BookNarration,
+  now: number,
+): RetakeStep | null {
+  if (!awaitingRetake(line)) return null;
+  if (narration.state === "failed")
+    return { step: "failed", error: narration.error };
+  // Read through with the line still to come: only its lines are missing.
+  if (narration.state === "ready") return { step: "checking" };
+  if (narration.state !== "narrating") {
+    const seen = narration.narratorSeenAt
+      ? Date.parse(narration.narratorSeenAt)
+      : null;
+    return {
+      step: "waiting",
+      away: seen === null || now - seen > NARRATOR_AWAY_MS,
+    };
+  }
+  const progress = narration.progress;
+  if (progress?.activity === "loading") return { step: "loading" };
+  const at = progress?.section;
+  if (at === undefined || at === null)
+    return { step: "elsewhere", section: null };
+  if (at < section) return { step: "elsewhere", section: at };
+  if (at > section) return { step: "checking" };
+  const reading = progress?.reading?.find(
+    (entry) => entry.chunk === line.chunk,
+  );
+  if (reading) return { step: "reading", take: reading.take };
+  if (progress?.activity === "assembling") return { step: "assembling" };
+  if (progress?.activity === "uploading")
+    return { step: "sending", sent: progress.sent ?? 0 };
+  return { step: "section" };
+}
+
+/**
+ * The lines to show in the order they were shown: a line does not jump away
+ * from under a person's hand when it is approved or read again. Lines no
+ * longer in `next` stay while in `keep`; new ones come after, in their order.
+ */
+export function stableOrder(
+  previous: readonly string[],
+  next: readonly string[],
+  keep: ReadonlySet<string>,
+): string[] {
+  const wanted = new Set(next);
+  const kept = previous.filter((chunk) => wanted.has(chunk) || keep.has(chunk));
+  const had = new Set(kept);
+  return [...kept, ...next.filter((chunk) => !had.has(chunk))];
+}
 
 /** "1:05:09": a place in a section's audio. */
 export function formatAt(ms: number): string {
