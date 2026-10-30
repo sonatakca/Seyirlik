@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createAcquisitionFallback,
   MAX_AUTOMATIC_REPLACEMENTS,
+  type MissingEpisodePlan,
   type SeasonEpisode,
 } from "./acquisitionFallback";
 import {
@@ -69,7 +70,10 @@ function summary(over: Partial<AcquisitionSummary> = {}): AcquisitionSummary {
 }
 
 interface World {
-  /** Releases the indexer returns, by the episode searched (0 for a pack). */
+  /**
+   * Releases the indexer returns, by the episode searched: 0 for a season
+   * pack, -1 for the whole series.
+   */
   releases: Map<number, IndexerRelease[]>;
   episodes: SeasonEpisode[];
   live: Set<number>;
@@ -77,6 +81,8 @@ interface World {
   searchFails: boolean;
   target: AcquisitionTarget;
   record: AcquisitionSummary;
+  /** What the series is missing, when the fallback can read it. */
+  missingPlan?: MissingEpisodePlan;
 }
 
 function world(over: Partial<World> = {}): World {
@@ -129,10 +135,13 @@ function build(w: World) {
   } as unknown as AcquisitionRepository;
 
   const search: IndexerSearchService = {
-    search: vi.fn(async (query: { episode?: number }) => {
+    search: vi.fn(async (query: { season?: number; episode?: number }) => {
       if (w.searchFails) throw new IndexerError("unavailable", "Timed out.");
       return {
-        releases: w.releases.get(query.episode ?? 0) ?? [],
+        releases:
+          w.releases.get(
+            query.season === undefined ? -1 : (query.episode ?? 0),
+          ) ?? [],
         outcomes: [],
         partial: false,
       };
@@ -186,6 +195,9 @@ function build(w: World) {
     queue,
     episodesOf: async () => w.episodes,
     submitJobType: ACQUISITION_JOB_TYPES.submit,
+    ...(w.missingPlan
+      ? { missingPlanOf: async () => w.missingPlan ?? null }
+      : {}),
   });
   const handlers = createAcquisitionJobHandlers(service, repository, {
     fallback,
@@ -307,10 +319,14 @@ describe("automatic replacement of a release that cannot complete", () => {
     expect(h.service.blocklist).not.toHaveBeenCalled();
   });
 
-  it(`gives up after ${MAX_AUTOMATIC_REPLACEMENTS} replacements for a title`, async () => {
-    const w = world({ replacements: MAX_AUTOMATIC_REPLACEMENTS });
-    w.releases.set(0, [
-      release("Show.S01.1080p.WEB-DL.x264-GOOD", "good-pack"),
+  it(`gives up after ${MAX_AUTOMATIC_REPLACEMENTS} replacements for an episode`, async () => {
+    const w = world({
+      replacements: MAX_AUTOMATIC_REPLACEMENTS,
+      target: { kind: "episode", title: "Show", season: 1, episode: 1 },
+      record: summary({ targetKind: "episode" }),
+    });
+    w.releases.set(1, [
+      release("Show.S01E01.1080p.WEB-DL.x264-GOOD", "good-episode"),
     ]);
     const h = build(w);
     const result = await h.run(ACQUISITION_JOB_TYPES.replace, {
@@ -482,5 +498,210 @@ describe("searching for a series' missing episodes", () => {
     ]);
     expect(h.created.map((input) => input.releaseGuid)).toEqual(["e3"]);
     expect(result).toMatchObject({ coveredBy: [{ season: 1, episode: 1 }] });
+  });
+});
+
+describe("stepping a pack down instead of giving up", () => {
+  const plan: MissingEpisodePlan = {
+    seriesItemId: SERIES,
+    title: "Show",
+    complete: true,
+    seasons: [1, 2].map((season) => ({
+      season,
+      whole: true,
+      episodes: [1, 2].map((episode) => ({
+        episode,
+        itemId: episodeId(episode),
+      })),
+    })),
+  };
+
+  it(`searches a season episode by episode after ${MAX_AUTOMATIC_REPLACEMENTS} failed packs`, async () => {
+    const w = world({ replacements: MAX_AUTOMATIC_REPLACEMENTS });
+    w.releases.set(0, [
+      release("Show.S01.1080p.WEB-DL.x264-GOOD", "good-pack"),
+    ]);
+    w.releases.set(1, [release("Show.S01E01.1080p.BluRay.x265-d3g", "e1")]);
+    const h = build(w);
+    const result = await h.run(ACQUISITION_JOB_TYPES.replace, {
+      acquisitionId: "a1",
+    });
+    // Not the next pack: its episodes.
+    expect(result).toMatchObject({ replaced: true, episodes: 1 });
+    expect(h.created.map((input) => input.releaseGuid)).toEqual(["e1"]);
+    expect(h.blocklisted[0]).toMatchObject({ releaseGuid: "pack-guid" });
+  });
+
+  it("hands a season with no other pack to the missing-episode search", async () => {
+    const w = world({ missingPlan: { ...plan, seasons: [plan.seasons[0]!] } });
+    const h = build(w);
+    const result = await h.run(ACQUISITION_JOB_TYPES.replace, {
+      acquisitionId: "a1",
+    });
+    expect(result).toMatchObject({ replaced: true, created: 0 });
+    expect(h.blocklisted[0]).toMatchObject({ releaseGuid: "pack-guid" });
+    expect(h.enqueued.at(-1)).toMatchObject({
+      jobType: MISSING_SEARCH_JOB_TYPE,
+      payload: { profileId: "p1" },
+      dedupeKey: `${MISSING_SEARCH_JOB_TYPE}:${SERIES}:1:fallback`,
+    });
+    expect(h.updates).toContainEqual(
+      expect.objectContaining({ patch: { state: "superseded" } }),
+    );
+  });
+
+  it("replaces a failed whole-series pack with another one first", async () => {
+    const w = world({
+      missingPlan: plan,
+      target: { kind: "series", itemId: SERIES, title: "Show" },
+      record: summary({
+        targetKind: "series",
+        releaseTitle: "Show.Complete.Series.1080p.BluRay.x265-BROKEN",
+      }),
+    });
+    w.releases.set(-1, [
+      release("Show.Complete.Series.1080p.BluRay.x265-BROKEN", "pack-guid"),
+      release("Show.S01-S02.1080p.WEB-DL.x264-GOOD", "good-series"),
+    ]);
+    const h = build(w);
+    await h.run(ACQUISITION_JOB_TYPES.replace, { acquisitionId: "a1" });
+    expect(h.created[0]).toMatchObject({
+      releaseGuid: "good-series",
+      target: { kind: "series", itemId: SERIES },
+    });
+  });
+
+  it("searches a whole series season by season when no other release holds it all", async () => {
+    const w = world({
+      missingPlan: plan,
+      target: { kind: "series", itemId: SERIES, title: "Show" },
+      record: summary({ targetKind: "series" }),
+    });
+    // Season 1 alone is not the series.
+    w.releases.set(-1, [release("Show.S01.1080p.WEB-DL.x264-GOOD", "s1")]);
+    const h = build(w);
+    await h.run(ACQUISITION_JOB_TYPES.replace, { acquisitionId: "a1" });
+    expect(h.created).toHaveLength(0);
+    expect(h.enqueued.at(-1)).toMatchObject({
+      jobType: MISSING_SEARCH_JOB_TYPE,
+      dedupeKey: `${MISSING_SEARCH_JOB_TYPE}:${SERIES}:all:fallback`,
+    });
+  });
+});
+
+describe("searching for a series of which nothing is held", () => {
+  const plan: MissingEpisodePlan = {
+    seriesItemId: SERIES,
+    title: "Show",
+    complete: true,
+    seasons: [1, 2].map((season) => ({
+      season,
+      whole: true,
+      episodes: [1, 2].map((episode) => ({
+        episode,
+        itemId: episodeId(episode),
+      })),
+    })),
+  };
+  const run = (h: ReturnType<typeof build>, missing = plan) =>
+    createMissingSearchJobHandler(h.fallback)({
+      job: {
+        jobType: MISSING_SEARCH_JOB_TYPE,
+        payload: { profileId: "p1", plan: missing },
+      } as unknown as JobRecord,
+      reportProgress: vi.fn(async () => undefined),
+      isCancelled: async () => false,
+    } as JobContext);
+
+  it("asks for the whole series in one release first", async () => {
+    const w = world();
+    w.releases.set(-1, [
+      release("Show.Complete.Series.1080p.BluRay.x265-ALL", "all"),
+      release("Show.S01.1080p.BluRay.x265-ONE", "one"),
+    ]);
+    const h = build(w);
+    const result = await run(h);
+    expect(h.created).toHaveLength(1);
+    expect(h.created[0]).toMatchObject({
+      releaseGuid: "all",
+      origin: "automatic",
+      target: { kind: "series", itemId: SERIES, title: "Show" },
+    });
+    expect(h.created[0]!.target).not.toHaveProperty("season");
+    expect(result).toMatchObject({
+      started: 1,
+      startedReleases: [
+        {
+          season: null,
+          episode: null,
+          release: "Show.Complete.Series.1080p.BluRay.x265-ALL",
+        },
+      ],
+    });
+  });
+
+  it("takes a pack of named seasons only when it holds every one", async () => {
+    const w = world();
+    w.releases.set(-1, [release("Show.S01-S02.1080p.WEB-DL.x264-NTb", "both")]);
+    const h = build(w);
+    await run(h);
+    expect(h.created[0]).toMatchObject({ releaseGuid: "both" });
+
+    const partial = world();
+    partial.releases.set(-1, [
+      release("Show.S01-S02.1080p.WEB-DL.x264-NTb", "both"),
+    ]);
+    const three = build(partial);
+    await run(three, {
+      ...plan,
+      seasons: [...plan.seasons, { ...plan.seasons[0]!, season: 3 }],
+    });
+    // Season 3 is not in it, so the seasons are searched one by one.
+    expect(three.created.map((input) => input.releaseGuid)).not.toContain(
+      "both",
+    );
+  });
+
+  it("falls back to season packs, then episodes, when there is no series pack", async () => {
+    const w = world();
+    w.releases.set(0, [release("Show.S01.1080p.BluRay.x265-PACK", "pack")]);
+    const h = build(w);
+    // The season-pack search answers the same for both seasons here, so the
+    // second season is read from its episode searches only by a world that
+    // offers it no pack: one pack, then episodes.
+    const result = await run(h, {
+      ...plan,
+      seasons: [plan.seasons[0]!],
+      complete: true,
+    });
+    expect(h.created.map((input) => input.target.kind)).toEqual(["season"]);
+    expect(result).toMatchObject({ started: 1 });
+
+    const none = world();
+    none.releases.set(1, [
+      release("Show.S01E01.1080p.BluRay.x265-d3g", "s1e1"),
+      release("Show.S02E01.1080p.BluRay.x265-d3g", "s2e1"),
+    ]);
+    const bare = build(none);
+    const episodes = await run(bare);
+    expect(bare.created.map((input) => input.target.kind)).toEqual([
+      "episode",
+      "episode",
+    ]);
+    expect(episodes).toMatchObject({ started: 2, nothingAcceptable: 2 });
+  });
+
+  it("leaves the series alone while a whole-series download is on its way", async () => {
+    const w = world();
+    const h = build(w);
+    Object.assign(h.repository, {
+      hasLiveAcquisitionFor: async (target: AcquisitionTarget) =>
+        target.kind === "series",
+    });
+    const result = await run(h);
+    expect(h.search.search).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      coveredBy: [{ season: null, episode: null }],
+    });
   });
 });

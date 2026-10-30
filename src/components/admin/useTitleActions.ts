@@ -42,10 +42,16 @@ export function useTitleActions(onChanged: () => void | Promise<void>) {
   }, []);
 
   function report(result: NonNullable<MissingSearchState["result"]>) {
-    const started = result.started.map((s) => episodeCode(s.season, s.episode));
+    const started = result.started.map((s) =>
+      s.season === null
+        ? t("library.missingWholeSeries")
+        : episodeCode(s.season, s.episode),
+    );
     const nothing = result.nothing.map((s) => episodeCode(s.season, s.episode));
     const covered = (result.covered ?? []).map((s) =>
-      episodeCode(s.season, s.episode),
+      s.season === null
+        ? t("library.missingWholeSeries")
+        : episodeCode(s.season, s.episode),
     );
     setNotice({
       tone: started.length > 0 ? "ok" : "error",

@@ -373,8 +373,9 @@ export function createLibraryAdminRepository(
 
     /**
      * Downloads and imports that name the series itself rather than an
-     * episode: a season pack, or an episode the catalogue has no row for yet.
-     * A null episode covers the whole season.
+     * episode: a whole-series or season pack, or an episode the catalogue has
+     * no row for yet. A null episode covers the whole season, and a null
+     * season every season.
      */
     async seriesWork(seriesId: string) {
       const result = await db.query<{
@@ -384,12 +385,12 @@ export function createLibraryAdminRepository(
       }>(
         `SELECT 'downloading' AS stage, a.target_season AS season, a.target_episode AS episode
            FROM acquisitions a
-          WHERE a.target_item_id = $1 AND a.target_kind IN ('season', 'episode')
+          WHERE a.target_item_id = $1 AND a.target_kind IN ('series', 'season', 'episode')
             AND a.state NOT IN ('downloaded', 'cancelled', 'superseded', 'failed')
          UNION ALL
          SELECT 'importing', imp.target_season, imp.target_episode
            FROM imports imp
-          WHERE imp.target_item_id = $1 AND imp.target_kind IN ('season', 'episode')
+          WHERE imp.target_item_id = $1 AND imp.target_kind IN ('series', 'season', 'episode')
             AND ${importUnderWaySql("imp")}`,
         [seriesId],
       );
@@ -647,7 +648,7 @@ export async function loadTitleDetail(
     if (episode.hasMedia) continue;
     for (const work of seriesWork) {
       if (
-        work.season === episode.seasonNumber &&
+        (work.season === null || work.season === episode.seasonNumber) &&
         (work.episode === null || work.episode === episode.episodeNumber)
       )
         episode[work.stage] += 1;

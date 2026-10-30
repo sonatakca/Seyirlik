@@ -49,34 +49,45 @@ export function missingEpisodePlan(
   detail: Pick<LibraryTitleDetail, "id" | "title" | "year" | "seasons">,
   season?: number,
 ): MissingEpisodePlan {
+  const seasons = detail.seasons
+    .filter(
+      (candidate) =>
+        candidate.seasonNumber > 0 &&
+        (season === undefined || candidate.seasonNumber === season),
+    )
+    .map((candidate) => {
+      const numbered = candidate.episodes.filter(
+        (episode) => episode.episodeNumber > 0,
+      );
+      const missing = numbered.filter(isMissing);
+      const aired = numbered.filter((episode) => episode.status !== "unaired");
+      return {
+        season: candidate.seasonNumber,
+        aired: aired.length,
+        whole: missing.length > 0 && missing.length === aired.length,
+        episodes: missing.map((episode) => ({
+          episode: episode.episodeNumber,
+          itemId: episode.id ?? detail.id,
+        })),
+      };
+    })
+    .filter((candidate) => candidate.aired > 0);
   return {
     seriesItemId: detail.id,
     title: detail.title,
     ...(detail.year === null ? {} : { year: detail.year }),
-    seasons: detail.seasons
-      .filter(
-        (candidate) =>
-          candidate.seasonNumber > 0 &&
-          (season === undefined || candidate.seasonNumber === season),
-      )
-      .map((candidate) => {
-        const numbered = candidate.episodes.filter(
-          (episode) => episode.episodeNumber > 0,
-        );
-        const missing = numbered.filter(isMissing);
-        const aired = numbered.filter(
-          (episode) => episode.status !== "unaired",
-        );
-        return {
-          season: candidate.seasonNumber,
-          whole: missing.length > 0 && missing.length === aired.length,
-          episodes: missing.map((episode) => ({
-            episode: episode.episodeNumber,
-            itemId: episode.id ?? detail.id,
-          })),
-        };
-      })
-      .filter((candidate) => candidate.episodes.length > 0),
+    // Only for the whole series: one season's search never asks for more.
+    complete:
+      season === undefined &&
+      seasons.length > 0 &&
+      seasons.every((candidate) => candidate.whole),
+    seasons: seasons
+      .filter((candidate) => candidate.episodes.length > 0)
+      .map(({ season: number, whole, episodes }) => ({
+        season: number,
+        whole,
+        episodes,
+      })),
   };
 }
 

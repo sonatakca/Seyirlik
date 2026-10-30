@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useState, useRef } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { Search } from "lucide-react";
+import { Download, Search } from "lucide-react";
 import { setPageTitle } from "../../lib/pageTitle";
+import {
+  getMissingSearch,
+  searchMissingEpisodes,
+  type MissingSearchState,
+} from "../../lib/libraryAdminApi";
 import { useLanguage } from "../../i18n/LanguageContext";
 import { WorkflowSteps } from "../../components/admin/WorkflowSteps";
 import {
@@ -27,6 +32,65 @@ function choiceText(choice: TitleChoice): string {
   return choice.year ? `${choice.title} (${choice.year})` : choice.title;
 }
 
+/** How often a running automatic search is asked how it went. */
+const AUTO_POLL_MS = 3_000;
+
+const episodeCode = (season: number, episode: number | null) =>
+  `S${String(season).padStart(2, "0")}${
+    episode === null ? "" : `E${String(episode).padStart(2, "0")}`
+  }`;
+
+/** Where the automatic search for a series has got to. */
+type AutoState =
+  | { readonly stage: "idle" | "starting" | "none" | "failed" | "absent" }
+  | { readonly stage: "running"; readonly message: string | null }
+  | {
+      readonly stage: "done";
+      readonly result: NonNullable<MissingSearchState["result"]>;
+    };
+
+/** What the automatic search has done, in one line; null before it starts. */
+function describeAuto(
+  auto: AutoState,
+  t: ReturnType<typeof useLanguage>["t"],
+): string | null {
+  const named = (entry: { season: number | null; episode: number | null }) =>
+    entry.season === null
+      ? t("library.missingWholeSeries")
+      : episodeCode(entry.season, entry.episode);
+  switch (auto.stage) {
+    case "idle":
+    case "starting":
+      return null;
+    case "none":
+      return t("library.missingNone");
+    case "failed":
+      return t("admin.decisions.autoFailed");
+    case "absent":
+      return t("admin.decisions.autoNotInLibrary");
+    case "running":
+      return `${t("library.missingSearching")} ${auto.message ?? ""}`.trim();
+    case "done": {
+      const { started, nothing, covered = [] } = auto.result;
+      return [
+        `${t("library.missingStarted")} ${
+          started.length > 0 ? started.map(named).join(", ") : 0
+        }`,
+        ...(nothing.length > 0
+          ? [
+              `${t("library.missingNothingFor")} ${nothing.map(named).join(", ")}`,
+            ]
+          : []),
+        ...(covered.length > 0
+          ? [
+              `${t("library.missingAlreadyComing")} ${covered.map(named).join(", ")}`,
+            ]
+          : []),
+      ].join(" · ");
+    }
+  }
+}
+
 function limitText(profile: QualityProfile | undefined): string {
   if (!profile || typeof profile.maxSizeBytes !== "number") return "";
   return String(Math.round((profile.maxSizeBytes / GB) * 10) / 10);
@@ -50,7 +114,16 @@ export function ReleaseDecisionsPage() {
   );
   const [title, setTitle] = useState(params.get("title") ?? "");
   const [year, setYear] = useState(params.get("year") ?? "");
-  const [season, setSeason] = useState("1");
+  // Empty is every season: releases of the whole series are judged.
+  const [season, setSeason] = useState("");
+  const [auto, setAuto] = useState<AutoState>({ stage: "idle" });
+  const autoVersion = useRef(0);
+  useEffect(
+    () => () => {
+      autoVersion.current += 1;
+    },
+    [],
+  );
   // Which title the words mean, once something has said so: the page that
   // linked here, or the operator choosing an alternative. Editing the words
   // forgets it, since they may now mean something else.
@@ -85,6 +158,8 @@ export function ReleaseDecisionsPage() {
     season,
     profiles.find((entry) => entry.id === profileId)?.maxSizeBytes ?? null,
   ]);
+  const tvKind =
+    kind === "movie" ? "movie" : season.trim() === "" ? "series" : "season";
 
   useEffect(() => {
     setPageTitle(`${t("admin.decisions.title")} · Seyirlik`, {
@@ -148,8 +223,8 @@ export function ReleaseDecisionsPage() {
       setFailure(null);
       try {
         const result = await evaluateReleases({
-          kind: kind === "tv" ? "season" : "movie",
-          ...(kind === "tv" ? { season: Number(season) } : {}),
+          kind: tvKind,
+          ...(tvKind === "season" ? { season: Number(season) } : {}),
           title: title.trim(),
           ...(year.trim() ? { year: Number(year) } : {}),
           ...(profileId ? { profileId } : {}),
@@ -173,7 +248,7 @@ export function ReleaseDecisionsPage() {
         setIsSearching(false);
       }
     },
-    [kind, profileId, title, year, season, tmdbId, queryKey],
+    [tvKind, profileId, title, year, season, tmdbId, queryKey],
   );
 
   const choose = useCallback(
@@ -192,8 +267,8 @@ export function ReleaseDecisionsPage() {
        * boundary in either direction.
        */
       await acquireRelease({
-        kind: kind === "movie" ? "movie" : "season",
-        ...(kind === "tv" ? { season: Number(season) } : {}),
+        kind: tvKind,
+        ...(tvKind === "season" ? { season: Number(season) } : {}),
         title: title.trim(),
         ...(year.trim() ? { year: Number(year) } : {}),
         ...(params.get("itemId") &&
@@ -211,9 +286,77 @@ export function ReleaseDecisionsPage() {
       });
       setAsked((previous) => [...previous, candidate.guid]);
     },
-    [kind, profileId, title, year, season, params],
+    [kind, tvKind, profileId, title, year, season, params],
   );
 
+  /** The catalogue item the page was opened for, while the inputs still name it. */
+  const linkedItemId =
+    params.get("itemId") &&
+    title === params.get("title") &&
+    year === (params.get("year") ?? "") &&
+    kind === (params.get("kind") === "series" ? "tv" : "movie")
+      ? params.get("itemId")!
+      : null;
+  const seriesTmdbId =
+    tmdbId ||
+    (searched?.resolved && resultQuery === queryKey
+      ? searched.resolved.tmdbId
+      : "");
+
+  /*
+   * Everything missing, without choosing release by release: the whole
+   * series in one release, else each season's pack, else each episode. It
+   * runs as a job on the server and starts downloads as it finds them; a
+   * download that fails is blocklisted and replaced by the acquisition jobs.
+   */
+  const acquireMissing = useCallback(async () => {
+    const version = ++autoVersion.current;
+    setAuto({ stage: "starting" });
+    try {
+      const queued = await searchMissingEpisodes(
+        linkedItemId ?? { tmdbId: seriesTmdbId },
+        season.trim() ? Number(season) : undefined,
+        profileId || undefined,
+      );
+      if (version !== autoVersion.current) return;
+      if (!queued.taskId) {
+        setAuto({ stage: "none" });
+        return;
+      }
+      setAuto({ stage: "running", message: null });
+      for (;;) {
+        await new Promise((resolve) => setTimeout(resolve, AUTO_POLL_MS));
+        if (version !== autoVersion.current) return;
+        let state: MissingSearchState;
+        try {
+          state = await getMissingSearch(queued.taskId);
+        } catch (error) {
+          if ((error as { status?: number }).status === 404) throw error;
+          continue; // A missed answer is asked for again.
+        }
+        if (version !== autoVersion.current) return;
+        if (state.status === "succeeded" && state.result) {
+          setAuto({ stage: "done", result: state.result });
+          return;
+        }
+        if (state.status === "failed" || state.status === "cancelled") {
+          setAuto({ stage: "failed" });
+          return;
+        }
+        setAuto({ stage: "running", message: state.message });
+      }
+    } catch (error) {
+      if (version !== autoVersion.current) return;
+      setAuto({
+        stage:
+          (error as { code?: string }).code === "NOT_IN_LIBRARY"
+            ? "absent"
+            : "failed",
+      });
+    }
+  }, [linkedItemId, seriesTmdbId, season, profileId]);
+
+  const autoText = describeAuto(auto, t);
   const visibleCandidates = resultQuery === queryKey ? candidates : null;
   const ordered = visibleCandidates
     ? orderCandidates(visibleCandidates, winnerGuid)
@@ -255,6 +398,7 @@ export function ReleaseDecisionsPage() {
             onChange={(event) => {
               setTitle(event.target.value);
               setTmdbId("");
+              setAuto({ stage: "idle" });
             }}
             required
             className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
@@ -304,9 +448,12 @@ export function ReleaseDecisionsPage() {
                 type="number"
                 min="0"
                 max="10000"
-                required
                 value={season}
-                onChange={(event) => setSeason(event.target.value)}
+                placeholder={t("admin.decisions.allSeasons")}
+                onChange={(event) => {
+                  setSeason(event.target.value);
+                  setAuto({ stage: "idle" });
+                }}
                 className="min-w-0 rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
               />
             </label>
@@ -389,6 +536,41 @@ export function ReleaseDecisionsPage() {
                   : t("admin.decisions.sizeLimitHint")}
           </p>
         </form>
+      ) : null}
+
+      {kind === "tv" ? (
+        <section className="flex flex-wrap items-center gap-3 rounded-3xl border border-white/10 bg-white/[0.05] p-5">
+          <button
+            type="button"
+            disabled={
+              auto.stage === "starting" ||
+              auto.stage === "running" ||
+              (!linkedItemId && !seriesTmdbId)
+            }
+            onClick={() => void acquireMissing()}
+            className="inline-flex items-center gap-2 rounded-xl border border-[var(--accent)]/40 bg-[var(--accent)]/15 px-4 py-2 text-sm font-black text-white transition hover:bg-[var(--accent)]/25 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+          >
+            <Download size={15} />
+            {auto.stage === "starting" || auto.stage === "running"
+              ? t("library.searchingMissing")
+              : t("admin.decisions.auto")}
+          </button>
+          <p className="min-w-0 flex-1 basis-64 text-xs font-semibold text-white/45">
+            {t("admin.decisions.autoHint")}
+          </p>
+          {autoText ? (
+            <p
+              role="status"
+              className={`basis-full text-sm font-semibold ${
+                auto.stage === "failed" || auto.stage === "absent"
+                  ? "text-amber-200"
+                  : "text-white/70"
+              }`}
+            >
+              {autoText}
+            </p>
+          ) : null}
+        </section>
       ) : null}
 
       {failure ? (

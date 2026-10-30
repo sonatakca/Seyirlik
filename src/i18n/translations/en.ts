@@ -143,6 +143,7 @@ export const en = {
   "library.missingStarted": "Downloads started:",
   "library.missingNothingFor": "Nothing acceptable for",
   "library.missingAlreadyComing": "Already on its way:",
+  "library.missingWholeSeries": "the whole series",
   "library.missingSearchFailed":
     "The search could not finish. Try again in a moment; anything already started keeps downloading.",
   "library.title": "Library",
@@ -2453,6 +2454,8 @@ export const en = {
     "Blocklisted, and the next best release is on its way:",
   "admin.acquisitions.notice.nothingElse":
     "Blocklisted, but the search found nothing else this profile allows.",
+  "admin.acquisitions.notice.searchingSmaller":
+    "Blocklisted. No other pack, so it is being searched season by season, then episode by episode.",
   "admin.acquisitions.notice.noProfile":
     "Blocklisted. No quality profile was recorded, so search on the Releases page.",
   "admin.acquisitions.notice.failed":
@@ -2519,6 +2522,13 @@ export const en = {
   "admin.decisions.kindField": "Kind",
   "admin.decisions.kind.movie": "Film",
   "admin.decisions.kind.tv": "Series",
+  "admin.decisions.allSeasons": "All",
+  "admin.decisions.auto": "Download everything missing",
+  "admin.decisions.autoHint":
+    "The whole series first, then season packs, then episode by episode. A download that fails is blocklisted and replaced by itself.",
+  "admin.decisions.autoNotInLibrary":
+    "Add this series to the library first, so its episodes are known.",
+  "admin.decisions.autoFailed": "The automatic search could not be started.",
   "admin.decisions.search": "Search",
   "admin.decisions.counts": "Allowed by this profile",
   "admin.decisions.noResults": "No releases were found for that title.",

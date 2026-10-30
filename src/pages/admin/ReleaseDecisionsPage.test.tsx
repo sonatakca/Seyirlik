@@ -12,6 +12,11 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock("../../lib/releaseDecisionsApi", () => api);
+const missing = vi.hoisted(() => ({
+  searchMissingEpisodes: vi.fn(),
+  getMissingSearch: vi.fn(),
+}));
+vi.mock("../../lib/libraryAdminApi", () => missing);
 vi.mock("../../lib/pageTitle", () => ({ setPageTitle: vi.fn() }));
 vi.mock("../../i18n/LanguageContext", () => ({
   useLanguage: () => ({ t: (key: string) => key }),
@@ -367,5 +372,114 @@ describe("which title a search means", () => {
     await searchFor("Batman Begins");
     await waitFor(() => expect(api.evaluateReleases).toHaveBeenCalledTimes(2));
     expect(api.evaluateReleases.mock.calls[1]![0]).not.toHaveProperty("tmdbId");
+  });
+});
+
+describe("a whole series", () => {
+  const SERIES = "22222222-2222-4222-8222-222222222222";
+  const renderSeries = () =>
+    render(
+      <MemoryRouter
+        initialEntries={[
+          `/admin/decisions?title=Adventure+Time&kind=series&year=2010&itemId=${SERIES}`,
+        ]}
+      >
+        <ReleaseDecisionsPage />
+      </MemoryRouter>,
+    );
+
+  it("judges releases of every season when no season is given", async () => {
+    renderSeries();
+    fireEvent.click(await screen.findByText("admin.decisions.search"));
+    await waitFor(() =>
+      expect(api.evaluateReleases).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "series", title: "Adventure Time" }),
+      ),
+    );
+    expect(api.evaluateReleases.mock.calls[0]![0]).not.toHaveProperty("season");
+    fireEvent.click(await screen.findByText("admin.decisions.acquire"));
+    await waitFor(() =>
+      expect(api.acquireRelease).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "series", itemId: SERIES }),
+      ),
+    );
+  });
+
+  it("downloads everything missing, and says what it started", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      missing.searchMissingEpisodes.mockResolvedValue({
+        taskId: "t1",
+        episodes: 280,
+        itemId: SERIES,
+      });
+      missing.getMissingSearch.mockResolvedValue({
+        status: "succeeded",
+        message: null,
+        result: {
+          started: [
+            { season: null, episode: null, release: "Adventure.Time.Complete" },
+          ],
+          nothing: [],
+          covered: [],
+        },
+      });
+      renderSeries();
+      await screen.findByText("HD-2160p");
+      fireEvent.click(screen.getByText("admin.decisions.auto"));
+      await waitFor(() =>
+        expect(missing.searchMissingEpisodes).toHaveBeenCalledWith(
+          SERIES,
+          undefined,
+          "p1",
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(
+        await screen.findByText(
+          "library.missingStarted library.missingWholeSeries",
+        ),
+      ).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says when the series has to be added to the library first", async () => {
+    missing.searchMissingEpisodes.mockRejectedValue(
+      Object.assign(new Error("absent"), {
+        status: 404,
+        code: "NOT_IN_LIBRARY",
+      }),
+    );
+    api.evaluateReleases.mockResolvedValue({
+      candidates: [],
+      winner: null,
+      profile: { id: "p1", name: "HD-2160p" },
+      resolved: {
+        tmdbId: "15260",
+        title: "Adventure Time",
+        englishTitle: "Adventure Time",
+      },
+      alternatives: [],
+      searchedFor: { term: "Adventure Time" },
+    });
+    renderPage();
+    fireEvent.change(screen.getByLabelText("admin.decisions.kindField"), {
+      target: { value: "tv" },
+    });
+    await searchFor("Adventure Time");
+    await screen.findByText("admin.decisions.noResults");
+    fireEvent.click(screen.getByText("admin.decisions.auto"));
+    await waitFor(() =>
+      expect(missing.searchMissingEpisodes).toHaveBeenCalledWith(
+        { tmdbId: "15260" },
+        undefined,
+        "p1",
+      ),
+    );
+    expect(
+      await screen.findByText("admin.decisions.autoNotInLibrary"),
+    ).toBeTruthy();
   });
 });

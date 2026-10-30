@@ -265,6 +265,8 @@ export interface CreateAcquisitionRoutesOptions {
   ) => Promise<MissingEpisodePlan | null>;
   /** The quality profile a title is monitored with, when it names one. */
   readonly profileOf?: (itemId: string) => Promise<string | undefined>;
+  /** The library's series for a TMDB id, for a search that only knows that. */
+  readonly seriesByTmdb?: (tmdbId: string) => Promise<string | undefined>;
 }
 
 /**
@@ -308,6 +310,7 @@ export function createAcquisitionRoutes({
   episodesOf = async () => [],
   missingEpisodes,
   profileOf,
+  seriesByTmdb,
 }: CreateAcquisitionRoutesOptions): RouteDefinition[] {
   const fallback = createAcquisitionFallback({
     repository,
@@ -317,6 +320,7 @@ export function createAcquisitionRoutes({
     queue,
     episodesOf,
     submitJobType: ACQUISITION_JOB_TYPES.submit,
+    ...(missingEpisodes ? { missingPlanOf: missingEpisodes } : {}),
   });
   const missingRoutes: RouteDefinition[] = missingEpisodes
     ? [
@@ -335,12 +339,37 @@ export function createAcquisitionRoutes({
             context.requirePrincipal();
             const body = asObjectBody(await context.readJson(), [
               "itemId",
+              "tmdbId",
+              "profileId",
               "season",
             ]);
-            const itemId = requireUuid(
-              requireBodyString(body, "itemId", { maxLength: 64 }),
-              "itemId",
-            );
+            /*
+             * The series, by its item or, from the Releases page, by the TMDB
+             * id the search resolved. Only a series already in the library:
+             * its episodes are what the search is planned from.
+             */
+            const tmdbId = optionalBodyString(body, "tmdbId", {
+              maxLength: 16,
+            });
+            if (tmdbId !== undefined && !/^\d{1,12}$/.test(tmdbId)) {
+              throw validationError("The tmdbId is not a TMDB identifier.");
+            }
+            const named = optionalBodyString(body, "itemId", { maxLength: 64 });
+            const itemId = named
+              ? requireUuid(named, "itemId")
+              : tmdbId
+                ? await seriesByTmdb?.(tmdbId)
+                : undefined;
+            if (!named && !tmdbId) {
+              throw validationError("An itemId or a tmdbId is required.");
+            }
+            if (!itemId) {
+              throw new OwnApiError(
+                "NOT_IN_LIBRARY",
+                "That series is not in the library yet.",
+                404,
+              );
+            }
             const season = optionalBodyInteger(body, "season", {
               min: 1,
               max: 10_000,
@@ -354,11 +383,24 @@ export function createAcquisitionRoutes({
               sendData(context.response, context.requestId, {
                 taskId: null,
                 episodes,
+                itemId,
               });
               return;
             }
-            // The series' own profile, or the one a search by hand starts on.
+            // The profile asked for, else the series' own, else the one a
+            // search by hand starts on.
+            const asked = optionalBodyString(body, "profileId", {
+              maxLength: 64,
+            });
+            if (asked !== undefined && !(await policies.load(asked))) {
+              throw new OwnApiError(
+                "PROFILE_NOT_FOUND",
+                "No such quality profile.",
+                404,
+              );
+            }
             const profileId =
+              asked ??
               (await profileOf?.(itemId)) ??
               (await policies.listProfiles())[0]?.id;
             if (!profileId) {
@@ -376,6 +418,7 @@ export function createAcquisitionRoutes({
             sendData(context.response, context.requestId, {
               taskId,
               episodes,
+              itemId,
             });
           },
         },
@@ -626,8 +669,15 @@ export function createAcquisitionRoutes({
         const body = asObjectBody(await context.readJson(), CREATE_KEYS);
 
         const kind = optionalBodyString(body, "kind") ?? "movie";
-        if (kind !== "movie" && kind !== "season" && kind !== "episode") {
-          throw validationError("The kind must be movie, season or episode.");
+        if (
+          kind !== "movie" &&
+          kind !== "series" &&
+          kind !== "season" &&
+          kind !== "episode"
+        ) {
+          throw validationError(
+            "The kind must be movie, series, season or episode.",
+          );
         }
         const title = requireBodyString(body, "title", {
           maxLength: 500,
@@ -661,7 +711,7 @@ export function createAcquisitionRoutes({
           min: 1870,
           max: 2200,
         });
-        if (kind !== "movie" && season === undefined) {
+        if ((kind === "season" || kind === "episode") && season === undefined) {
           throw validationError("A television acquisition needs a season.");
         }
 
@@ -671,8 +721,9 @@ export function createAcquisitionRoutes({
             title,
             ...(itemId ? { itemId } : {}),
             ...(year === undefined ? {} : { year }),
-            ...(season === undefined ? {} : { season }),
-            ...(episode === undefined ? {} : { episode }),
+            // A whole series has no season of its own.
+            ...(season === undefined || kind === "series" ? {} : { season }),
+            ...(episode === undefined || kind === "series" ? {} : { episode }),
           },
           indexerId,
           releaseGuid,
@@ -932,9 +983,14 @@ export function createAcquisitionRoutes({
           context.requestId,
           {
             searched: true,
-            replacement: toDto(applied.created[0]!),
+            // None yet when the series or season is being searched smaller:
+            // that search starts its own downloads as it finds them.
+            replacement: applied.created[0] ? toDto(applied.created[0]) : null,
             replacements: applied.created.map((created) => toDto(created)),
-            taskId: applied.taskIds[0],
+            taskId: applied.taskIds[0] ?? null,
+            ...(choice.kind === "missing"
+              ? { missingSearch: applied.taskIds[0] ?? null }
+              : {}),
           },
           202,
         );

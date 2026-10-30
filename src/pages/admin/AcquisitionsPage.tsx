@@ -81,6 +81,7 @@ type Notice =
   | { kind: "blocklisted" }
   | { kind: "replaced"; releaseTitle: string }
   | { kind: "nothingElse" }
+  | { kind: "searchingSmaller" }
   | { kind: "noProfile" }
   | { kind: "failed" }
   | { kind: "controlFailed" };
@@ -793,7 +794,9 @@ export function AcquisitionsPage() {
               ? { kind: "blocklisted" }
               : outcome.reason === "no-profile"
                 ? { kind: "noProfile" }
-                : { kind: "nothingElse" },
+                : outcome.missingSearch
+                  ? { kind: "searchingSmaller" }
+                  : { kind: "nothingElse" },
         );
       } catch {
         setNotice({ kind: "failed" });
@@ -1078,7 +1081,9 @@ export function AcquisitionsPage() {
         <p
           role="status"
           className={`rounded-2xl border px-4 py-3 text-sm font-bold ${
-            notice.kind === "replaced" || notice.kind === "blocklisted"
+            notice.kind === "replaced" ||
+            notice.kind === "blocklisted" ||
+            notice.kind === "searchingSmaller"
               ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
               : "border-amber-400/30 bg-amber-400/10 text-amber-100"
           }`}

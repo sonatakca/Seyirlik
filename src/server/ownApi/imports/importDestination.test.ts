@@ -392,3 +392,80 @@ describe("a season pack, explored file by file", () => {
     expect(!isRefusal(outcome) && outcome.files[0]!.target).toBe(EPISODE);
   });
 });
+
+describe("a whole-series pack, filed under each file's own season", () => {
+  const SERIES: DestinationTarget = { kind: "series", title: "Lilyhammer" };
+
+  function file(relative: string) {
+    return { relative, role: relative.endsWith(".srt") ? "subtitle" : "media" };
+  }
+
+  function targets(relatives: string[]) {
+    const files = relatives.map(file);
+    const outcome = fileTargetsFor(
+      SERIES,
+      files.filter((entry) => entry.role === "media"),
+      files.filter((entry) => entry.role === "subtitle"),
+    );
+    if (isRefusal(outcome)) throw new Error(outcome.detail);
+    return outcome;
+  }
+
+  it("reads the season and episode from each file's name", () => {
+    const outcome = targets([
+      "Lilyhammer.Complete/Lilyhammer.S01E01.mkv",
+      "Lilyhammer.Complete/Lilyhammer.S03E08.mkv",
+    ]);
+    expect(
+      outcome.files.map(({ target }) => [
+        target.kind,
+        target.season,
+        target.episode,
+      ]),
+    ).toEqual([
+      ["episode", 1, 1],
+      ["episode", 3, 8],
+    ]);
+    expect(
+      relativeOf(
+        planMediaDestination(outcome.files[1]!.target, "Lilyhammer.S03E08.mkv"),
+      ),
+    ).toBe("Lilyhammer/Season 3/src/Lilyhammer - S03E08.mkv");
+  });
+
+  it("takes the season from its folder when the name gives only the episode", () => {
+    const outcome = targets([
+      "Lilyhammer/Season 2/E04 - The Trial.mkv",
+      "Lilyhammer/Lilyhammer.S03.1080p/05 - Homecoming.mkv",
+    ]);
+    expect(
+      outcome.files.map(({ target }) => [target.season, target.episode]),
+    ).toEqual([
+      [2, 4],
+      [3, 5],
+    ]);
+  });
+
+  it("leaves behind what names no episode, and a subtitle without its video", () => {
+    const outcome = targets([
+      "pack/Lilyhammer.S01E01.mkv",
+      "pack/Extras/Making of.mkv",
+      "pack/Subs/Lilyhammer.S01E01/2_English.srt",
+      "pack/Subs/Lilyhammer.S02E01/2_English.srt",
+    ]);
+    expect(outcome.files.map(({ file: entry }) => entry.relative)).toEqual([
+      "pack/Lilyhammer.S01E01.mkv",
+      "pack/Subs/Lilyhammer.S01E01/2_English.srt",
+    ]);
+    expect(outcome.leftBehind.map((entry) => entry.relative)).toEqual([
+      "pack/Extras/Making of.mkv",
+      "pack/Subs/Lilyhammer.S02E01/2_English.srt",
+    ]);
+  });
+
+  it("refuses a pack with not one episode in it", () => {
+    expect(
+      isRefusal(fileTargetsFor(SERIES, [file("pack/trailer.mkv")], [])),
+    ).toBe(true);
+  });
+});

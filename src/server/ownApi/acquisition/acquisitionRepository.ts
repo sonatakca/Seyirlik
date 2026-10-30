@@ -22,7 +22,8 @@ import { importUnderWaySql } from "../imports/importLanding";
 import { isTerminal } from "./acquisitionState";
 
 export interface AcquisitionTarget {
-  readonly kind: "movie" | "season" | "episode";
+  /** `series` is one release of every season, with no season of its own. */
+  readonly kind: "movie" | "series" | "season" | "episode";
   readonly itemId?: string;
   readonly title: string;
   readonly year?: number;
@@ -431,6 +432,10 @@ export function createAcquisitionRepository(
        * filed — or for a day while it waits for one; after that, whatever
        * the import did not file is missing again. A season pack that filed
        * half its episodes used to block every later search of its season.
+       *
+       * A pack covers what it holds: a whole series every season and episode
+       * of it, a season its episodes. A pack names its series' item, and an
+       * episode its own, so those are matched by series title as well.
        */
       const result = await pool.query<{ live: boolean }>(
         `SELECT EXISTS (
@@ -443,17 +448,31 @@ export function createAcquisitionRepository(
                 OR (NOT EXISTS (SELECT 1 FROM imports i WHERE i.acquisition_id = a.id)
                     AND a.completed_at > now() - interval '1 day')
               )
-              AND a.target_kind = $1
               AND (
-                ($2::uuid IS NOT NULL AND a.target_item_id = $2::uuid
-                 AND a.target_season IS NOT DISTINCT FROM $5::int
-                 AND a.target_episode IS NOT DISTINCT FROM $6::int)
+                (a.target_kind = $1 AND (
+                  ($2::uuid IS NOT NULL AND a.target_item_id = $2::uuid
+                   AND a.target_season IS NOT DISTINCT FROM $5::int
+                   AND a.target_episode IS NOT DISTINCT FROM $6::int)
+                  OR (
+                    lower(a.target_title) = lower($3)
+                    AND (a.target_year IS NULL OR $4::int IS NULL
+                         OR a.target_year = $4::int)
+                    AND a.target_season IS NOT DISTINCT FROM $5::int
+                    AND a.target_episode IS NOT DISTINCT FROM $6::int
+                  )
+                ))
                 OR (
-                  lower(a.target_title) = lower($3)
-                  AND (a.target_year IS NULL OR $4::int IS NULL
-                       OR a.target_year = $4::int)
-                  AND a.target_season IS NOT DISTINCT FROM $5::int
-                  AND a.target_episode IS NOT DISTINCT FROM $6::int
+                  (a.target_kind = 'series' AND $1 IN ('season', 'episode')
+                   OR a.target_kind = 'season' AND $1 = 'episode'
+                      AND a.target_season = $5::int)
+                  AND (
+                    ($2::uuid IS NOT NULL AND a.target_item_id = $2::uuid)
+                    OR (
+                      lower(a.target_title) = lower($3)
+                      AND (a.target_year IS NULL OR $4::int IS NULL
+                           OR a.target_year = $4::int)
+                    )
+                  )
                 )
               )
          ) AS live`,

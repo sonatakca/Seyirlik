@@ -94,7 +94,16 @@ for different releases, in both directions.
 
 Rejections are explicit and nothing is dropped: `title-mismatch`, `wrong-year`,
 `wrong-season`, `wrong-episode`, `wrong-kind`, `quality-not-allowed`,
-`quality-unknown`, `below-format-score`, `upgrade-not-wanted`.
+`quality-unknown`, `below-format-score`, `incomplete-pack`,
+`upgrade-not-wanted`.
+
+A whole series is a target of its own (`kind: "series"`, no season). It takes
+a release that names its seasons as packs (`S01-S10`) and holds every season
+still missing, or one that names none and says it is complete. One season, an
+episode, or a release that names no season and does not say so is refused. A
+pack of either kind that calls itself incomplete is refused as
+`incomplete-pack`: taking it stops the episode search that would have filled
+its gaps.
 
 A year may differ by one — a December release is routinely tagged with the
 following year by one indexer and the previous by another. Two years apart is a

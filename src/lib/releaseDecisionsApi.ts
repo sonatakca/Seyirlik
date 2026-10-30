@@ -17,7 +17,8 @@ export interface QualityProfile {
 }
 
 export interface EvaluateQuery {
-  readonly kind: "movie" | "season";
+  /** `series` judges releases of every season at once. */
+  readonly kind: "movie" | "series" | "season";
   readonly season?: number;
   readonly title: string;
   readonly year?: number;
@@ -77,7 +78,7 @@ export function evaluateReleases(
 
 export interface AcquireRequest {
   readonly itemId?: string;
-  readonly kind: "movie" | "season" | "episode";
+  readonly kind: "movie" | "series" | "season" | "episode";
   readonly title: string;
   readonly year?: number;
   readonly season?: number;

@@ -28,7 +28,7 @@ import type {
 } from "./importState";
 
 export interface ImportTarget {
-  readonly kind: "movie" | "season" | "episode";
+  readonly kind: "movie" | "series" | "season" | "episode";
   readonly itemId?: string;
   readonly title: string;
   readonly year?: number;

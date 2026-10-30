@@ -58,7 +58,8 @@ const MAX_SEGMENT_LENGTH = 180;
 const MAX_RELATIVE_LENGTH = 200;
 
 export interface DestinationTarget {
-  readonly kind: "movie" | "season" | "episode";
+  /** `series` is a whole-series pack; each file is filed under its season. */
+  readonly kind: "movie" | "series" | "season" | "episode";
   /** The film's title, or the series' title. */
   readonly title: string;
   readonly year?: number;
@@ -227,6 +228,58 @@ function identifyPackFile(
   return leading ? { episode: Number(leading[1]) } : null;
 }
 
+/**
+ * The season a whole-series pack's folders put a file in, nearest first:
+ * `Season 2`, `Series 2`, `S02`, or a release folder like `Show.S02.1080p`.
+ * A folder naming an episode is not a season folder.
+ */
+function folderSeason(folders: readonly string[]): number | undefined {
+  for (const folder of [...folders].reverse()) {
+    const match =
+      /(?:^|[\s._-])(?:season|series|s)[\s._-]?(\d{1,3})(?![\s._-]?[ex]\d)(?=$|[\s._-])/i.exec(
+        folder,
+      );
+    if (match) return Number(match[1]);
+  }
+  return undefined;
+}
+
+/**
+ * Which season and episode one file of a whole-series pack is.
+ *
+ * The file's own name usually says both (`Show.S03E07.mkv`). When it says
+ * only the episode, the season comes from the folders above it, and a video
+ * named by a leading number alone is taken at its word only there.
+ */
+function identifySeriesPackFile(
+  sourceRelative: string,
+  isMedia: boolean,
+): { season: number; episode: number; endEpisode?: number } | null {
+  const segments = sourceRelative.split("/");
+  const folders = segments.slice(0, -1);
+  const season = folderSeason(folders);
+  const { stem } = splitExtension(segments.at(-1) ?? sourceRelative);
+  for (const name of [stem, ...[...folders].reverse()]) {
+    const parsed = parseEpisodeName(
+      name,
+      season === undefined ? {} : { folderSeasonNumber: season },
+    );
+    if (parsed.episodeNumber === undefined) continue;
+    if (parsed.seasonNumber === undefined) continue;
+    return {
+      season: parsed.seasonNumber,
+      episode: parsed.episodeNumber,
+      ...(parsed.endEpisodeNumber === undefined
+        ? {}
+        : { endEpisode: parsed.endEpisodeNumber }),
+    };
+  }
+  const leading = isMedia && /^(\d{1,2})(?:[\s._-]|$)/.exec(stem.trim());
+  return leading && season !== undefined
+    ? { season, episode: Number(leading[1]) }
+    : null;
+}
+
 export interface PackFile {
   readonly relative: string;
   readonly role: string;
@@ -264,6 +317,8 @@ export function fileTargetsFor<F extends PackFile>(
   media: readonly F[],
   subtitles: readonly F[],
 ): FileTargets<F> | DestinationRefusal {
+  if (target.kind === "series")
+    return seriesFileTargets(target, media, subtitles);
   if (target.kind !== "season" || target.episode !== undefined) {
     return {
       files: [...media, ...subtitles].map((file) => ({ file, target })),
@@ -312,6 +367,55 @@ export function fileTargetsFor<F extends PackFile>(
   if (episodes.size === 0) {
     return refuse(
       `None of the ${media.length} video file(s) in the download names an episode of season ${season}.`,
+    );
+  }
+  return { files, leftBehind };
+}
+
+/**
+ * A whole-series pack, filed one episode at a time under each one's own
+ * season. The same rules as a season pack otherwise: a video that names no
+ * episode is left behind, a subtitle goes with an imported episode or not at
+ * all, and a pack with not one episode in it is refused.
+ */
+function seriesFileTargets<F extends PackFile>(
+  target: DestinationTarget,
+  media: readonly F[],
+  subtitles: readonly F[],
+): FileTargets<F> | DestinationRefusal {
+  const files: { file: F; target: DestinationTarget }[] = [];
+  const leftBehind: { relative: string; reason: string }[] = [];
+  const episodes = new Set<string>();
+  for (const file of [...media, ...subtitles]) {
+    const isMedia = file.role === "media";
+    const identity = identifySeriesPackFile(file.relative, isMedia);
+    const key = identity && `${identity.season}:${identity.episode}`;
+    if (!identity || !key) {
+      leftBehind.push({ relative: file.relative, reason: "names no episode" });
+    } else if (!isMedia && !episodes.has(key)) {
+      leftBehind.push({
+        relative: file.relative,
+        reason: `is for ${key.replace(":", "x")}, which is not imported`,
+      });
+    } else {
+      if (isMedia) episodes.add(key);
+      files.push({
+        file,
+        target: {
+          ...target,
+          kind: "episode",
+          season: identity.season,
+          episode: identity.episode,
+          ...(identity.endEpisode === undefined
+            ? {}
+            : { endEpisode: identity.endEpisode }),
+        },
+      });
+    }
+  }
+  if (episodes.size === 0) {
+    return refuse(
+      `None of the ${media.length} video file(s) in the download names a season and episode.`,
     );
   }
   return { files, leftBehind };

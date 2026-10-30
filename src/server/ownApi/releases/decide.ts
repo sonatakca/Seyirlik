@@ -49,7 +49,35 @@ export type MediaTarget =
       readonly title: string;
       readonly aliases?: readonly string[];
       readonly season: number;
+    }
+  | {
+      /**
+       * Every season at once, in one release. `seasons` are the ones that
+       * must be in it; without them a pack must at least span two seasons
+       * or call itself complete.
+       */
+      readonly kind: "series";
+      readonly title: string;
+      readonly aliases?: readonly string[];
+      readonly seasons?: readonly number[];
     };
+
+/** Words a release uses to say it holds every season. */
+const COMPLETE_SERIES = /\b(?:complete|all[\s._-]?seasons|integrale)\b/i;
+
+/**
+ * A pack that says it is missing episodes. Taking it stops the episode
+ * search that would have found them, and its gaps are found only once it
+ * is imported.
+ */
+const INCOMPLETE = /\b(?:incomplete|partial)\b/i;
+
+const INCOMPLETE_PACK = {
+  ok: false,
+  code: "incomplete-pack",
+  detail:
+    "Says it is incomplete; its episodes are searched one by one instead.",
+} as const;
 
 export type RejectionCode =
   | "title-mismatch"
@@ -62,6 +90,7 @@ export type RejectionCode =
   | "below-format-score"
   | "too-large"
   | "blocklisted"
+  | "incomplete-pack"
   | "upgrade-not-wanted";
 
 export interface CandidateDecision {
@@ -184,6 +213,8 @@ function matchTarget(
     return { ok: true };
   }
 
+  if (target.kind === "series") return matchSeries(facts, target);
+
   const range = facts.episodeRanges.find(
     (entry) => entry.season === target.season,
   );
@@ -200,13 +231,14 @@ function matchTarget(
 
   if (target.kind === "season") {
     // A pack satisfies a season; a single episode does not.
-    return range.episodes.length === 0
-      ? { ok: true }
-      : {
-          ok: false,
-          code: "wrong-kind",
-          detail: "This is an episode, not a season.",
-        };
+    if (range.episodes.length > 0) {
+      return {
+        ok: false,
+        code: "wrong-kind",
+        detail: "This is an episode, not a season.",
+      };
+    }
+    return INCOMPLETE.test(facts.rawTitle) ? INCOMPLETE_PACK : { ok: true };
   }
 
   // A whole-season pack contains the episode; otherwise it must be listed.
@@ -218,6 +250,55 @@ function matchTarget(
     code: "wrong-episode",
     detail: `Covers episode ${range.episodes.join(", ")}, not ${target.episode}.`,
   };
+}
+
+/**
+ * Whether a release is the whole series.
+ *
+ * Either it names its seasons as packs (`S01-S10`) and they include every
+ * season wanted, or it names none and says it is complete. A release that
+ * names no season and does not say so is more likely a special or a film
+ * of the same name than the series.
+ */
+function matchSeries(
+  facts: ReleaseFacts,
+  target: Extract<MediaTarget, { kind: "series" }>,
+): { ok: true } | { ok: false; code: RejectionCode; detail: string } {
+  if (facts.episodeRanges.some((range) => range.episodes.length > 0)) {
+    return {
+      ok: false,
+      code: "wrong-kind",
+      detail: "This is an episode, not the whole series.",
+    };
+  }
+  if (INCOMPLETE.test(facts.rawTitle)) return INCOMPLETE_PACK;
+  const covered = facts.episodeRanges.map((range) => range.season);
+  if (covered.length === 0) {
+    return COMPLETE_SERIES.test(facts.rawTitle)
+      ? { ok: true }
+      : {
+          ok: false,
+          code: "wrong-season",
+          detail: "Names no season and does not say it is complete.",
+        };
+  }
+  const wanted = target.seasons ?? [];
+  const absent = wanted.filter((season) => !covered.includes(season));
+  if (absent.length > 0) {
+    return {
+      ok: false,
+      code: "wrong-season",
+      detail: `Covers season ${covered.join(", ")}; season ${absent.join(", ")} is not in it.`,
+    };
+  }
+  if (wanted.length === 0 && covered.length < 2) {
+    return {
+      ok: false,
+      code: "wrong-kind",
+      detail: `This is season ${covered[0]}, not the whole series.`,
+    };
+  }
+  return { ok: true };
 }
 
 function judge(

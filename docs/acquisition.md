@@ -79,6 +79,29 @@ Fourteen failure classes, each mapped to one of three dispositions:
 `failed` is deliberately not a terminal state. A person may retry it, which
 clears the backoff and queues the work immediately.
 
+## Series, biggest first
+
+The missing-episode search (`acquisition.searchMissing`, from a title's
+season strip or the Releases page's "Download everything missing") asks for
+the largest release that cannot fetch anything already held:
+
+1. **the whole series**, in one release, when nothing of any aired season is
+   held or coming (`MissingEpisodePlan.complete`);
+2. **each season's pack**, for a season with nothing held;
+3. **each episode**, for the rest and for any season with no pack.
+
+A whole-series acquisition has `target_kind = 'series'` and no season. It
+covers every season and episode of its series while it is live, and its import
+files each video under the season and episode its own name (or its folder)
+gives.
+
+A pack that fails for a reason of its own is blocklisted and replaced by the
+next pack of the same size (`acquisition.replace`). When there is none, or
+`MAX_AUTOMATIC_REPLACEMENTS` packs have already failed, it is not left for an
+operator: the missing-episode search is queued for that series or season,
+which then goes a step smaller. Only a film or an episode with nothing else
+acceptable stays failed.
+
 ## Configuration
 
 `SEYIRLIK_SABNZBD` in the non-secret settings file:

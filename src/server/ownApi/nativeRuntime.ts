@@ -1336,6 +1336,16 @@ export async function createNativeRuntime({
   });
   // The missing-episode search reads the same detail the season strip does.
   const missingCatalogue = tmdb && cacheSeriesCatalogue(tmdb);
+  const missingPlanOf = async (itemId: string, season?: number) => {
+    const detail = await loadTitleDetail(
+      libraryAdminRepository,
+      missingCatalogue,
+      itemId,
+    );
+    return detail?.kind === "series"
+      ? missingEpisodePlan(detail, season)
+      : null;
+  };
 
   /*
    * The download client, when one is configured.
@@ -1373,6 +1383,9 @@ export async function createNativeRuntime({
             queue,
             episodesOf: seasonEpisodes,
             submitJobType: ACQUISITION_JOB_TYPES.submit,
+            // A pack with no replacement is searched smaller, from what
+            // the series' season strip shows missing.
+            missingPlanOf,
           }),
         };
       })()
@@ -1417,7 +1430,11 @@ export async function createNativeRuntime({
                   )
                 : undefined;
               return {
-                kind: record.targetKind as "movie" | "season" | "episode",
+                kind: record.targetKind as
+                  | "movie"
+                  | "series"
+                  | "season"
+                  | "episode",
                 title: record.targetTitle,
                 // The destination is `Title (Year)`, and a season or episode
                 // needs its numbers; dropping them here put an import in a
@@ -1649,7 +1666,11 @@ export async function createNativeRuntime({
             return {
               downloadPath: record.downloadPath,
               target: {
-                kind: record.targetKind as "movie" | "season" | "episode",
+                kind: record.targetKind as
+                  | "movie"
+                  | "series"
+                  | "season"
+                  | "episode",
                 title: record.targetTitle,
                 ...(target?.year === undefined ? {} : { year: target.year }),
                 ...(target?.season === undefined
@@ -2156,18 +2177,18 @@ export async function createNativeRuntime({
           policies: releasePolicies,
           blocklist: releaseBlocklist,
           episodesOf: seasonEpisodes,
-          missingEpisodes: async (itemId, season) => {
-            const detail = await loadTitleDetail(
-              libraryAdminRepository,
-              missingCatalogue,
-              itemId,
-            );
-            return detail?.kind === "series"
-              ? missingEpisodePlan(detail, season)
-              : null;
-          },
+          missingEpisodes: missingPlanOf,
           profileOf: async (itemId) =>
             (await monitoringRepository.readTitle(itemId))?.profileId,
+          seriesByTmdb: async (tmdbId) =>
+            (
+              await pool.query<{ id: string }>(
+                `SELECT id FROM items
+                  WHERE kind = 'series' AND provider_ids->>'tmdb' = $1
+                  ORDER BY date_created LIMIT 1`,
+                [tmdbId],
+              )
+            ).rows[0]?.id,
         })
       : []),
     ...(importing && importStarter

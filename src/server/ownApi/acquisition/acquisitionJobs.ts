@@ -162,9 +162,10 @@ export function createAcquisitionJobHandlers(
    * fails this job (and the queue retries it) while the acquisition stays
    * exactly as SABnzbd left it. Only once there is an answer is the release
    * blocklisted, its SABnzbd job and partial files removed, and the
-   * replacement started. A title gets at most `MAX_AUTOMATIC_REPLACEMENTS`;
-   * after that, or when nothing acceptable is left, the acquisition stays
-   * failed and blocklisted for an operator to decide.
+   * replacement started. A title gets at most `MAX_AUTOMATIC_REPLACEMENTS`
+   * of the same kind; after that a pack is searched a step smaller (a series
+   * by season, a season by episode), and anything else, or a pack with
+   * nothing smaller acceptable, stays failed and blocklisted for an operator.
    */
   const replace: JobHandler = async ({ job, reportProgress }) => {
     if (!automatic) {
@@ -215,22 +216,36 @@ export function createAcquisitionJobHandlers(
         "No quality profile is recorded for it, so another release cannot be chosen automatically.",
       );
     }
-    if (
+    /*
+     * Past the limit a film or an episode stops for an operator. A pack does
+     * not: its series or season is searched a step smaller instead, which is
+     * a different set of releases rather than the next of the same.
+     */
+    const exhausted =
       (await repository.replacementsFor(acquisitionId)) >=
-      MAX_AUTOMATIC_REPLACEMENTS
-    ) {
+      MAX_AUTOMATIC_REPLACEMENTS;
+    const isPack =
+      context.target.kind === "series" || context.target.kind === "season";
+    if (exhausted && !isPack) {
       return giveUp(
         `${MAX_AUTOMATIC_REPLACEMENTS} replacements have already failed for this title; choose another release by hand.`,
       );
     }
 
     await reportProgress(0.2, "Searching for another release");
-    const choice = await automatic.fallback.choose(context.target, policy, {
-      indexerId: record.indexerId,
-      releaseGuid: record.releaseGuid,
-    });
+    const choice = await automatic.fallback.choose(
+      context.target,
+      policy,
+      { indexerId: record.indexerId, releaseGuid: record.releaseGuid },
+      undefined,
+      { stepDownOnly: exhausted },
+    );
     if (choice.kind === "none") {
-      return giveUp("Searched again automatically; nothing else acceptable.");
+      return giveUp(
+        exhausted
+          ? `${MAX_AUTOMATIC_REPLACEMENTS} replacements have already failed for this title, and nothing smaller is acceptable; choose another release by hand.`
+          : "Searched again automatically; nothing else acceptable.",
+      );
     }
 
     await automatic.blocklist.add({
@@ -254,6 +269,9 @@ export function createAcquisitionJobHandlers(
       created: applied?.created.length ?? 0,
       ...(choice.kind === "episodes"
         ? { episodes: choice.picks.length, missingEpisodes: choice.missing }
+        : {}),
+      ...(choice.kind === "missing"
+        ? { missingSearch: applied?.taskIds[0] ?? null }
         : {}),
     };
   };

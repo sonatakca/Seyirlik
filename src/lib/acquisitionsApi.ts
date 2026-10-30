@@ -134,6 +134,12 @@ export interface BlocklistOutcome {
   readonly replacement: Acquisition | null;
   /** Why no search ran, when one was asked for and none did. */
   readonly reason?: "no-profile";
+  /**
+   * No other pack: the series or season is being searched smaller (season
+   * by season, then episode by episode) by this task. Null when nothing of
+   * it was missing any more.
+   */
+  readonly missingSearch?: string | null;
 }
 
 /** Never this release again, and — if asked — the next best one instead. */

@@ -7,17 +7,25 @@
  * the replacement is what the original decision would have chosen without
  * the failed release in it: the same target, the same quality profile.
  *
- * A season adds one step. Older shows are often only posted episode by
- * episode, so when no acceptable season pack is left, each episode the
- * catalogue knows of is searched and chosen on its own, and the season
- * acquisition is replaced by one acquisition per episode.
+ * A pack adds steps. Older shows are often only posted season by season or
+ * episode by episode, so a whole series falls back to its seasons and a
+ * season to its episodes. When the series' missing episodes can be read
+ * (`missingPlanOf`), that step down is the missing-episode search, queued:
+ * it takes one indexer search per episode, longer than a request or a
+ * replacement job should wait. Without it, a season is replaced by each
+ * episode the catalogue knows of, chosen here.
  */
 import type { DatabasePool } from "../database/databasePool";
 import type { JobQueue } from "../tasks/jobQueue";
 import type { IndexerSearchService } from "../indexers/searchService";
 import type { IndexerRelease } from "../indexers/indexerTypes";
 import { selectRelease, type MediaTarget } from "../releases/decide";
-import { searchFor } from "../releases/releaseRoutes";
+import { runSearchPlan, searchPlan } from "../releases/releaseRoutes";
+import {
+  MISSING_SEARCH_JOB_TYPE,
+  countMissing,
+  missingSearchDedupeKey,
+} from "./missingEpisodes";
 import type {
   AcquisitionPolicy,
   PolicyRepository,
@@ -51,6 +59,14 @@ export interface AcquisitionFallbackOptions {
   ) => Promise<SeasonEpisode[]>;
   /** The job that hands an acquisition to the download client. */
   readonly submitJobType: string;
+  /**
+   * What a series, or one season of it, is missing: the plan the
+   * missing-episode search runs. Null when the item is not a series.
+   */
+  readonly missingPlanOf?: (
+    seriesItemId: string,
+    season?: number,
+  ) => Promise<MissingEpisodePlan | null>;
 }
 
 type Selected = NonNullable<ReturnType<typeof selectRelease>["winner"]>;
@@ -71,6 +87,13 @@ export type ReplacementChoice =
       /** Episodes searched that had nothing acceptable. */
       readonly missing: readonly number[];
     }
+  | {
+      /** No other pack: the missing-episode search takes over from here. */
+      readonly kind: "missing";
+      readonly seriesItemId: string;
+      /** Absent for a whole series. */
+      readonly season?: number;
+    }
   | { readonly kind: "none" };
 
 /**
@@ -81,6 +104,11 @@ export interface MissingEpisodePlan {
   readonly seriesItemId: string;
   readonly title: string;
   readonly year?: number;
+  /**
+   * Nothing of any aired season is held or coming, so one release of the
+   * whole series is asked for before any season.
+   */
+  readonly complete?: boolean;
   readonly seasons: ReadonlyArray<{
     readonly season: number;
     /** Nothing of the season is held or coming, so a pack is asked for first. */
@@ -94,16 +122,19 @@ export interface MissingEpisodePlan {
 }
 
 export interface MissingSearchResult {
-  /** A null episode is a season pack. */
+  /** A null episode is a season pack; a null season, the whole series. */
   readonly started: Array<{
-    season: number;
+    season: number | null;
     episode: number | null;
     release: string;
   }>;
   /** Searched, and nothing acceptable under the quality profile. */
   readonly nothing: Array<{ season: number; episode: number }>;
-  /** Not searched: a download of it is already under way. A null episode is a season. */
-  readonly covered: Array<{ season: number; episode: number | null }>;
+  /**
+   * Not searched: a download of it is already under way. A null episode is
+   * a season; a null season, the whole series.
+   */
+  readonly covered: Array<{ season: number | null; episode: number | null }>;
 }
 
 export interface ReplacementResult {
@@ -119,6 +150,7 @@ export function mediaTargetOf(target: AcquisitionTarget): MediaTarget | null {
       ...(target.year === undefined ? {} : { year: target.year }),
     };
   }
+  if (target.kind === "series") return { kind: "series", title: target.title };
   if (target.season === undefined) return null;
   if (target.kind === "season") {
     return { kind: "season", title: target.title, season: target.season };
@@ -140,6 +172,7 @@ export function createAcquisitionFallback({
   queue,
   episodesOf,
   submitJobType,
+  missingPlanOf,
 }: AcquisitionFallbackOptions) {
   async function best(
     target: MediaTarget,
@@ -147,9 +180,12 @@ export function createAcquisitionFallback({
     exclude: { indexerId: string; releaseGuid: string } | null,
     signal?: AbortSignal,
   ) {
-    const found = await search.search(searchFor(target, undefined), {
-      ...(signal ? { signal } : {}),
-    });
+    const { found } = await runSearchPlan(
+      search,
+      target,
+      searchPlan(target, null, undefined),
+      signal ? { signal } : {},
+    );
     const releases: readonly IndexerRelease[] = exclude
       ? found.releases.filter(
           (release) =>
@@ -167,6 +203,16 @@ export function createAcquisitionFallback({
     });
   }
 
+  /** The seasons a whole-series release must hold: every one still missing. */
+  async function seasonsMissing(
+    seriesItemId: string,
+  ): Promise<{ seasons?: number[] }> {
+    const plan = await missingPlanOf?.(seriesItemId);
+    return plan && plan.seasons.length > 0
+      ? { seasons: plan.seasons.map((entry) => entry.season) }
+      : {};
+  }
+
   /**
    * What would replace this acquisition, without changing anything.
    *
@@ -179,16 +225,40 @@ export function createAcquisitionFallback({
     policy: AcquisitionPolicy,
     exclude: { indexerId: string; releaseGuid: string } | null,
     signal?: AbortSignal,
+    /** Skip another release of the same kind and go straight a step down. */
+    { stepDownOnly = false }: { stepDownOnly?: boolean } = {},
   ): Promise<ReplacementChoice> {
     const media = mediaTargetOf(target);
     if (!media) return { kind: "none" };
-    const result = await best(media, policy, exclude, signal);
-    if (result.winner) {
+    if (!stepDownOnly) {
+      const result = await best(
+        media.kind === "series" && target.itemId
+          ? { ...media, ...(await seasonsMissing(target.itemId)) }
+          : media,
+        policy,
+        exclude,
+        signal,
+      );
+      if (result.winner) {
+        return {
+          kind: "release",
+          target,
+          winner: result.winner,
+          rejected: result.candidates,
+        };
+      }
+    }
+    if (
+      (target.kind === "season" || target.kind === "series") &&
+      target.itemId &&
+      missingPlanOf
+    ) {
       return {
-        kind: "release",
-        target,
-        winner: result.winner,
-        rejected: result.candidates,
+        kind: "missing",
+        seriesItemId: target.itemId,
+        ...(target.kind === "season" && target.season !== undefined
+          ? { season: target.season }
+          : {}),
       };
     }
     if (
@@ -301,6 +371,26 @@ export function createAcquisitionFallback({
   }
 
   /**
+   * Queues the missing-episode search for a series, or one season of it.
+   * Null when nothing is missing any more, so there is nothing to search.
+   */
+  async function searchMissingLater(
+    seriesItemId: string,
+    season: number | undefined,
+    policy: AcquisitionPolicy,
+  ): Promise<string | null> {
+    const plan = await missingPlanOf?.(seriesItemId, season);
+    if (!plan || countMissing(plan) === 0) return null;
+    return queue.enqueue({
+      jobType: MISSING_SEARCH_JOB_TYPE,
+      payload: { plan, profileId: policy.profile.id },
+      // Not the key a press of the button uses: that search may be the one
+      // still running, and folding this into it would lose the new plan.
+      dedupeKey: `${missingSearchDedupeKey(seriesItemId, season)}:fallback`,
+    });
+  }
+
+  /**
    * Replaces a failed acquisition with what `choose` found.
    *
    * Superseding the original is the claim: when two callers race, only the
@@ -315,13 +405,17 @@ export function createAcquisitionFallback({
     const detail =
       choice.kind === "release"
         ? `Replaced by ${choice.winner.release.title}.`
-        : `No other season pack; replaced by ${choice.picks.length} episode download${
-            choice.picks.length === 1 ? "" : "s"
-          }${
-            choice.missing.length > 0
-              ? ` (nothing acceptable for episode ${choice.missing.join(", ")})`
-              : ""
-          }.`;
+        : choice.kind === "missing"
+          ? choice.season === undefined
+            ? "No other release of the whole series; searching season by season, then episode by episode."
+            : "No other season pack; searching episode by episode."
+          : `No other season pack; replaced by ${choice.picks.length} episode download${
+              choice.picks.length === 1 ? "" : "s"
+            }${
+              choice.missing.length > 0
+                ? ` (nothing acceptable for episode ${choice.missing.join(", ")})`
+                : ""
+            }.`;
     if (
       !(await repository.update(
         acquisitionId,
@@ -345,6 +439,15 @@ export function createAcquisitionFallback({
       created.push(made.created);
       taskIds.push(made.taskId);
       await repository.supersedeFailedFor(made.created.id);
+    } else if (choice.kind === "missing") {
+      // Planned now that the failed pack is superseded, so every episode it
+      // was to bring reads as missing again.
+      const taskId = await searchMissingLater(
+        choice.seriesItemId,
+        choice.season,
+        policy,
+      );
+      if (taskId) taskIds.push(taskId);
     } else {
       for (const pick of choice.picks) {
         const made = await plan(pick.target, pick.winner, policy, []);
@@ -359,10 +462,11 @@ export function createAcquisitionFallback({
   /**
    * Searches for each missing episode and starts the best release found.
    *
-   * A season with nothing held asks for a pack first, as a search by hand
-   * would; any other season is searched episode by episode, so what is
-   * already held is never fetched again. A season pack already on its way
-   * covers its episodes, and its season is left alone.
+   * Biggest first. A series with nothing held asks for one release of every
+   * season; failing that, a season with nothing held asks for its pack, as a
+   * search by hand would; any other season, or one with no pack, is searched
+   * episode by episode, so what is already held is never fetched again. A
+   * pack already on its way covers its episodes, and they are left alone.
    */
   async function acquireMissing(
     missingPlan: MissingEpisodePlan,
@@ -377,6 +481,53 @@ export function createAcquisitionFallback({
     const started: MissingSearchResult["started"] = [];
     const nothing: MissingSearchResult["nothing"] = [];
     const covered: MissingSearchResult["covered"] = [];
+
+    if (missingPlan.complete && missingPlan.seasons.length > 1) {
+      const seriesTarget: AcquisitionTarget = {
+        kind: "series",
+        itemId: missingPlan.seriesItemId,
+        ...series,
+      };
+      if (await repository.hasLiveAcquisitionFor(seriesTarget)) {
+        return {
+          started,
+          nothing,
+          covered: [{ season: null, episode: null }],
+        };
+      }
+      const whole = await best(
+        {
+          kind: "series",
+          title: missingPlan.title,
+          seasons: missingPlan.seasons.map((entry) => entry.season),
+        },
+        policy,
+        null,
+        signal,
+      );
+      if (whole.winner) {
+        const made = await plan(
+          seriesTarget,
+          whole.winner,
+          policy,
+          whole.candidates,
+          "automatic",
+        );
+        await repository.supersedeFailedFor(made.created.id);
+        return {
+          started: [
+            {
+              season: null,
+              episode: null,
+              release: whole.winner.release.title,
+            },
+          ],
+          nothing,
+          covered,
+        };
+      }
+    }
+
     for (const [
       index,
       { season, whole, episodes },

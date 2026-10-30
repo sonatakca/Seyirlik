@@ -630,25 +630,46 @@ export interface MissingSearch {
   /** Null when nothing was missing, so nothing was queued. */
   taskId: string | null;
   episodes: number;
+  /** The series searched for. */
+  itemId?: string;
 }
 
 export interface MissingSearchState {
   status: string;
   message: string | null;
   result: {
-    /** A null episode is a season pack. */
-    started: Array<{ season: number; episode: number | null; release: string }>;
+    /** A null episode is a season pack; a null season, the whole series. */
+    started: Array<{
+      season: number | null;
+      episode: number | null;
+      release: string;
+    }>;
     nothing: Array<{ season: number; episode: number }>;
-    /** Not searched: already downloading or importing. A null episode is a season. */
-    covered?: Array<{ season: number; episode: number | null }>;
+    /**
+     * Not searched: already downloading or importing. A null episode is a
+     * season; a null season, the whole series.
+     */
+    covered?: Array<{ season: number | null; episode: number | null }>;
   } | null;
 }
 
-/** Searches for a series' missing episodes, or one season's, and starts the best of each. */
-export function searchMissingEpisodes(itemId: string, season?: number) {
+/**
+ * Searches for a series' missing episodes, or one season's, and starts the
+ * best of each: the whole series in one release when nothing of it is held,
+ * else season packs, else episode by episode.
+ */
+export function searchMissingEpisodes(
+  series: string | { tmdbId: string },
+  season?: number,
+  profileId?: string,
+) {
   return ownApiClient.request<MissingSearch>("/acquisitions/missing", {
     method: "POST",
-    body: { itemId, ...(season === undefined ? {} : { season }) },
+    body: {
+      ...(typeof series === "string" ? { itemId: series } : series),
+      ...(season === undefined ? {} : { season }),
+      ...(profileId ? { profileId } : {}),
+    },
   });
 }
 

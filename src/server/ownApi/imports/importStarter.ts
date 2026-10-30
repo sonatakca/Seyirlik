@@ -18,7 +18,7 @@ export interface ImportSourceResolution {
   /** Absolute path SABnzbd reported for the finished download. */
   readonly downloadPath: string;
   readonly target: {
-    readonly kind: "movie" | "season" | "episode";
+    readonly kind: "movie" | "series" | "season" | "episode";
     readonly title: string;
     readonly year?: number;
     readonly season?: number;
@@ -91,8 +91,15 @@ export function createImportStarter({
       .join("/");
 
     const kind = overrides.kind ?? resolved.target.kind ?? "movie";
-    if (kind !== "movie" && kind !== "season" && kind !== "episode") {
-      throw validationError("The kind must be movie, season or episode.");
+    if (
+      kind !== "movie" &&
+      kind !== "series" &&
+      kind !== "season" &&
+      kind !== "episode"
+    ) {
+      throw validationError(
+        "The kind must be movie, series, season or episode.",
+      );
     }
     const libraryRoot = libraryRootFor(kind);
     if (!libraryRoot) {

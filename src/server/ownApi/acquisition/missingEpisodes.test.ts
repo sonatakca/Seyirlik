@@ -73,10 +73,35 @@ describe("missingEpisodePlan", () => {
       seriesItemId: "series",
       title: "The Sopranos",
       year: 1999,
+      complete: false,
       seasons: [
         { season: 5, whole: false, episodes: [{ episode: 1, itemId: "s5e1" }] },
       ],
     });
+  });
+
+  it("asks for the whole series only when nothing of any season is held", () => {
+    const nothingHeld = show([
+      [1, [episode(1, 1), episode(1, 2)]],
+      [2, [episode(2, 1), episode(2, 2, { status: "unaired" })]],
+      // A season with nothing aired yet does not stop it.
+      [3, [episode(3, 1, { status: "unaired" })]],
+    ]);
+    expect(missingEpisodePlan(nothingHeld).complete).toBe(true);
+    // One season's search never asks for more than the season.
+    expect(missingEpisodePlan(nothingHeld, 1).complete).toBe(false);
+
+    const oneHeld = show([
+      [1, [episode(1, 1, held), episode(1, 2)]],
+      [2, [episode(2, 1)]],
+    ]);
+    expect(missingEpisodePlan(oneHeld).complete).toBe(false);
+    // A season fully held and one wholly missing: not the whole series.
+    const seasonHeld = show([
+      [1, [episode(1, 1, held)]],
+      [2, [episode(2, 1)]],
+    ]);
+    expect(missingEpisodePlan(seasonHeld).complete).toBe(false);
   });
 
   it("searches an episode the catalogue has no row for under its series", () => {

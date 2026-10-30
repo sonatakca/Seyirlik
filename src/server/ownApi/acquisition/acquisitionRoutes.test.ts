@@ -92,6 +92,7 @@ function harness(
       season?: number,
     ) => Promise<MissingEpisodePlan | null>;
     profileOf?: (itemId: string) => Promise<string | undefined>;
+    seriesByTmdb?: (tmdbId: string) => Promise<string | undefined>;
     jobs?: Record<string, Partial<JobRecord>>;
   } = {},
 ): Harness {
@@ -252,6 +253,7 @@ function harness(
         ? { missingEpisodes: over.missingEpisodes }
         : {}),
       ...(over.profileOf ? { profileOf: over.profileOf } : {}),
+      ...(over.seriesByTmdb ? { seriesByTmdb: over.seriesByTmdb } : {}),
     }),
     created,
     enqueued,
@@ -1254,7 +1256,11 @@ describe("searching for missing episodes", () => {
       body: { itemId: SERIES, season: 6 },
     });
     expect(missingEpisodes).toHaveBeenCalledWith(SERIES, 6);
-    expect(answer.payload?.data).toEqual({ taskId: "job-1", episodes: 2 });
+    expect(answer.payload?.data).toEqual({
+      taskId: "job-1",
+      episodes: 2,
+      itemId: SERIES,
+    });
     expect(h.enqueued).toEqual([
       {
         jobType: MISSING_SEARCH_JOB_TYPE,
@@ -1285,8 +1291,33 @@ describe("searching for missing episodes", () => {
     const answer = await invoke(route(h, "POST", "/acquisitions/missing"), {
       body: { itemId: SERIES },
     });
-    expect(answer.payload?.data).toEqual({ taskId: null, episodes: 0 });
+    expect(answer.payload?.data).toEqual({
+      taskId: null,
+      episodes: 0,
+      itemId: SERIES,
+    });
     expect(h.enqueued).toHaveLength(0);
+  });
+
+  it("finds the series by the TMDB id the Releases page resolved", async () => {
+    const missingEpisodes = vi.fn(async () => plan);
+    const h = harness([], {
+      missingEpisodes,
+      seriesByTmdb: async (tmdbId) => (tmdbId === "15260" ? SERIES : undefined),
+      profiles: [{ id: "p0", name: "Any" }],
+    });
+    const answer = await invoke(route(h, "POST", "/acquisitions/missing"), {
+      body: { tmdbId: "15260", profileId: "p1" },
+    });
+    expect(missingEpisodes).toHaveBeenCalledWith(SERIES, undefined);
+    expect(answer.payload?.data).toMatchObject({ itemId: SERIES });
+    expect(h.enqueued[0]).toMatchObject({ payload: { profileId: "p1" } });
+
+    await expect(
+      invoke(route(h, "POST", "/acquisitions/missing"), {
+        body: { tmdbId: "1" },
+      }),
+    ).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it("refuses a title that is not a series", async () => {

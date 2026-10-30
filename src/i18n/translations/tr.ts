@@ -144,6 +144,7 @@ export const tr = {
   "library.missingStarted": "Başlatılan indirme:",
   "library.missingNothingFor": "Uygun sürüm bulunamadı:",
   "library.missingAlreadyComing": "Zaten yolda:",
+  "library.missingWholeSeries": "dizinin tamamı",
   "library.missingSearchFailed":
     "Arama tamamlanamadı. Birazdan yeniden deneyin; başlamış indirmeler sürüyor.",
   "library.title": "Kütüphane",
@@ -2446,6 +2447,8 @@ export const tr = {
     "Engellendi; bir sonraki en iyi sürüm indiriliyor:",
   "admin.acquisitions.notice.nothingElse":
     "Engellendi, ancak arama bu profilin izin verdiği başka bir sürüm bulamadı.",
+  "admin.acquisitions.notice.searchingSmaller":
+    "Engellendi. Başka paket yok; sezon sezon, sonra bölüm bölüm aranıyor.",
   "admin.acquisitions.notice.noProfile":
     "Engellendi. Kalite profili kaydedilmemiş; Sürümler sayfasından arayın.",
   "admin.acquisitions.notice.failed":
@@ -2510,6 +2513,13 @@ export const tr = {
   "admin.decisions.kindField": "Tür",
   "admin.decisions.kind.movie": "Film",
   "admin.decisions.kind.tv": "Dizi",
+  "admin.decisions.allSeasons": "Tümü",
+  "admin.decisions.auto": "Eksik her şeyi indir",
+  "admin.decisions.autoHint":
+    "Önce dizinin tamamı, sonra sezon paketleri, sonra bölüm bölüm. Başarısız olan indirme engellenir ve kendiliğinden yenisiyle değiştirilir.",
+  "admin.decisions.autoNotInLibrary":
+    "Bölümlerinin bilinmesi için önce diziyi kütüphaneye ekleyin.",
+  "admin.decisions.autoFailed": "Otomatik arama başlatılamadı.",
   "admin.decisions.search": "Ara",
   "admin.decisions.counts": "Bu profilin izin verdiği",
   "admin.decisions.noResults": "Bu başlık için sürüm bulunamadı.",

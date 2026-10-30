@@ -116,6 +116,7 @@ function parseTarget(body: Record<string, unknown>): MediaTarget {
     const year = optionalBodyInteger(body, "year", { min: 1870, max: 2200 });
     return { kind: "movie", title, ...(year === undefined ? {} : { year }) };
   }
+  if (kind === "series") return { kind: "series", title };
   const season = optionalBodyInteger(body, "season", { min: 0, max: 10_000 });
   if (season === undefined) {
     throw validationError("A television target needs a season.");
@@ -131,7 +132,7 @@ function parseTarget(body: Record<string, unknown>): MediaTarget {
     }
     return { kind: "episode", title, season, episode };
   }
-  throw validationError("The kind must be movie, season or episode.");
+  throw validationError("The kind must be movie, series, season or episode.");
 }
 
 /**
@@ -150,6 +151,7 @@ export function searchFor(
     ...(limit === undefined ? {} : { limit }),
   };
   if (target.kind === "movie") return { kind: "movie", ...base };
+  if (target.kind === "series") return { kind: "tv", ...base };
   if (target.kind === "season") {
     return { kind: "tv", ...base, season: target.season };
   }
@@ -192,9 +194,60 @@ export function searchPlan(
     const key = (indexerTerm(name) || name).toLowerCase();
     if (tried.has(key)) continue;
     tried.add(key);
-    plan.push(searchFor({ ...target, title: name }, limit));
+    const query = searchFor({ ...target, title: name }, limit);
+    // A complete pack is one release among hundreds of episodes under the
+    // bare name, so it is asked for by the word it is posted with too.
+    if (target.kind === "series") {
+      plan.push({ ...query, term: `${query.term} complete` });
+    }
+    plan.push(query);
   }
   return plan;
+}
+
+/**
+ * Runs a search plan. A film or a season stops at the first search that
+ * finds anything; a whole series takes everything every search found, since
+ * its packs are spread over all of them.
+ */
+export async function runSearchPlan(
+  search: IndexerSearchService,
+  target: MediaTarget,
+  plan: readonly IndexerSearchQuery[],
+  options: { indexerIds?: readonly string[]; signal?: AbortSignal } = {},
+): Promise<{ found: AggregatedSearch; searchedFor: IndexerSearchQuery }> {
+  let found: AggregatedSearch | undefined;
+  let searchedFor = plan[0]!;
+  const seen = new Set<string>();
+  for (const query of plan) {
+    const next = await search.search(query, {
+      ...(options.indexerIds?.length
+        ? { indexerIds: [...options.indexerIds] }
+        : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    if (target.kind !== "series") {
+      found = next;
+      searchedFor = query;
+      if (next.releases.length > 0) break;
+      continue;
+    }
+    const fresh = next.releases.filter((release) => {
+      const key = `${release.indexerId}\u0000${release.guid}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    found = found
+      ? {
+          ...found,
+          releases: [...found.releases, ...fresh],
+          partial: found.partial || next.partial,
+        }
+      : { ...next, releases: fresh };
+  }
+  if (!found) throw new Error("A search plan is never empty.");
+  return { found, searchedFor };
 }
 
 /** Where the identity came from never changes what the operator typed. */
@@ -404,17 +457,15 @@ export function createReleaseRoutes({
           const resolution = await resolve(typed, tmdbId);
           const target = withIdentity(typed, resolution.identity);
           const plan = searchPlan(target, resolution.identity, limit);
-          let found: AggregatedSearch | undefined;
-          let searchedFor = plan[0]!;
-          for (const query of plan) {
-            searchedFor = query;
-            found = await search.search(query, {
+          const { found, searchedFor } = await runSearchPlan(
+            search,
+            target,
+            plan,
+            {
               ...(indexerIds?.length ? { indexerIds } : {}),
               signal: controller.signal,
-            });
-            if (found.releases.length > 0) break;
-          }
-          if (!found) throw new Error("A search plan is never empty.");
+            },
+          );
           const isBlocklisted = await blocklist.matcherFor(found.releases);
           const result = selectRelease(target, found.releases, {
             profile: policy.profile,

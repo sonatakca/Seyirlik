@@ -597,3 +597,80 @@ describe("deciding whether a release names the thing that was asked for", () => 
     ]);
   });
 });
+
+describe("choosing a release of a whole series", () => {
+  const series: MediaTarget = {
+    kind: "series",
+    title: "Adventure Time",
+    seasons: [1, 2, 3],
+  };
+
+  function verdict(title: string, target: MediaTarget = series) {
+    return selectRelease(target, [release(title, { categoryIds: [5000] })], {
+      profile,
+      preferences: [],
+      current: null,
+    }).candidates[0]!;
+  }
+
+  it("takes a pack that calls itself complete", () => {
+    expect(
+      verdict("Adventure.Time.Complete.Series.1080p.WEB-DL.x264-GRP").accepted,
+    ).toBe(true);
+    expect(
+      verdict("Adventure Time (2010) COMPLETE 1080p BluRay x264-GRP").accepted,
+    ).toBe(true);
+  });
+
+  it("takes a pack of named seasons only when every wanted season is in it", () => {
+    expect(
+      verdict("Adventure.Time.S01-S03.1080p.WEB-DL.x264-GRP").accepted,
+    ).toBe(true);
+    const short = verdict("Adventure.Time.S01-S02.1080p.WEB-DL.x264-GRP");
+    expect(short.rejection).toBe("wrong-season");
+    expect(short.reasons[0]!.detail).toContain("season 3 is not in it");
+  });
+
+  it("refuses a pack that says it is incomplete, for a series or a season", () => {
+    expect(
+      verdict("Adventure.Time.S01-S03.iNCOMPLETE.1080p.WEB-DL.x264-GRP")
+        .rejection,
+    ).toBe("incomplete-pack");
+    expect(
+      verdict(
+        "Adventure.Time.2010.S04.iNCOMPLETE.1080p.HMAX.WEB-DL.H.265-OldT",
+        {
+          kind: "season",
+          title: "Adventure Time",
+          season: 4,
+        },
+      ).rejection,
+    ).toBe("incomplete-pack");
+    expect(
+      verdict("Adventure.Time.S04.COMPLETE.1080p.WEB-DL.x264-GRP", {
+        kind: "season",
+        title: "Adventure Time",
+        season: 4,
+      }).accepted,
+    ).toBe(true);
+  });
+
+  it("refuses one season, an episode, a spin-off and an unlabelled release", () => {
+    expect(
+      verdict("Adventure.Time.S01.1080p.WEB-DL.x264-GRP", {
+        kind: "series",
+        title: "Adventure Time",
+      }).rejection,
+    ).toBe("wrong-kind");
+    expect(
+      verdict("Adventure.Time.S01E01.1080p.WEB-DL.x264-GRP").rejection,
+    ).toBe("wrong-kind");
+    expect(
+      verdict("Adventure.Time.Side.Quests.Complete.1080p.WEB-DL.x264-GRP")
+        .rejection,
+    ).toBe("title-mismatch");
+    expect(verdict("Adventure.Time.1080p.WEB-DL.x264-GRP").rejection).toBe(
+      "wrong-season",
+    );
+  });
+});
