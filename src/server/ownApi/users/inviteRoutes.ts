@@ -11,8 +11,11 @@ import {
 } from "../api/validation";
 import {
   canonicalInviteCode,
+  deriveInviteSealKey,
   hashInviteCode,
   newInviteCode,
+  openInviteCode,
+  sealInviteCode,
   type InviteRecord,
   type InviteRepository,
 } from "../auth/invites";
@@ -30,8 +33,13 @@ function inviteState(
   return "open";
 }
 
-/** Never carries the code: after creation only its hash exists. */
-function toInviteDto(invite: InviteRecord, at: Date) {
+/**
+ * An administrator may read a code back for as long as it can still admit
+ * someone; a spent, expired or revoked one is history and stays sealed. A code
+ * made before codes were kept has no text to show (`code: null`).
+ */
+function toInviteDto(invite: InviteRecord, at: Date, sealKey: Buffer) {
+  const state = inviteState(invite, at);
   return {
     id: invite.id,
     label: invite.label,
@@ -40,7 +48,12 @@ function toInviteDto(invite: InviteRecord, at: Date) {
     expiresAt: invite.expiresAt?.toISOString() ?? null,
     revokedAt: invite.revokedAt?.toISOString() ?? null,
     createdAt: invite.createdAt.toISOString(),
-    state: inviteState(invite, at),
+    state,
+    code:
+      state === "open"
+        ? openInviteCode(sealKey, invite.id, invite.codeSealed)
+        : null,
+    codeKept: invite.codeSealed !== null,
   };
 }
 
@@ -53,6 +66,8 @@ export function createInviteRoutes({
   inviteHashSecret: string;
   now?: () => Date;
 }): RouteDefinition[] {
+  const sealKey = deriveInviteSealKey(inviteHashSecret);
+
   return [
     {
       method: "GET",
@@ -63,7 +78,9 @@ export function createInviteRoutes({
         sendData(
           context.response,
           context.requestId,
-          (await invites.list()).map((invite) => toInviteDto(invite, at)),
+          (await invites.list()).map((invite) =>
+            toInviteDto(invite, at, sealKey),
+          ),
         );
       },
     },
@@ -104,9 +121,11 @@ export function createInviteRoutes({
         const code = newInviteCode();
         const canonical = canonicalInviteCode(code);
         if (!canonical) throw new Error("Generated an unreadable invite code.");
+        const id = randomUUID();
         const created = await invites.create({
-          id: randomUUID(),
+          id,
           codeHash: hashInviteCode(canonical, inviteHashSecret),
+          codeSealed: sealInviteCode(sealKey, id, code),
           label,
           maxUses,
           expiresAt:
@@ -116,11 +135,10 @@ export function createInviteRoutes({
           createdBy: principal.userId,
         });
 
-        // The only time the code leaves the server.
         sendCreated(
           context.response,
           context.requestId,
-          { ...toInviteDto(created, at), code },
+          toInviteDto(created, at, sealKey),
           `/ownAPI/v1/admin/invites/${created.id}`,
         );
       },
@@ -142,7 +160,11 @@ export function createInviteRoutes({
           );
         }
         // Revoking keeps the row: the accounts it admitted still point at it.
-        sendData(context.response, context.requestId, toInviteDto(revoked, at));
+        sendData(
+          context.response,
+          context.requestId,
+          toInviteDto(revoked, at, sealKey),
+        );
       },
     },
   ];

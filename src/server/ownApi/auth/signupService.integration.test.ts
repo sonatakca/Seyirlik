@@ -5,7 +5,10 @@ import { runMigrations } from "../database/migrationRunner";
 import {
   canonicalInviteCode,
   createInviteRepository,
+  deriveInviteSealKey,
   hashInviteCode,
+  openInviteCode,
+  sealInviteCode,
 } from "./invites";
 import type { PasswordHasher } from "./passwords";
 import { createSignupService } from "./signupService";
@@ -34,9 +37,11 @@ integration("creating your own account with an invite", () => {
     code: string,
     { maxUses = 1, expiresAt = null as Date | null } = {},
   ) {
+    const id = crypto.randomUUID();
     return invites.create({
-      id: crypto.randomUUID(),
+      id,
       codeHash: hashInviteCode(canonicalInviteCode(code) as string, secret),
+      codeSealed: sealInviteCode(deriveInviteSealKey(secret), id, code),
       label: null,
       maxUses,
       expiresAt,
@@ -111,6 +116,30 @@ integration("creating your own account with an invite", () => {
         code: "INVITE_INVALID",
       });
     }
+  });
+
+  it("keeps the code sealed, readable only for its own invite", async () => {
+    const created = await invite("AAAA-BBBB-CCCC");
+    const other = await invite("DDDD-EEEE-FFFF");
+    const [stored] = (await invites.list()).filter(
+      (entry) => entry.id === created.id,
+    );
+    const key = deriveInviteSealKey(secret);
+    expect(stored?.codeSealed?.includes(Buffer.from("AAAA"))).toBe(false);
+    expect(openInviteCode(key, created.id, stored?.codeSealed ?? null)).toBe(
+      "AAAA-BBBB-CCCC",
+    );
+    // Ciphertext moved to another row does not open there.
+    expect(
+      openInviteCode(key, other.id, stored?.codeSealed ?? null),
+    ).toBeNull();
+    expect(
+      openInviteCode(
+        deriveInviteSealKey("x".repeat(40)),
+        created.id,
+        stored?.codeSealed ?? null,
+      ),
+    ).toBeNull();
   });
 
   it("keeps the person when their invite is deleted", async () => {

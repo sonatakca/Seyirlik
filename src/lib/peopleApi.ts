@@ -47,6 +47,9 @@ export interface Invite {
   revokedAt: string | null;
   createdAt: string;
   state: InviteState;
+  /** Readable while the invite is open; null once it is not, or never kept. */
+  code: string | null;
+  codeKept: boolean;
 }
 
 export interface LibraryChoice {
@@ -107,8 +110,8 @@ export function createInvite(input: {
   label?: string;
   maxUses: number;
   expiresInDays: number | null;
-}): Promise<Invite & { code: string }> {
-  return ownApiClient.request<Invite & { code: string }>("/admin/invites", {
+}): Promise<Invite> {
+  return ownApiClient.request<Invite>("/admin/invites", {
     method: "POST",
     body: input,
   });

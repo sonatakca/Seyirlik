@@ -1,4 +1,11 @@
-import { createHmac, randomInt } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHmac,
+  hkdfSync,
+  randomBytes,
+  randomInt,
+} from "node:crypto";
 import type { DatabaseExecutor } from "../database/databaseTypes";
 
 /*
@@ -9,6 +16,9 @@ import type { DatabaseExecutor } from "../database/databaseTypes";
 const CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const CODE_LENGTH = 12;
 const CODE_GROUP = 4;
+const SEAL_INFO = "seyirlik invite codes v1";
+const IV_BYTES = 12;
+const TAG_BYTES = 16;
 
 export interface InviteRecord {
   id: string;
@@ -19,6 +29,8 @@ export interface InviteRecord {
   revokedAt: Date | null;
   createdBy: string | null;
   createdAt: Date;
+  /** The code, sealed; null for codes made before it was kept. */
+  codeSealed: Buffer | null;
 }
 
 interface InviteRow {
@@ -30,6 +42,7 @@ interface InviteRow {
   revoked_at: Date | null;
   created_by: string | null;
   created_at: Date;
+  code_sealed: Buffer | null;
 }
 
 function mapInvite(row: InviteRow): InviteRecord {
@@ -42,6 +55,7 @@ function mapInvite(row: InviteRow): InviteRecord {
     revokedAt: row.revoked_at,
     createdBy: row.created_by,
     createdAt: row.created_at,
+    codeSealed: row.code_sealed ?? null,
   };
 }
 
@@ -81,10 +95,59 @@ export function hashInviteCode(canonicalCode: string, secret: string): Buffer {
     .digest();
 }
 
+/**
+ * The key invite codes are sealed under. Derived, with its own label, from a
+ * secret that lives only in the secrets file, so a copy of the database alone
+ * does not show the codes.
+ */
+export function deriveInviteSealKey(secret: string): Buffer {
+  return Buffer.from(
+    hkdfSync("sha256", secret, "seyirlik", SEAL_INFO, 32) as ArrayBuffer,
+  );
+}
+
+/** iv ‖ tag ‖ ciphertext, bound to the invite's id. */
+export function sealInviteCode(
+  key: Buffer,
+  inviteId: string,
+  code: string,
+): Buffer {
+  const iv = randomBytes(IV_BYTES);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  cipher.setAAD(Buffer.from(inviteId, "utf8"));
+  const body = Buffer.concat([cipher.update(code, "utf8"), cipher.final()]);
+  return Buffer.concat([iv, cipher.getAuthTag(), body]);
+}
+
+/** The code, or null when these bytes were not sealed for this invite. */
+export function openInviteCode(
+  key: Buffer,
+  inviteId: string,
+  sealed: Buffer | null,
+): string | null {
+  if (!sealed || sealed.length <= IV_BYTES + TAG_BYTES) return null;
+  try {
+    const decipher = createDecipheriv(
+      "aes-256-gcm",
+      key,
+      sealed.subarray(0, IV_BYTES),
+    );
+    decipher.setAAD(Buffer.from(inviteId, "utf8"));
+    decipher.setAuthTag(sealed.subarray(IV_BYTES, IV_BYTES + TAG_BYTES));
+    return Buffer.concat([
+      decipher.update(sealed.subarray(IV_BYTES + TAG_BYTES)),
+      decipher.final(),
+    ]).toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
 export interface InviteRepository {
   create(input: {
     id: string;
     codeHash: Buffer;
+    codeSealed: Buffer;
     label: string | null;
     maxUses: number;
     expiresAt: Date | null;
@@ -109,10 +172,10 @@ export function createInviteRepository(
     async create(input) {
       const result = await database.query<InviteRow>(
         `INSERT INTO native_invites (
-           id, code_hash, label, max_uses, expires_at, created_by
-         ) VALUES ($1, $2, $3, $4, $5, $6)
+           id, code_hash, label, max_uses, expires_at, created_by, code_sealed
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id, label, max_uses, use_count, expires_at, revoked_at,
-                   created_by, created_at`,
+                   created_by, created_at, code_sealed`,
         [
           input.id,
           input.codeHash,
@@ -120,6 +183,7 @@ export function createInviteRepository(
           input.maxUses,
           input.expiresAt,
           input.createdBy,
+          input.codeSealed,
         ],
       );
       return mapInvite(result.rows[0] as InviteRow);
@@ -128,7 +192,7 @@ export function createInviteRepository(
     async list() {
       const result = await database.query<InviteRow>(
         `SELECT id, label, max_uses, use_count, expires_at, revoked_at,
-                created_by, created_at
+                created_by, created_at, code_sealed
          FROM native_invites
          ORDER BY created_at DESC`,
       );
@@ -141,7 +205,7 @@ export function createInviteRepository(
          SET revoked_at = COALESCE(revoked_at, $2)
          WHERE id = $1
          RETURNING id, label, max_uses, use_count, expires_at, revoked_at,
-                   created_by, created_at`,
+                   created_by, created_at, code_sealed`,
         [id, at],
       );
       const row = result.rows[0];
