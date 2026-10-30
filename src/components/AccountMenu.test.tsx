@@ -82,4 +82,21 @@ describe("account menu", () => {
       screen.queryByRole("menuitem", { name: "nav.notifications" }),
     ).toBeNull();
   });
+
+  it("opens Tapu through its sign-in bridge", () => {
+    render(
+      <MemoryRouter>
+        <AccountMenu />
+        <Routes>
+          <Route path="/tapu" element={<p>bridge</p>} />
+          <Route path="*" element={null} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /nav\.account/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "nav.playTapu" }));
+
+    expect(screen.getByText("bridge")).toBeInTheDocument();
+  });
 });

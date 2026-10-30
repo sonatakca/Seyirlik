@@ -464,6 +464,7 @@ export const en = {
   "nav.language.switchToEnglish": "Switch to English",
   "nav.language.ariaToTurkish": "Switch language to Turkish",
   "nav.language.ariaToEnglish": "Switch language to English",
+  "nav.playTapu": "Play Tapu",
   "nav.changeTheme": "Theme",
   "home.latestMedia": "Latest Media",
   "home.latestAddedMovies": "Latest Added Movies",

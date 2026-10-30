@@ -464,6 +464,7 @@ export const tr = {
   "nav.language.switchToEnglish": "İngilizceye geç",
   "nav.language.ariaToTurkish": "Dili Türkçeye değiştir",
   "nav.language.ariaToEnglish": "Dili İngilizceye değiştir",
+  "nav.playTapu": "Tapu oyna",
   "nav.changeTheme": "Tema",
   "home.latestMedia": "Son Eklenenler",
   "home.latestAddedMovies": "Son Eklenen Filmler",

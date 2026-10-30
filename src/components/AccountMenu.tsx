@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowDownToLine,
+  Dices,
   LogOut,
   Palette,
   ShieldCheck,
@@ -191,6 +192,10 @@ export function AccountMenu({
                 {t("downloads.title")}
               </Link>
             ) : null}
+            <Link to="/tapu" role="menuitem" className={ITEM}>
+              <Dices size={16} className="shrink-0" />
+              {t("nav.playTapu")}
+            </Link>
             {session.isAdministrator ? (
               <Link to="/admin" role="menuitem" className={ITEM}>
                 <ShieldCheck size={16} className="shrink-0" />

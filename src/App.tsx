@@ -31,6 +31,7 @@ import { LibraryAliasPage } from "./pages/LibraryAliasPage";
 import { LoginPage } from "./pages/LoginPage";
 import { PlayerPage } from "./pages/PlayerPage";
 import { ReaderPage } from "./pages/ReaderPage";
+import { TapuBridgePage } from "./pages/TapuBridgePage";
 import { NotificationAnnouncer } from "./components/notifications/NotificationAnnouncer";
 import { useTaskNotifications } from "./hooks/useTaskNotifications";
 import { setPageTitle } from "./lib/pageTitle";
@@ -419,6 +420,8 @@ export default function App() {
             }
           />
           <Route path="/downloads/watch/:itemId" element={<PlayerPage />} />
+          {/* The game's sign-in: only the remembered name is handed over. */}
+          <Route path="/tapu" element={<TapuBridgePage />} />
           <Route
             path="/alerts"
             element={
