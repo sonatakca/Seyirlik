@@ -214,3 +214,19 @@ export function applyQueueOverride(
     named.has(job.id) ? (moved[taken++] ?? job) : job,
   );
 }
+
+/**
+ * A reordered head of the queue, followed by the rest of it as it was.
+ *
+ * The page draws only part of a long queue, and a drag can only measure what
+ * is drawn. Sending that part alone would leave the server to place every
+ * other job by whatever position it last had, so the jobs the drag did not
+ * name follow it, in their existing order.
+ */
+export function completeQueueOrder(
+  reordered: readonly string[],
+  queue: readonly string[],
+): string[] {
+  const named = new Set(reordered);
+  return [...reordered, ...queue.filter((id) => !named.has(id))];
+}

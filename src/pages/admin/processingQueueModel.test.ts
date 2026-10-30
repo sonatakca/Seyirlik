@@ -13,6 +13,7 @@ import type { ProcessingJob } from "../../lib/processingApi";
 import {
   applyQueueOverride,
   canReorder,
+  completeQueueOrder,
   isConcluded,
   moveItem,
   orderHistory,
@@ -347,5 +348,24 @@ describe("holding the dragged order until the server agrees", () => {
     const ordered = [job({ id: "a" }), job({ id: "b" })];
     expect(ids(applyQueueOverride(ordered, null))).toEqual(["a", "b"]);
     expect(ids(applyQueueOverride(ordered, []))).toEqual(["a", "b"]);
+  });
+});
+
+describe("completeQueueOrder", () => {
+  it("keeps the undrawn tail of the queue behind a reordered head", () => {
+    expect(completeQueueOrder(["b", "a"], ["a", "b", "c", "d"])).toEqual([
+      "b",
+      "a",
+      "c",
+      "d",
+    ]);
+  });
+
+  it("leaves a complete order alone", () => {
+    expect(completeQueueOrder(["c", "a", "b"], ["a", "b", "c"])).toEqual([
+      "c",
+      "a",
+      "b",
+    ]);
   });
 });

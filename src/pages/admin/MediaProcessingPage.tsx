@@ -2,8 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
   ChevronsDown,
   ChevronsUp,
   Cpu,
@@ -110,6 +108,7 @@ import {
 import {
   applyQueueOverride,
   canReorder,
+  completeQueueOrder,
   moveItem,
   partitionProcessingJobs,
   PROCESSING_OUTCOME_TABS,
@@ -174,10 +173,12 @@ const BUTTON =
 const PROCESSING_REFRESH_MS = 1_000;
 
 /**
- * Concluded jobs per page. Only history is paged: the queue is one order, and
- * a move to the top has to be able to reach the job at the bottom of it.
+ * How many more rows each "Show more" adds. Both lists grow in place rather
+ * than paging: the queue is one order, so a drag or a move to the top always
+ * acts on all of it, shown or not; history is fetched as far as it is shown.
  */
-const HISTORY_PAGE_SIZE = 25;
+const QUEUE_STEP = 50;
+const HISTORY_STEP = 25;
 
 /** The page's own translator, so a helper cannot be handed an unknown key. */
 type Translate = ReturnType<typeof useLanguage>["t"];
@@ -1489,13 +1490,15 @@ export function MediaProcessingPage() {
    * happened" — and only the first of them can be reordered.
    */
   const [outcomeTab, setOutcomeTab] = useState<ProcessingOutcomeTab>("active");
-  /** The page of concluded jobs on show, from zero (the newest). */
-  const [historyPage, setHistoryPage] = useState(0);
+  /** How many queue rows are drawn. Every job is still in the order. */
+  const [queueShown, setQueueShown] = useState(QUEUE_STEP);
+  /** How many concluded jobs are fetched and drawn, newest first. */
+  const [historyShown, setHistoryShown] = useState(HISTORY_STEP);
   /*
-   * Read by the poll through a ref so turning the page does not rebuild the
-   * poll's timer; the page change itself asks for a refresh below.
+   * Read by the poll through a ref so showing more does not rebuild the poll's
+   * timer; the change itself asks for a refresh below.
    */
-  const historyPageRef = useRef(historyPage);
+  const historyShownRef = useRef(historyShown);
   /**
    * The order the operator has just dragged the queue into.
    *
@@ -1618,8 +1621,8 @@ export function MediaProcessingPage() {
         setOverview(
           await getProcessingOverview({
             history: {
-              offset: historyPageRef.current * HISTORY_PAGE_SIZE,
-              limit: HISTORY_PAGE_SIZE,
+              offset: 0,
+              limit: historyShownRef.current,
             },
           }),
         );
@@ -1657,18 +1660,18 @@ export function MediaProcessingPage() {
   }, [refreshOverview]);
 
   /*
-   * A new page of history is fetched at once rather than on the next tick. A
-   * poll already in flight was asked for the old page, so it is let finish
-   * and a fresh one follows it.
+   * More history is fetched at once rather than on the next tick. A poll
+   * already in flight was asked for fewer rows, so it is let finish and a
+   * fresh one follows it.
    */
   useEffect(() => {
-    if (historyPageRef.current === historyPage) return;
-    historyPageRef.current = historyPage;
+    if (historyShownRef.current === historyShown) return;
+    historyShownRef.current = historyShown;
     void (async () => {
       await overviewRequestRef.current;
       await refreshOverview();
     })();
-  }, [historyPage, refreshOverview]);
+  }, [historyShown, refreshOverview]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2272,24 +2275,18 @@ export function MediaProcessingPage() {
     [activeJobs, dragFreeze, queueOverride],
   );
   /*
-   * Every concluded job, not the page of them on show: the count on the tab
-   * answers "how much history is there", and the pager needs the same figure.
+   * Every concluded job, not the ones on show: the count on the tab answers
+   * "how much history is there", and "Show more" needs the same figure.
    */
   const finishedTotal = counts
     ? counts.succeeded + counts.failed + counts.cancelled
     : finishedJobs.length;
-  const historyPages = Math.max(1, Math.ceil(finishedTotal / HISTORY_PAGE_SIZE));
-  /*
-   * History shrinks when an entry is removed, and the page on show can end up
-   * past the last one. Step back rather than show an empty page that claims
-   * nothing has finished.
-   */
-  useEffect(() => {
-    if (historyPage > historyPages - 1) setHistoryPage(historyPages - 1);
-  }, [historyPage, historyPages]);
   /** The rows that are genuinely still waiting, and so can be moved. */
   const movableQueue = useMemo(() => queue.filter(canReorder), [queue]);
   const visibleJobs = outcomeTab === "active" ? queue : finishedJobs;
+  const shownJobs =
+    outcomeTab === "active" ? queue.slice(0, queueShown) : finishedJobs;
+  const listTotal = outcomeTab === "active" ? queue.length : finishedTotal;
 
   /*
    * The optimistic order is dropped the moment it stops being useful: either
@@ -2351,9 +2348,17 @@ export function MediaProcessingPage() {
   const sortable = useQueueSortable({
     ids: movableIds,
     disabled: reorderBusy,
-    onDragStart: setDragFreeze,
+    /*
+     * A drag only measures the rows that are drawn. The rest of the line
+     * follows them in its current order, both in the order the list is held
+     * in and in the one the server is handed — otherwise the check below
+     * reads the undrawn jobs as the queue changing, and cancels the drag.
+     */
+    onDragStart: (orderedIds) =>
+      setDragFreeze(completeQueueOrder(orderedIds, movableIds)),
     onDragEnd: () => setDragFreeze(null),
-    onCommit: (orderedIds) => void commitQueueOrder(orderedIds),
+    onCommit: (orderedIds) =>
+      void commitQueueOrder(completeQueueOrder(orderedIds, movableIds)),
   });
 
   /*
@@ -3672,7 +3677,7 @@ export function MediaProcessingPage() {
                 aria-labelledby={`processing-outcome-${outcomeTab}`}
               >
                 <ul className="flex flex-col gap-2">
-                  {visibleJobs.map((job) => {
+                  {shownJobs.map((job) => {
                     const percent = progressPercent(job);
                     const jobLive =
                       live?.jobId === job.id ? live.snapshot : null;
@@ -4313,42 +4318,34 @@ export function MediaProcessingPage() {
                     );
                   })}
                 </ul>
-                {outcomeTab === "finished" && historyPages > 1 ? (
-                  <nav
-                    aria-label={t("processing.history.pages")}
-                    className="mt-3 flex items-center justify-between gap-3"
-                  >
+                {shownJobs.length < listTotal ? (
+                  <div className="mt-3 flex flex-col items-center gap-1">
                     <button
                       type="button"
-                      disabled={historyPage === 0}
-                      onClick={() => setHistoryPage((page) => page - 1)}
-                      className="inline-flex h-9 items-center gap-1 rounded-xl px-3 text-xs font-bold text-white/70 transition hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-30 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                      onClick={() =>
+                        outcomeTab === "active"
+                          ? setQueueShown((shown) => shown + QUEUE_STEP)
+                          : setHistoryShown((shown) => shown + HISTORY_STEP)
+                      }
+                      className="inline-flex h-9 items-center gap-1 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-xs font-bold text-white/75 transition hover:bg-white/[0.08] hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
                     >
-                      <ChevronLeft size={14} aria-hidden="true" />
-                      {t("processing.history.newer")}
-                    </button>
-                    <span className="text-xs tabular-nums text-white/45">
-                      {formatTemplate(t("processing.history.range"), {
-                        from: String(historyPage * HISTORY_PAGE_SIZE + 1),
-                        to: String(
+                      <ChevronsDown size={14} aria-hidden="true" />
+                      {formatTemplate(t("processing.more.show"), {
+                        count: String(
                           Math.min(
-                            (historyPage + 1) * HISTORY_PAGE_SIZE,
-                            finishedTotal,
+                            outcomeTab === "active" ? QUEUE_STEP : HISTORY_STEP,
+                            listTotal - shownJobs.length,
                           ),
                         ),
-                        total: String(finishedTotal),
+                      })}
+                    </button>
+                    <span className="text-xs tabular-nums text-white/40">
+                      {formatTemplate(t("processing.more.range"), {
+                        shown: String(shownJobs.length),
+                        total: String(listTotal),
                       })}
                     </span>
-                    <button
-                      type="button"
-                      disabled={historyPage >= historyPages - 1}
-                      onClick={() => setHistoryPage((page) => page + 1)}
-                      className="inline-flex h-9 items-center gap-1 rounded-xl px-3 text-xs font-bold text-white/70 transition hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-30 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
-                    >
-                      {t("processing.history.older")}
-                      <ChevronRight size={14} aria-hidden="true" />
-                    </button>
-                  </nav>
+                  </div>
                 ) : null}
               </div>
             )}

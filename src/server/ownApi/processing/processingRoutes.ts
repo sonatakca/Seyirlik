@@ -23,6 +23,7 @@ import {
 import { ADAPTIVE_PROFILE_VERSION } from "../../../renditions/adaptive/profile";
 import {
   ACTIVE_LISTING_CEILING,
+  HISTORY_LISTING_CEILING,
   type ProcessingJobRecord,
   type ProcessingJobStore,
   type ProcessingState,
@@ -638,14 +639,14 @@ export function createProcessingRoutes({
       handle: async (context) => {
         context.requirePrincipal();
         /*
-         * The whole queue, and one page of history. The queue is never paged:
-         * it is a single order, and a reorder or a "move to top" has to be able
-         * to reach every job in it. History is paged because it only grows,
-         * and nothing on it is ever moved.
+         * The whole queue, and as much history as the page is showing. The
+         * queue is never cut: it is a single order, and a reorder or a "move
+         * to top" has to be able to reach every job in it. History is cut
+         * because it only grows, and nothing on it is ever moved.
          */
         const historyLimit = parseLimit(
           context.url.searchParams.get("historyLimit"),
-          200,
+          HISTORY_LISTING_CEILING,
           HISTORY_PAGE_SIZE,
         );
         const historyOffset = parseOffset(
@@ -1081,7 +1082,11 @@ export function createProcessingRoutes({
         context.requirePrincipal();
         await store.reconcileTerminalQueueJobs();
         const stateParam = context.url.searchParams.get("state");
-        const limit = parseLimit(context.url.searchParams.get("limit"), 200, 50);
+        const limit = parseLimit(
+          context.url.searchParams.get("limit"),
+          200,
+          50,
+        );
         const jobs = await store.list({
           ...(stateParam ? { state: stateParam as ProcessingState } : {}),
           limit,

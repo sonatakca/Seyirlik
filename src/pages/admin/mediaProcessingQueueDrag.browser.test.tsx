@@ -650,3 +650,43 @@ describe("dragging a queued encode with a real mouse", () => {
     expect(reorderProcessingQueue).not.toHaveBeenCalled();
   });
 });
+
+describe("dragging in a queue longer than the page draws", () => {
+  /** Letters only, because rows are found by an all-letter title. */
+  const name = (n: number) =>
+    `long${String.fromCharCode(97 + Math.floor(n / 26))}${String.fromCharCode(97 + (n % 26))}`;
+  const LONG = Array.from({ length: 55 }, (_, n) => name(n));
+
+  it("saves the undrawn tail behind the rows it moved", async () => {
+    cleanup();
+    overview = baseOverview(
+      LONG.map((id, n) => job({ id, queuePriority: 100 + n })),
+    );
+    render(
+      <MemoryRouter>
+        <Page />
+      </MemoryRouter>,
+    );
+    await userEvent.click(
+      await screen.findByRole("tab", { name: /tabs.processes/ }),
+    );
+    await waitFor(() => expect(waitingRows()).toHaveLength(50));
+    rowFor(LONG[0]!).scrollIntoView({ block: "start" });
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+
+    await pickUp(LONG[0]!, centreOf(rowFor(LONG[2]!)).y);
+    await waitFor(() =>
+      expect(slotOrder().slice(0, 3)).toEqual([LONG[1], LONG[2], LONG[0]]),
+    );
+    await commands.pointer("up");
+
+    await waitFor(() =>
+      expect(reorderProcessingQueue).toHaveBeenCalledWith([
+        LONG[1],
+        LONG[2],
+        LONG[0],
+        ...LONG.slice(3),
+      ]),
+    );
+  });
+});

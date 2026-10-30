@@ -313,6 +313,12 @@ const QUEUE_PRIORITY_BASE = 100;
 export const ACTIVE_LISTING_CEILING = 5_000;
 
 /**
+ * How far the page's history can be shown. It grows by "Show more" and is
+ * re-read on every poll, so it is bounded well below the queue's guard.
+ */
+export const HISTORY_LISTING_CEILING = 1_000;
+
+/**
  * The ceiling on a recorded failure message.
  *
  * Trimmed rather than rejected, which is the whole point. The column was once
@@ -506,7 +512,7 @@ export interface ProcessingJobStore {
    * `outcome` splits the listing the way the page does. `active` is the whole
    * queue — unbounded by default, because the line is one order and a page that
    * shows only its head cannot move anything past it. `finished` is history,
-   * newest first, and is paged with `limit` and `offset`.
+   * newest first, read as far as `limit` (and from `offset`).
    */
   list(options?: {
     state?: ProcessingState;
@@ -755,7 +761,11 @@ export function createProcessingJobStore(
 
     async list(options = {}) {
       const ceiling =
-        options.outcome === "active" ? ACTIVE_LISTING_CEILING : 200;
+        options.outcome === "active"
+          ? ACTIVE_LISTING_CEILING
+          : options.outcome === "finished"
+            ? HISTORY_LISTING_CEILING
+            : 200;
       const limit = Math.min(
         Math.max(
           options.limit ?? (options.outcome === "active" ? ceiling : 50),

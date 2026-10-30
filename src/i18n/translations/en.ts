@@ -1109,10 +1109,8 @@ export const en = {
   "processing.counts.warnings": "With warnings",
   "processing.outcome.active": "In progress",
   "processing.outcome.finished": "Concluded",
-  "processing.history.pages": "Concluded jobs pages",
-  "processing.history.newer": "Newer",
-  "processing.history.older": "Older",
-  "processing.history.range": "{from}–{to} of {total}",
+  "processing.more.show": "Show {count} more",
+  "processing.more.range": "{shown} of {total}",
   "processing.outcome.chooseOutcome": "Processing state",
   "processing.outcome.emptyActive": "Nothing is being processed.",
   "processing.outcome.emptyActiveHint":
