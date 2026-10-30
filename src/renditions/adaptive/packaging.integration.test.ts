@@ -36,6 +36,8 @@ import {
   getAdaptiveFixtureDirectory,
 } from "./testFixtures";
 import { ADAPTIVE_PROFILE_VERSION } from "./profile";
+import { createEncoderSlot } from "../encoderSlot";
+import { runFfmpeg } from "../processor";
 
 const MEDIA_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -736,5 +738,80 @@ describe("resume behaviour", () => {
     const second = await packageAdaptiveRendition(request, paths, options);
     expect(second.status).toBe("already-valid");
     expect(second.versionDirectory).toBe(first.versionDirectory);
+  }, 300_000);
+});
+
+describe("several builds in one worker", () => {
+  it("encodes one title's video at a time and builds everything else beside it", async () => {
+    if (!ffmpegAvailable) {
+      console.warn("FFmpeg is not available; skipping encoder slot test.");
+      return;
+    }
+    const slot = createEncoderSlot();
+    let encoding = 0;
+    let mostAtOnce = 0;
+    let videoRuns = 0;
+    const runEncoder = async (
+      command: string,
+      args: string[],
+      options: Parameters<typeof runFfmpeg>[2],
+    ) => {
+      // The ladder's filter graph marks a video epoch; audio runs without one.
+      const video = args.includes("-filter_complex");
+      if (video) {
+        encoding += 1;
+        videoRuns += 1;
+        mostAtOnce = Math.max(mostAtOnce, encoding);
+      }
+      try {
+        await runFfmpeg(command, args, options);
+      } finally {
+        if (video) encoding -= 1;
+      }
+    };
+    const build = async (mediaId: string) => {
+      const paths = await createPaths();
+      const titleRoot = await mkdtemp(path.join(workspace, "title-"));
+      const sourcePath = path.join(
+        titleRoot,
+        ADAPTIVE_SOURCE_FIXTURES[0]!.fileName,
+      );
+      await copyFile(
+        path.join(
+          getAdaptiveFixtureDirectory(),
+          ADAPTIVE_SOURCE_FIXTURES[0]!.fileName,
+        ),
+        sourcePath,
+      );
+      return packageAdaptiveRendition(
+        {
+          mediaId,
+          relativePath: path.basename(sourcePath),
+          sourceFingerprint: await computeSourceFingerprint(
+            sourcePath,
+            await stat(sourcePath),
+          ),
+          sourcePath,
+        },
+        paths,
+        {
+          reserveBytes: 0,
+          preset: "ultrafast",
+          verifySourceFingerprint: false,
+          encoderSlot: slot,
+          runEncoder,
+        },
+      );
+    };
+
+    const results = await Promise.all([
+      build("22222222-2222-4222-8222-222222222222"),
+      build("33333333-3333-4333-8333-333333333333"),
+    ]);
+
+    expect(results.map((result) => result.status)).toEqual(["ready", "ready"]);
+    expect(videoRuns).toBeGreaterThanOrEqual(2);
+    expect(mostAtOnce).toBe(1);
+    expect(slot.busy).toBe(false);
   }, 300_000);
 });

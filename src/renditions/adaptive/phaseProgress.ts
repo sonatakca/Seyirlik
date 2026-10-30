@@ -269,7 +269,12 @@ export interface VerificationPhaseProgress {
  * (encodes, measurements) rather than as a fraction of an unknown total.
  */
 export interface PlanningPhaseProgress {
-  step: "timeline" | "rates";
+  /**
+   * `encoder` is a wait, not work: the plan is made and another title holds
+   * the worker's encoder (`encoderSlot.ts`). The fields keep what the steps
+   * before it reported.
+   */
+  step: "timeline" | "rates" | "encoder";
   /** Epoch boundaries whose frame times are being read. */
   boundaryCount: number;
   /** Epochs in the plan, once it is made. */

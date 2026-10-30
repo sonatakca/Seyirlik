@@ -34,6 +34,32 @@ already provides leases, retry, cancellation and de-duplication, so a processing
 job has one scheduling row there and one domain row in `processing_jobs`. A
 worker claims the first and writes the second.
 
+### One encoder, several titles
+
+Most of a title's time is not spent encoding. On the laptop an eleven-minute
+episode took about 130 s to plan (frame times, then sample encodes scored with
+VMAF), 124 s to encode, and about 70 s to assemble, verify and publish — and with
+one job at a time the GPU waited through all but the encode.
+
+So the media lane holds several jobs (`SEYIRLIK_MEDIA_CONCURRENCY`, 3 by
+default, 1 for the old behaviour), and the encoder is a slot each build takes
+for exactly the work that drives it (`renditions/encoderSlot.ts`):
+
+- **its video epochs**, given back the moment they finish, before audio;
+- **its rate probe's sample encodes**, every candidate rate in one hold, encoding
+  only the rungs that are scored. The VMAF scoring that follows runs on the CPU
+  outside the slot.
+
+Everything else runs beside the encode, so the next title plans and the last
+one verifies while this one encodes. Waiters are served in the order they asked.
+A build waiting for the slot says so on its planning panel; one paused before its
+encode starts waits without the slot, while one paused mid-encode keeps it
+(its suspended FFmpeg still holds the GPU's sessions).
+
+The free-space preflight counts what the other builds in the process have
+reserved and not yet written. A title that fits on its own but not beside them
+waits for them rather than failing.
+
 ## Hardware
 
 `detectHardware()` probes by actually encoding a frame at the size processing

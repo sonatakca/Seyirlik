@@ -77,6 +77,7 @@ import { createJobHandlers, JOB_TYPES } from "./tasks/jobHandlers";
 import {
   ownsLibrary,
   ownsProcessing,
+  parseMediaConcurrency,
   parseWorkerRole,
   workerLanes,
 } from "./tasks/workerRole";
@@ -1814,9 +1815,10 @@ export async function createNativeRuntime({
     /*
      * Three resources, three lanes.
      *
-     * Encoding holds this machine's video encoder and stays at one job at a
-     * time — the capacity it has always had, and the one figure here that must
-     * not drift upward by accident. Sheet generation holds a decoder and a
+     * Processing runs a few titles at once, but the video encoder they share
+     * is still one encode at a time: it is a slot each build takes for its
+     * epochs (`encoderSlot.ts`), so the next title plans and the last one
+     * verifies beside the encode. Sheet generation holds a decoder and a
      * source volume for minutes and is likewise one at a time, for reasons
      * measured beside `TRICKPLAY_LANE_JOB_TYPES`. What is left is discovery,
      * reconciliation and bookkeeping: several libraries can be read at once,
@@ -1834,6 +1836,9 @@ export async function createNativeRuntime({
       ],
       {
         bridge: bridgeWorker,
+        mediaConcurrency: parseMediaConcurrency(
+          environment.SEYIRLIK_MEDIA_CONCURRENCY,
+        ),
       },
     ),
     handlers: {

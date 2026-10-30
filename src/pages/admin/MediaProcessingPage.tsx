@@ -804,8 +804,19 @@ function PlanningPanel({
       key: "timeline",
       state: progress.step === "timeline" ? "running" : "complete",
     },
-    ...(progress.step === "rates"
-      ? [{ key: "rates", state: "running" as const }]
+    ...(progress.step === "rates" || (progress.step === "encoder" && rates)
+      ? [
+          {
+            key: "rates",
+            state:
+              progress.step === "rates"
+                ? ("running" as const)
+                : ("complete" as const),
+          },
+        ]
+      : []),
+    ...(progress.step === "encoder"
+      ? [{ key: "encoder", state: "running" as const }]
       : []),
   ];
   return (
@@ -818,9 +829,11 @@ function PlanningPanel({
               ? formatTemplate(t("processing.planning.timeline"), {
                   count: String(progress.boundaryCount),
                 })
-              : rates?.reused
-                ? t("processing.planning.ratesReused")
-                : t("processing.planning.rates")}
+              : step.key === "encoder"
+                ? t("processing.planning.encoder")
+                : rates?.reused
+                  ? t("processing.planning.ratesReused")
+                  : t("processing.planning.rates")}
           </span>
         </div>
       ))}

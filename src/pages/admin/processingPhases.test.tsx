@@ -486,6 +486,23 @@ describe("phase panels render the measurements they are given", () => {
     ).toBeTruthy();
   });
 
+  it("says when a planned title is waiting for the encoder", async () => {
+    await renderPanel(
+      live({
+        phase: "planning",
+        planning: {
+          step: "encoder",
+          boundaryCount: 4,
+          epochCount: 5,
+          rateProbe: { encodes: 20, measurements: 6 },
+        },
+      }),
+    );
+    expect(screen.getByText("processing.planning.timeline")).toBeTruthy();
+    expect(screen.getByText("processing.planning.rates")).toBeTruthy();
+    expect(screen.getByText("processing.planning.encoder")).toBeTruthy();
+  });
+
   it("lists every subtitle track with its own state", async () => {
     await renderPanel(
       live({

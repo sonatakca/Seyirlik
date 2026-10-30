@@ -1135,6 +1135,8 @@ export const tr = {
     "{encodes} örnek kodlama · {measurements} kalite ölçümü",
   "processing.planning.rateRung": "{rendition} puanlanıyor",
   "processing.planning.epochs": "{count} kontrol noktalı bölüm planlandı",
+  "processing.planning.encoder":
+    "Kodlayıcı bekleniyor: başka bir başlık kodlanıyor",
   "processing.subtitles.tracks": "altyazı parçası dönüştürüldü",
   "processing.subtitles.embedded": "kaynağın içinde",
   "processing.subtitles.sidecar": "kaynağın yanındaki dosya",

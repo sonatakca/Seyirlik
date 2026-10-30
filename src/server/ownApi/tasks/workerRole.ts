@@ -96,6 +96,31 @@ function bridgeLanes(lanes: readonly WorkerLane[]): WorkerLane[] {
   });
 }
 
+/**
+ * How many processing jobs the media lane holds at once.
+ *
+ * Not how many encode: the encoder is one slot (`encoderSlot.ts`) that a job
+ * takes only for its video epochs and its rate probe's sample encodes. The
+ * rest — probing, VMAF scoring, audio, assembly, verification, publication —
+ * is CPU and disk, and with three jobs the next title plans and the last one
+ * verifies while this one encodes. More would mostly add jobs waiting for the
+ * slot while holding their place in the queue.
+ */
+export const DEFAULT_MEDIA_CONCURRENCY = 3;
+
+/** `SEYIRLIK_MEDIA_CONCURRENCY`; 1 restores one title at a time. */
+export function parseMediaConcurrency(value: string | undefined): number {
+  const text = value?.trim();
+  if (!text) return DEFAULT_MEDIA_CONCURRENCY;
+  const count = Number(text);
+  if (!Number.isInteger(count) || count < 1 || count > 8) {
+    throw new Error(
+      "SEYIRLIK_MEDIA_CONCURRENCY must be a whole number from 1 to 8.",
+    );
+  }
+  return count;
+}
+
 export function parseWorkerRole(value: string | undefined): WorkerRole {
   const role = value?.trim().toLowerCase() || "all";
   if (role === "all" || role === "light" || role === "heavy") return role;
@@ -115,20 +140,24 @@ export function ownsLibrary(runWorker: boolean, role: WorkerRole): boolean {
 export function workerLanes(
   role: WorkerRole,
   disabledJobTypes: readonly string[],
-  { bridge = false }: { bridge?: boolean } = {},
+  {
+    bridge = false,
+    mediaConcurrency = DEFAULT_MEDIA_CONCURRENCY,
+  }: { bridge?: boolean; mediaConcurrency?: number } = {},
 ): WorkerLane[] {
-  const lanes = roleLanes(role, disabledJobTypes);
+  const lanes = roleLanes(role, disabledJobTypes, mediaConcurrency);
   return bridge ? bridgeLanes(lanes) : lanes;
 }
 
 function roleLanes(
   role: WorkerRole,
   disabledJobTypes: readonly string[],
+  mediaConcurrency: number,
 ): WorkerLane[] {
   const mediaLane: WorkerLane = {
     name: "media",
     jobTypes: [...MEDIA_LANE_JOB_TYPES],
-    concurrency: 1,
+    concurrency: mediaConcurrency,
   };
   const trickplayLane: WorkerLane = {
     name: "trickplay",

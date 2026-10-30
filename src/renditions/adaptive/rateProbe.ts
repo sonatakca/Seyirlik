@@ -35,6 +35,13 @@ import {
  *
  * Everything here is advisory: a probe that fails, times out, or finds no
  * `libvmaf` leaves the title on the table rates it would have had anyway.
+ *
+ * The samples are encoded first, every candidate rate at once, and scored
+ * afterwards. Only the encodes need the GPU, and they hold the worker's
+ * encoder slot (`encoderSlot.ts`) once, briefly, rather than once per rate in
+ * between another title's epochs; the scoring then runs on the CPU while that
+ * title encodes. Only the rungs that are scored are encoded: the small ones
+ * cost sessions and decoder time and were never looked at.
  */
 
 /** Fractions of the table rate tried, lowest first. */
@@ -293,6 +300,8 @@ export interface ProbeTitleRatesInput {
   signal?: AbortSignal;
   /** Holds off between steps while the queue is paused. */
   waitWhilePaused?: () => Promise<void>;
+  /** Runs the sample encodes while holding the encoder; see `encoderSlot.ts`. */
+  holdEncoder?: <T>(work: () => Promise<T>) => Promise<T>;
   /** Called after each sample encode and each VMAF measurement finishes. */
   onProgress?: (progress: {
     encodes: number;
@@ -324,64 +333,68 @@ export async function probeTitleRates(
   await rm(sampleRoot, { recursive: true, force: true });
   await mkdir(sampleRoot, { recursive: true });
   const vmafThreads = Math.max(1, cpus().length - 2);
-  const encodes = new Map<number, Promise<string[]>>();
+  /** The rungs that are scored, in the order they appear in each sample file. */
+  const measured = input.outputs.filter(
+    (output) => output.qualityHeight >= RATE_PROBE_MIN_HEIGHT,
+  );
+  const encodes = new Map<number, string[]>();
   let encodesDone = 0;
   let measurementsDone = 0;
 
-  const encodeAt = (factor: number): Promise<string[]> => {
-    let pending = encodes.get(factor);
-    if (!pending) {
-      pending = (async () => {
-        const outputs = input.outputs.map((output) => ({
-          ...output,
-          bitrate: rateAt(output.qualityHeight, input.codecFamily, factor),
-        }));
-        const files: string[] = [];
-        for (const [index, window] of windows.entries()) {
-          await input.waitWhilePaused?.();
-          const outputPath = path.join(sampleRoot, `f${factor}-w${index}.mp4`);
-          await runBoundedProcess({
-            command: input.ffmpegPath,
-            args: buildAdaptiveSampleFfmpegArgs({
-              inputPath: input.sourcePath,
-              startSeconds: window.startSeconds,
-              durationSeconds: window.durationSeconds,
-              outputPath,
-              videoOutputs: outputs,
-              encoder: input.encoder,
-              preset: input.preset,
-              segmentSeconds: input.segmentSeconds,
-              ...(input.frameRate === undefined
-                ? {}
-                : { frameRate: input.frameRate }),
-              ...(input.filterComplexThreads === undefined
-                ? {}
-                : { filterComplexThreads: input.filterComplexThreads }),
-            }),
-            timeoutMs: ENCODE_TIMEOUT_MS,
-            describe: "rate probe encode",
-            ...(input.signal ? { signal: input.signal } : {}),
-          });
-          files.push(outputPath);
-          encodesDone += 1;
-          input.onProgress?.({
-            encodes: encodesDone,
-            measurements: measurementsDone,
-          });
-        }
-        return files;
-      })();
-      encodes.set(factor, pending);
+  /*
+   * Not held for a pause: these run inside the encoder slot, and a pause here
+   * would keep every other title's encode waiting. They are seconds of work;
+   * the pause takes effect at the first measurement after them.
+   */
+  const encodeAll = async (): Promise<void> => {
+    for (const factor of RATE_PROBE_FACTORS) {
+      const outputs = measured.map((output) => ({
+        ...output,
+        bitrate: rateAt(output.qualityHeight, input.codecFamily, factor),
+      }));
+      const files: string[] = [];
+      for (const [index, window] of windows.entries()) {
+        const outputPath = path.join(sampleRoot, `f${factor}-w${index}.mp4`);
+        await runBoundedProcess({
+          command: input.ffmpegPath,
+          args: buildAdaptiveSampleFfmpegArgs({
+            inputPath: input.sourcePath,
+            startSeconds: window.startSeconds,
+            durationSeconds: window.durationSeconds,
+            outputPath,
+            videoOutputs: outputs,
+            encoder: input.encoder,
+            preset: input.preset,
+            segmentSeconds: input.segmentSeconds,
+            ...(input.frameRate === undefined
+              ? {}
+              : { frameRate: input.frameRate }),
+            ...(input.filterComplexThreads === undefined
+              ? {}
+              : { filterComplexThreads: input.filterComplexThreads }),
+          }),
+          timeoutMs: ENCODE_TIMEOUT_MS,
+          describe: "rate probe encode",
+          ...(input.signal ? { signal: input.signal } : {}),
+        });
+        files.push(outputPath);
+        encodesDone += 1;
+        input.onProgress?.({
+          encodes: encodesDone,
+          measurements: measurementsDone,
+        });
+      }
+      encodes.set(factor, files);
     }
-    return pending;
   };
 
   const measure = async (
     rungIndex: number,
     factor: number,
   ): Promise<RungQuality> => {
-    const files = await encodeAt(factor);
+    const files = encodes.get(factor)!;
     const output = input.outputs[rungIndex]!;
+    const sampleStream = measured.indexOf(output);
     const scores: number[] = [];
     for (const [index, window] of windows.entries()) {
       await input.waitWhilePaused?.();
@@ -415,7 +428,7 @@ export async function probeTitleRates(
           "-i",
           input.sourcePath,
           "-lavfi",
-          `[0:v:${rungIndex}]setpts=PTS-STARTPTS,format=yuv420p[distorted];` +
+          `[0:v:${sampleStream}]setpts=PTS-STARTPTS,format=yuv420p[distorted];` +
             `[1:v:0]${reference}[reference];` +
             `[distorted][reference]libvmaf=n_threads=${vmafThreads}:log_fmt=json:log_path=${filterPath(logPath)}`,
           "-f",
@@ -445,6 +458,7 @@ export async function probeTitleRates(
   };
 
   try {
+    await (input.holdEncoder ? input.holdEncoder(encodeAll) : encodeAll());
     const result = await chooseRungRates({
       outputs: input.outputs,
       codecFamily: input.codecFamily,

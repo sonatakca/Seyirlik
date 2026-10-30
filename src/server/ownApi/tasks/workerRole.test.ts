@@ -7,10 +7,12 @@ import { JOB_TYPES } from "./jobHandlers";
 import { SUBTITLE_ANALYSIS_JOB_TYPE } from "../subtitles/subtitleAnalysis";
 import {
   ANALYSIS_LANE_JOB_TYPES,
+  DEFAULT_MEDIA_CONCURRENCY,
   HEAVY_JOB_TYPES,
   LONG_JOB_TYPES,
   ownsLibrary,
   ownsProcessing,
+  parseMediaConcurrency,
   parseWorkerRole,
   workerLanes,
 } from "./workerRole";
@@ -108,6 +110,30 @@ describe("worker roles", () => {
     ]);
     expect(claimingLane(all, IMPORT_JOB_TYPES.run)).toBe("library");
     expect(claimingLane(all, SUBTITLE_JOB_TYPES.run)).toBeNull();
+  });
+
+  it("runs a few titles at once in the media lane, and only there", () => {
+    for (const role of ["heavy", "all"] as const) {
+      const lanes = workerLanes(role, []);
+      expect(lanes.find((lane) => lane.name === "media")?.concurrency).toBe(
+        DEFAULT_MEDIA_CONCURRENCY,
+      );
+      expect(lanes.find((lane) => lane.name === "trickplay")?.concurrency).toBe(
+        1,
+      );
+      expect(
+        workerLanes(role, [], { mediaConcurrency: 1 }).find(
+          (lane) => lane.name === "media",
+        )?.concurrency,
+      ).toBe(1);
+    }
+    expect(parseMediaConcurrency(undefined)).toBe(DEFAULT_MEDIA_CONCURRENCY);
+    expect(parseMediaConcurrency(" 2 ")).toBe(2);
+    for (const bad of ["0", "1.5", "nine", "9"]) {
+      expect(() => parseMediaConcurrency(bad)).toThrow(
+        /SEYIRLIK_MEDIA_CONCURRENCY/,
+      );
+    }
   });
 
   /*

@@ -1136,6 +1136,8 @@ export const en = {
     "{encodes} sample encodes · {measurements} quality measurements",
   "processing.planning.rateRung": "scoring {rendition}",
   "processing.planning.epochs": "{count} checkpointed epochs planned",
+  "processing.planning.encoder":
+    "Waiting for the encoder: another title is encoding",
   "processing.subtitles.tracks": "subtitle tracks converted",
   "processing.subtitles.embedded": "in the source",
   "processing.subtitles.sidecar": "file beside the source",

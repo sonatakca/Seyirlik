@@ -39,6 +39,7 @@ import {
   type RenditionVideoEncoder,
 } from "../encoding";
 import { acquireDirectoryLock } from "../locks";
+import { sharedEncoderSlot, type EncoderSlot } from "../encoderSlot";
 import { DEFAULT_STORAGE_SAFETY_MARGIN } from "../planning";
 import {
   buildRenditionRequirements,
@@ -355,6 +356,12 @@ export interface AdaptivePackagerOptions {
    * default; it only ever acts for rate-targeted encoders with `libvmaf`.
    */
   rateProbe?: boolean;
+  /**
+   * The encoder this build shares with the worker's other jobs. Held for the
+   * video epochs and the rate probe's sample encodes, and for nothing else;
+   * see `encoderSlot.ts`. The process's own slot by default.
+   */
+  encoderSlot?: EncoderSlot;
   /** Explicit software CPU budget; automatic topology detection is the default. */
   softwareThreads?: number;
   /**
@@ -825,6 +832,48 @@ async function readVerifiedScratchPackage({
   };
 }
 
+/**
+ * Scratch that builds in this process have counted on and not yet written.
+ *
+ * The free-space preflight reads the drive as it is, which was enough while
+ * one build ran at a time. With several in flight, one still planning can
+ * read a drive that another, just starting its encode, is about to fill. Each
+ * build therefore claims what its own preflight reserved, and the claim
+ * shrinks as its epochs land on disk (the drive's free space already counts
+ * those).
+ */
+const scratchClaims = new Map<string, { bytes: number; written: number }>();
+let scratchClaimReleased: Array<() => void> = [];
+
+function scratchClaimedBesides(workspaceId: string): number {
+  let total = 0;
+  for (const [id, claim] of scratchClaims) {
+    if (id !== workspaceId) total += Math.max(0, claim.bytes - claim.written);
+  }
+  return total;
+}
+
+function releaseScratchClaim(workspaceId: string): void {
+  if (!scratchClaims.delete(workspaceId)) return;
+  const waiting = scratchClaimReleased;
+  scratchClaimReleased = [];
+  for (const wake of waiting) wake();
+}
+
+/** Until another build gives its claim back, or a minute has passed. */
+function scratchClaimChange(signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, 60_000);
+    signal?.addEventListener("abort", done, { once: true });
+    scratchClaimReleased.push(done);
+  });
+}
+
 export async function packageAdaptiveRendition(
   request: AdaptivePackageRequest,
   paths: RenditionPaths,
@@ -842,6 +891,7 @@ export async function packageAdaptiveRendition(
     segmentSeconds = SEGMENT_TARGET_SECONDS,
     preset,
     rateProbe = true,
+    encoderSlot = sharedEncoderSlot,
     softwareThreads = defaultSoftwareEncoderThreads(),
     allAudioTracks = false,
     audioStreamIndexes,
@@ -888,6 +938,8 @@ export async function packageAdaptiveRendition(
   let workspaceClaim: ClaimedWorkspace | undefined;
   /** Cleared unconditionally on the way out; see the scratch watch below. */
   let scratchPoll: ReturnType<typeof setInterval> | undefined;
+  /** Set while this build holds the encoder; given back on every way out. */
+  let releaseEncoder: (() => void) | undefined;
 
   const lock = await acquireDirectoryLock(
     path.join(paths.stateRoot, "locks", `${request.mediaId}.adaptive.lock`),
@@ -1405,7 +1457,7 @@ export async function packageAdaptiveRendition(
      * to find room for work it has already done — reserving for them again is
      * what stopped a nearly finished title from resuming on a full-ish drive.
      */
-    const drive = await driveSpaceProvider();
+    let drive = await driveSpaceProvider();
     /*
      * An assembled package that never earned its verified marker is removed
      * just below, before re-assembly, so its bytes are coming back too. Not
@@ -1421,14 +1473,35 @@ export async function packageAdaptiveRendition(
         inheritedBytes -
         replaceablePackageBytes,
     );
+    const deferredForStorage = {
+      ...base,
+      status: "deferred-for-storage" as const,
+      error:
+        "Packaging this title alongside its existing output would breach the configured free-space reserve.",
+    };
     if (drive.freeBytes - conservativeBytes < reserveBytes) {
-      return {
-        ...base,
-        status: "deferred-for-storage",
-        error:
-          "Packaging this title alongside its existing output would breach the configured free-space reserve.",
-      };
+      return deferredForStorage;
     }
+    /*
+     * It fits on its own. When it only fails to fit beside the builds already
+     * running here, it waits for them rather than failing: they finish, and
+     * their claims come back.
+     */
+    while (
+      drive.freeBytes - conservativeBytes - scratchClaimedBesides(workspaceId) <
+      reserveBytes
+    ) {
+      await scratchClaimChange(signal);
+      if (signal?.aborted) {
+        return { ...base, status: "interrupted", interruption: "cancelled" };
+      }
+      drive = await driveSpaceProvider();
+      if (drive.freeBytes - conservativeBytes < reserveBytes) {
+        return deferredForStorage;
+      }
+    }
+    const scratchClaim = { bytes: conservativeBytes, written: 0 };
+    scratchClaims.set(workspaceId, scratchClaim);
 
     const sourceFrameRate =
       probe.video.frameRate && probe.video.frameRate > 0
@@ -1600,6 +1673,51 @@ export async function packageAdaptiveRendition(
     const qsvFilterThreads =
       encoder === "h264_qsv" || encoder === "hevc_qsv" ? 2 : undefined;
 
+    /** The last planning step reported, so a wait for the encoder can add to it. */
+    let planning: PlanningPhaseProgress = {
+      step: "timeline",
+      boundaryCount: boundaries.length,
+      epochCount: plan.epochs.length,
+    };
+    const reportPlanning = (progress: PlanningPhaseProgress) => {
+      planning = progress;
+      onEvent?.({
+        type: "planning-progress",
+        mediaId: request.mediaId,
+        progress,
+      });
+    };
+    const waitWhilePaused = async () => {
+      while (pauseController?.pauseRequested && !signal?.aborted) {
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+      }
+    };
+    /**
+     * Takes the worker's encoder (`encoderSlot.ts`), saying so while another
+     * build has it, and picks the step it was on back up once it is this
+     * build's.
+     *
+     * A build paused before its encoder starts waits without the slot, so the
+     * titles behind it keep encoding.
+     */
+    const takeEncoder = async (): Promise<() => void> => {
+      const before = planning;
+      for (;;) {
+        await waitWhilePaused();
+        if (encoderSlot.busy && planning.step !== "encoder") {
+          reportPlanning({ ...before, step: "encoder" });
+        }
+        const release = await encoderSlot.acquire(signal);
+        if (!pauseController?.pauseRequested) {
+          if (planning.step === "encoder" && before.step !== "timeline") {
+            reportPlanning(before);
+          }
+          return release;
+        }
+        release();
+      }
+    };
+
     /*
      * This title's rates. A resumed job reuses what its first attempt decided,
      * so every epoch is encoded alike; one whose epochs predate the probe stays
@@ -1616,15 +1734,11 @@ export async function packageAdaptiveRendition(
       const reportRates = (
         rates: NonNullable<PlanningPhaseProgress["rateProbe"]>,
       ) =>
-        onEvent?.({
-          type: "planning-progress",
-          mediaId: request.mediaId,
-          progress: {
-            step: "rates",
-            boundaryCount: boundaries.length,
-            epochCount: plan.epochs.length,
-            rateProbe: rates,
-          },
+        reportPlanning({
+          step: "rates",
+          boundaryCount: boundaries.length,
+          epochCount: plan.epochs.length,
+          rateProbe: rates,
         });
       reportRates(
         stored
@@ -1653,11 +1767,15 @@ export async function packageAdaptiveRendition(
               checkpointRoot: checkpoints,
               ...(signal ? { signal } : {}),
               onProgress: reportRates,
-              waitWhilePaused: async () => {
-                while (pauseController?.pauseRequested && !signal?.aborted) {
-                  await new Promise((resolve) => setTimeout(resolve, 1_000));
+              holdEncoder: async <T>(work: () => Promise<T>): Promise<T> => {
+                const release = await takeEncoder();
+                try {
+                  return await work();
+                } finally {
+                  release();
                 }
               },
+              waitWhilePaused,
             }));
       if (probed) {
         videoOutputs = videoOutputs.map((output) => {
@@ -1681,8 +1799,10 @@ export async function packageAdaptiveRendition(
 
     let completedEpochBytes = 0;
     let currentEpochBytes = 0;
-    const reportBytes = () =>
-      inheritedBytes + completedEpochBytes + currentEpochBytes;
+    const reportBytes = () => {
+      scratchClaim.written = completedEpochBytes + currentEpochBytes;
+      return inheritedBytes + completedEpochBytes + currentEpochBytes;
+    };
 
     /*
      * A signal that fires when the caller cancels *or* when scratch stops
@@ -1713,6 +1833,13 @@ export async function packageAdaptiveRendition(
     let sourceDamage: SourceDamageRecord[] = [];
     let damagedIntervals: SourceInterval[] = [];
     try {
+      /*
+       * The encoder is taken for the epochs and given back as soon as they are
+       * done: audio, assembly, verification and publication run while the
+       * next title encodes. A job paused mid-encode keeps it, because its
+       * suspended encoder still holds the GPU's sessions.
+       */
+      releaseEncoder = await takeEncoder();
       onEvent?.({
         type: "build-stage",
         mediaId: request.mediaId,
@@ -1968,6 +2095,8 @@ export async function packageAdaptiveRendition(
           }
         },
       });
+      releaseEncoder();
+      releaseEncoder = undefined;
 
       /*
        * Audio is built once for the whole title, after the video epochs and
@@ -2056,6 +2185,8 @@ export async function packageAdaptiveRendition(
         }
       }
     } catch (error) {
+      releaseEncoder?.();
+      releaseEncoder = undefined;
       /*
        * Nothing durable is removed here. The staging directory is this
        * attempt's own and goes; every completed epoch stays exactly where it
@@ -3047,6 +3178,8 @@ export async function packageAdaptiveRendition(
     };
   } finally {
     if (scratchPoll) clearInterval(scratchPoll);
+    releaseEncoder?.();
+    releaseScratchClaim(workspaceId);
     await lock.release();
   }
 }
