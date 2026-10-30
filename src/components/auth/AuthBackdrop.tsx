@@ -1,9 +1,9 @@
 import { RainbowAnimation } from "../animations/RainbowAnimation";
 
 /**
- * The light behind the sign-in and sign-up cards: four slow bands of the
- * logo's colours drifting behind the form. Shared so the two doors into
- * Seyirlik look like the same room.
+ * The light behind the sign-in card: four slow bands of the logo's colours
+ * drifting behind the form. Sign-up leaves it out; its longer form has to stay
+ * readable.
  */
 export function AuthBackdrop() {
   return (

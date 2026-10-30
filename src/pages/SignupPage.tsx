@@ -12,7 +12,6 @@ import { Button } from "../components/Button";
 import { ErrorMessage } from "../components/ErrorMessage";
 import { AnimatedText } from "../components/AnimatedText";
 import { AnimatedWidth } from "../components/AnimatedWidth";
-import { AuthBackdrop } from "../components/auth/AuthBackdrop";
 import {
   TurnstileWidget,
   type TurnstileHandle,
@@ -108,6 +107,57 @@ function errorFor(error: unknown): { key: TranslationKey; field?: Field } {
 
 const inputClassName =
   "min-h-12 w-full rounded-lg border bg-white/10 px-4 py-3 text-white outline-none transition-[border-color,background-color] placeholder:text-zinc-500 focus:bg-white/[0.13] aria-[invalid=true]:border-rose-300/60";
+
+/**
+ * The split the form is about, shown as it is typed: the name others see,
+ * and the one only you sign in with.
+ */
+function IdentityPreview({
+  name,
+  username,
+  size,
+}: {
+  name: string;
+  username: string;
+  size: "small" | "large";
+}) {
+  const { t } = useLanguage();
+  const large = size === "large";
+  return (
+    <div
+      aria-live="polite"
+      className={`flex items-center rounded-lg border border-white/10 bg-white/[0.04] ${
+        large ? "gap-5 p-5" : "gap-3 p-3"
+      }`}
+    >
+      <span
+        aria-hidden
+        className={`flex shrink-0 items-center justify-center rounded-full bg-white/10 font-black tracking-wide text-white/85 ${
+          large ? "h-16 w-16 text-xl" : "h-11 w-11 text-sm"
+        }`}
+      >
+        {initialsOf(name) || "·"}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[0.6875rem] font-black uppercase tracking-[0.12em] text-white/50">
+          {t("signup.preview")}
+        </span>
+        <span
+          className={`block truncate font-bold ${large ? "mt-1 text-2xl" : "text-base"} ${
+            name ? "text-white" : "text-white/35"
+          }`}
+        >
+          {name || t("signup.displayNamePlaceholder")}
+        </span>
+        <span
+          className={`block truncate font-semibold text-white/50 ${large ? "mt-0.5 text-sm" : "text-xs"}`}
+        >
+          {t("signup.previewSignsIn").replace("{username}", username || "…")}
+        </span>
+      </span>
+    </div>
+  );
+}
 
 function FieldShell({
   id,
@@ -257,34 +307,64 @@ export function SignupPage() {
       ? t("signup.checking")
       : t("signup.submit");
 
-  return (
-    <main className="flex min-h-screen items-center justify-center px-4 py-10 text-white">
-      <AuthBackdrop />
+  const signInLink = (
+    <>
+      {t("signup.haveAccount")}{" "}
+      <Link
+        to="/login"
+        className="font-bold text-white underline decoration-white/30 underline-offset-4 transition hover:decoration-[var(--accent)] focus:outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+      >
+        {t("signup.signInInstead")}
+      </Link>
+    </>
+  );
 
+  return (
+    <main className="flex min-h-screen items-center justify-center px-4 py-10 text-white lg:px-10">
+      {/* A phone reads it top to bottom. A wide screen puts who you will be
+          beside the form that makes you, so nothing runs past the fold. */}
       <motion.section
-        className="w-full max-w-md"
+        className="w-full max-w-md lg:grid lg:max-w-5xl lg:grid-cols-[minmax(0,1fr)_minmax(0,35rem)] lg:items-center lg:gap-16"
         variants={entrance}
         initial="hidden"
         animate="shown"
       >
-        <div className="mb-8 text-center">
+        <div className="mb-8 text-center lg:mb-0 lg:text-left">
           <motion.img
             variants={shouldReduceMotion ? fade : rise}
             src={appIcon}
             alt=""
-            className="mx-auto h-16 w-16 rounded-2xl object-cover shadow-2xl"
+            className="mx-auto h-16 w-16 rounded-2xl object-cover shadow-2xl lg:mx-0"
           />
           <motion.h1
             variants={shouldReduceMotion ? fade : rise}
-            className="mt-5 text-3xl font-black"
+            className="mt-5 text-3xl font-black lg:text-5xl lg:leading-[0.95]"
           >
             {t("signup.title")}
           </motion.h1>
           <motion.p
             variants={shouldReduceMotion ? fade : rise}
-            className="mx-auto mt-2 max-w-xs text-sm font-medium leading-6 text-white/60"
+            className="mx-auto mt-2 max-w-xs text-sm font-medium leading-6 text-white/60 lg:mx-0 lg:mt-4 lg:max-w-sm lg:text-base lg:leading-7"
           >
             {t("signup.lead")}
+          </motion.p>
+          {closed ? null : (
+            <motion.div
+              variants={shouldReduceMotion ? fade : rise}
+              className="mt-10 hidden lg:block"
+            >
+              <IdentityPreview
+                name={shownName}
+                username={shownUsername}
+                size="large"
+              />
+            </motion.div>
+          )}
+          <motion.p
+            variants={shouldReduceMotion ? fade : rise}
+            className="mt-8 hidden text-sm font-medium text-white/60 lg:block"
+          >
+            {signInLink}
           </motion.p>
         </div>
 
@@ -299,38 +379,14 @@ export function SignupPage() {
               animate={formControls}
               onSubmit={handleSubmit}
               noValidate
-              className="space-y-5 rounded-lg border border-white/10 bg-black/[0.55] p-5 shadow-2xl backdrop-blur sm:p-6"
+              className="grid gap-5 rounded-lg border border-white/10 bg-black/[0.55] p-5 shadow-2xl backdrop-blur sm:p-6 lg:grid-cols-2 lg:gap-x-4 lg:p-7"
             >
-              {/* The split the form is about, shown as it is typed: the
-                  name others see, and the one only you sign in with. */}
-              <div
-                aria-live="polite"
-                className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.04] p-3"
-              >
-                <span
-                  aria-hidden
-                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-white/10 text-sm font-black tracking-wide text-white/85"
-                >
-                  {initialsOf(shownName) || "·"}
-                </span>
-                <span className="min-w-0">
-                  <span className="block text-[0.6875rem] font-black uppercase tracking-[0.12em] text-white/50">
-                    {t("signup.preview")}
-                  </span>
-                  <span
-                    className={`block truncate text-base font-bold ${
-                      shownName ? "text-white" : "text-white/35"
-                    }`}
-                  >
-                    {shownName || t("signup.displayNamePlaceholder")}
-                  </span>
-                  <span className="block truncate text-xs font-semibold text-white/50">
-                    {t("signup.previewSignsIn").replace(
-                      "{username}",
-                      shownUsername || "…",
-                    )}
-                  </span>
-                </span>
+              <div className="lg:hidden">
+                <IdentityPreview
+                  name={shownName}
+                  username={shownUsername}
+                  size="small"
+                />
               </div>
 
               <FieldShell
@@ -418,18 +474,20 @@ export function SignupPage() {
                   onChange={(event) =>
                     setInviteCode(formatInviteCode(event.target.value))
                   }
-                  className={`${inputClassName} border-white/10 font-bold uppercase tabular-nums tracking-[0.18em] focus:border-[var(--accent)]`}
+                  className={`${inputClassName} border-white/10 font-bold uppercase tabular-nums tracking-[0.14em] focus:border-[var(--accent)]`}
                 />
               </FieldShell>
 
               {config?.enabled ? (
-                <TurnstileWidget
-                  ref={turnstileRef}
-                  siteKey={config.turnstileSiteKey}
-                  language={language}
-                  onToken={setToken}
-                  onUnavailable={() => setCheckBlocked(true)}
-                />
+                <div className="lg:col-span-2">
+                  <TurnstileWidget
+                    ref={turnstileRef}
+                    siteKey={config.turnstileSiteKey}
+                    language={language}
+                    onToken={setToken}
+                    onUnavailable={() => setCheckBlocked(true)}
+                  />
+                </div>
               ) : null}
 
               <AnimatePresence initial={false}>
@@ -447,7 +505,7 @@ export function SignupPage() {
                       height: 0,
                       transition: { duration: 0.18 },
                     }}
-                    className="overflow-hidden"
+                    className="overflow-hidden lg:col-span-2"
                   >
                     <ErrorMessage
                       title={t("signup.failedTitle")}
@@ -459,7 +517,7 @@ export function SignupPage() {
 
               <Button
                 type="submit"
-                className="w-full"
+                className="w-full lg:col-span-2"
                 disabled={isSubmitting || !token}
               >
                 <AnimatedWidth value={submitLabel}>
@@ -474,15 +532,9 @@ export function SignupPage() {
 
         <motion.p
           variants={shouldReduceMotion ? fade : rise}
-          className="mt-6 text-center text-sm font-medium text-white/60"
+          className="mt-6 text-center text-sm font-medium text-white/60 lg:hidden"
         >
-          {t("signup.haveAccount")}{" "}
-          <Link
-            to="/login"
-            className="font-bold text-white underline decoration-white/30 underline-offset-4 transition hover:decoration-[var(--accent)] focus:outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
-          >
-            {t("signup.signInInstead")}
-          </Link>
+          {signInLink}
         </motion.p>
       </motion.section>
     </main>
