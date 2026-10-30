@@ -164,6 +164,10 @@ import { createDownloadRoutes } from "./downloads/downloadRoutes";
 import { createCollectionRepository } from "./collections/collectionRepository";
 import { createTrickplayRoutes } from "./trickplay/trickplayRoutes";
 import { createUserRoutes } from "./users/userRoutes";
+import { createInviteRoutes } from "./users/inviteRoutes";
+import { createInviteRepository } from "./auth/invites";
+import { createSignupService } from "./auth/signupService";
+import { createTurnstileVerifier } from "./auth/turnstile";
 import { createSyncplayRepository } from "./syncplay/syncplayRepository";
 import { createSyncplayRoutes } from "./syncplay/syncplayRoutes";
 import { createSyncplayRuntime } from "./syncplay/syncplayRuntime";
@@ -2129,6 +2133,10 @@ export async function createNativeRuntime({
       sessions,
       passwords: createArgon2PasswordHasher(),
     }),
+    ...createInviteRoutes({
+      invites: createInviteRepository(pool),
+      inviteHashSecret: authConfig.sessionHashSecret,
+    }),
     ...createTaskRoutes({
       queue,
       libraries,
@@ -2308,6 +2316,22 @@ export async function createNativeRuntime({
 
   const authHandler = createNativeAuthHttpHandler({
     auth,
+    ...(authConfig.turnstile
+      ? {
+          signup: {
+            service: createSignupService({
+              pool,
+              passwords: createArgon2PasswordHasher(),
+              // Keyed apart from session tokens by its own HMAC label.
+              inviteHashSecret: authConfig.sessionHashSecret,
+            }),
+            turnstile: createTurnstileVerifier({
+              secretKey: authConfig.turnstile.secretKey,
+            }),
+            turnstileSiteKey: authConfig.turnstile.siteKey,
+          },
+        }
+      : {}),
     csrfSecret: authConfig.csrfSecret,
     secureCookies: authConfig.secureCookies,
     sessionCookieName: authConfig.sessionCookieName,

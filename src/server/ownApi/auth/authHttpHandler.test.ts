@@ -99,6 +99,7 @@ async function startAuthServer(
     secureCookies?: boolean;
     loginLimiter?: ReturnType<typeof createBoundedRateLimiter>;
     refreshLimiter?: ReturnType<typeof createBoundedRateLimiter>;
+    signup?: Parameters<typeof createNativeAuthHttpHandler>[0]["signup"];
   } = {},
 ): Promise<{ baseUrl: string; auth: NativeAuthService }> {
   const auth = options.auth ?? fakeAuth();
@@ -116,6 +117,7 @@ async function startAuthServer(
         : "__Secure-seyirlik_csrf",
     loginLimiter: options.loginLimiter,
     refreshLimiter: options.refreshLimiter,
+    ...(options.signup ? { signup: options.signup } : {}),
     now: () => new Date("2029-12-01T00:00:00.000Z"),
   });
   const handler = createOwnApiRequestHandler({
@@ -411,5 +413,117 @@ describe("native authentication HTTP endpoints", () => {
 
     expect((await attempt("198.51.100.1")).status).toBe(401);
     expect((await attempt("203.0.113.2")).status).toBe(429);
+  });
+});
+
+describe("creating your own account", () => {
+  const body = {
+    username: "person",
+    displayName: "Ayşe Yılmaz",
+    password: "correct password",
+    inviteCode: "7KQ2-M9XD-4TWB",
+    turnstileToken: "token",
+  };
+
+  function signupOptions(
+    outcome: "passed" | "failed" | "unavailable",
+    limiter?: ReturnType<typeof createBoundedRateLimiter>,
+  ) {
+    return {
+      service: {
+        signUp: vi.fn(async () => ({ userId: user.id, username: "person" })),
+      },
+      turnstile: { verify: vi.fn(async () => ({ status: outcome })) },
+      turnstileSiteKey: "site-key",
+      ...(limiter ? { limiter } : {}),
+    };
+  }
+
+  const post = (baseUrl: string, payload: unknown = body) =>
+    fetch(`${baseUrl}/ownAPI/v1/auth/signup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: baseUrl },
+      body: JSON.stringify(payload),
+    });
+
+  it("says sign-up is closed, and refuses it, when no bot check is configured", async () => {
+    const { baseUrl } = await startAuthServer();
+    const config = await fetch(`${baseUrl}/ownAPI/v1/auth/signup/config`);
+    expect((await config.json()).data).toEqual({ enabled: false });
+    const response = await post(baseUrl);
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.code).toBe("SIGNUP_CLOSED");
+  });
+
+  it("publishes only the site key, never the secret", async () => {
+    const { baseUrl } = await startAuthServer({
+      signup: signupOptions("passed"),
+    });
+    const config = await fetch(`${baseUrl}/ownAPI/v1/auth/signup/config`);
+    expect((await config.json()).data).toEqual({
+      enabled: true,
+      turnstileSiteKey: "site-key",
+    });
+  });
+
+  it("creates nothing when the bot check fails, and fails closed when it cannot be asked", async () => {
+    for (const [outcome, status] of [
+      ["failed", 403],
+      ["unavailable", 503],
+    ] as const) {
+      const signup = signupOptions(outcome);
+      const { baseUrl } = await startAuthServer({ signup });
+      expect((await post(baseUrl)).status).toBe(status);
+      expect(signup.service.signUp).not.toHaveBeenCalled();
+    }
+  });
+
+  it("creates the account and signs the person in", async () => {
+    const signup = signupOptions("passed");
+    const { baseUrl, auth } = await startAuthServer({ signup });
+    const response = await post(baseUrl);
+    expect(response.status).toBe(201);
+    expect(signup.service.signUp).toHaveBeenCalledWith(body);
+    expect(auth.login).toHaveBeenCalledWith({
+      username: "person",
+      password: "correct password",
+    });
+    expect(cookieValue(setCookies(response), "__Secure-seyirlik_session")).toBe(
+      sessionTokenA,
+    );
+  });
+
+  it("rejects unknown fields and a cross-site origin before any check runs", async () => {
+    const signup = signupOptions("passed");
+    const { baseUrl } = await startAuthServer({ signup });
+    expect(
+      (await post(baseUrl, { ...body, isAdministrator: true })).status,
+    ).toBe(422);
+    const crossSite = await fetch(`${baseUrl}/ownAPI/v1/auth/signup`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "https://evil.example",
+      },
+      body: JSON.stringify(body),
+    });
+    expect(crossSite.status).toBe(403);
+    expect(signup.turnstile.verify).not.toHaveBeenCalled();
+  });
+
+  it("limits attempts that pass the bot check", async () => {
+    const signup = signupOptions(
+      "passed",
+      createBoundedRateLimiter({
+        maxAttempts: 1,
+        windowMs: 60_000,
+        maxEntries: 10,
+      }),
+    );
+    const { baseUrl } = await startAuthServer({ signup });
+    expect((await post(baseUrl)).status).toBe(201);
+    const throttled = await post(baseUrl);
+    expect(throttled.status).toBe(429);
+    expect(signup.service.signUp).toHaveBeenCalledTimes(1);
   });
 });

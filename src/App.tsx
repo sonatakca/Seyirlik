@@ -122,6 +122,9 @@ const CurationPage = lazy(async () => ({
 const SkeletonLabPage = lazy(async () => ({
   default: (await import("./pages/SkeletonLabPage")).SkeletonLabPage,
 }));
+const SignupPage = lazy(async () => ({
+  default: (await import("./pages/SignupPage")).SignupPage,
+}));
 const UserManagementPage = lazy(async () => ({
   default: (await import("./pages/UserManagementPage")).UserManagementPage,
 }));
@@ -405,6 +408,14 @@ export default function App() {
       <Routes>
         <Route element={<RouteTransitionOutlet />}>
           <Route path="/login" element={<LoginPage />} />
+          <Route
+            path="/signup"
+            element={
+              <Suspense fallback={<LoadingSpinner label="" />}>
+                <SignupPage />
+              </Suspense>
+            }
+          />
         </Route>
 
         {/* Outside the server check on purpose: these are for when the server

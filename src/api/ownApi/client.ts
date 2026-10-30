@@ -277,7 +277,19 @@ export interface OwnApiClient {
   refreshSession(): Promise<OwnApiNativeUser>;
   logout(): Promise<void>;
   logoutAll(): Promise<void>;
+  getSignupConfig(): Promise<OwnApiSignupConfig>;
+  signup(input: {
+    username: string;
+    displayName: string;
+    password: string;
+    inviteCode: string;
+    turnstileToken: string;
+  }): Promise<OwnApiNativeUser>;
 }
+
+export type OwnApiSignupConfig =
+  | { enabled: true; turnstileSiteKey: string }
+  | { enabled: false };
 
 function defaultCsrfTokenProvider(): string | undefined {
   if (typeof document === "undefined") return undefined;
@@ -658,6 +670,15 @@ export function createOwnApiClient({
     request<void>("/auth/logout", { method: "POST", csrf: true });
   const logoutAll: OwnApiClient["logoutAll"] = () =>
     request<void>("/auth/logout-all", { method: "POST", csrf: true });
+  const getSignupConfig: OwnApiClient["getSignupConfig"] = () =>
+    request<OwnApiSignupConfig>("/auth/signup/config");
+  const signup: OwnApiClient["signup"] = (input) =>
+    // Like login: there is no session yet to bind a CSRF token to.
+    requestNativeUser("/auth/signup", {
+      method: "POST",
+      body: input,
+      csrf: false,
+    });
 
   return {
     request,
@@ -668,6 +689,8 @@ export function createOwnApiClient({
     refreshSession,
     logout,
     logoutAll,
+    getSignupConfig,
+    signup,
   };
 }
 

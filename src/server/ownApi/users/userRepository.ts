@@ -16,6 +16,7 @@ interface UserRow {
   allow_playback: boolean;
   allow_downloads: boolean;
   allow_all_libraries: boolean;
+  invite_id: string | null;
 }
 
 export interface NativeUserRecord {
@@ -36,6 +37,8 @@ export interface NativeUserRecord {
   allowPlayback: boolean;
   allowDownloads: boolean;
   allowAllLibraries: boolean;
+  /** The invite that admitted a self-made account; null when made for them. */
+  inviteId: string | null;
 }
 
 export interface CreateNativeUserInput {
@@ -44,6 +47,7 @@ export interface CreateNativeUserInput {
   displayName: string;
   passwordHash: string;
   isAdministrator: boolean;
+  inviteId?: string;
 }
 
 function mapUser(row: UserRow): NativeUserRecord {
@@ -63,6 +67,7 @@ function mapUser(row: UserRow): NativeUserRecord {
     allowPlayback: row.allow_playback ?? true,
     allowDownloads: row.allow_downloads ?? false,
     allowAllLibraries: row.allow_all_libraries ?? true,
+    inviteId: row.invite_id ?? null,
   };
 }
 
@@ -105,8 +110,9 @@ export function createUserRepository(
     async create(input) {
       const result = await database.query<UserRow>(
         `INSERT INTO native_users (
-          id, normalized_username, display_name, password_hash, is_administrator
-        ) VALUES ($1, $2, $3, $4, $5)
+          id, normalized_username, display_name, password_hash,
+          is_administrator, invite_id
+        ) VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING *`,
         [
           input.id,
@@ -114,6 +120,7 @@ export function createUserRepository(
           input.displayName,
           input.passwordHash,
           input.isAdministrator,
+          input.inviteId ?? null,
         ],
       );
       return mapUser(result.rows[0] as UserRow);

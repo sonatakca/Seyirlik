@@ -13,6 +13,7 @@ import {
 } from "../api/validation";
 import type { UserRepository, NativeUserRecord } from "./userRepository";
 import {
+  validateDisplayName,
   validatePassword,
   validateUsername,
   type PasswordHasher,
@@ -53,6 +54,7 @@ function toUserDto(
     allowPlayback: user.allowPlayback,
     allowDownloads: user.allowDownloads,
     allowAllLibraries: user.allowAllLibraries,
+    joinedByInvite: user.inviteId !== null,
     ...(libraryIds === undefined ? {} : { libraryIds }),
   };
 }
@@ -86,6 +88,16 @@ function requireUsername(raw: string): string {
   } catch (error) {
     throw validationError(
       error instanceof Error ? error.message : "username is invalid.",
+    );
+  }
+}
+
+function requireDisplayName(raw: string): string {
+  try {
+    return validateDisplayName(raw);
+  } catch (error) {
+    throw validationError(
+      error instanceof Error ? error.message : "displayName is invalid.",
     );
   }
 }
@@ -176,9 +188,12 @@ export function createUserRoutes({
         const created = await users.create({
           id: randomUUID(),
           normalizedUsername,
-          displayName:
-            optionalBodyString(body, "displayName", { maxLength: 100 }) ??
-            rawUsername.trim(),
+          // A name to show is separate from the one to sign in with; an
+          // account made without one shows its username until it has one.
+          displayName: requireDisplayName(
+            optionalBodyString(body, "displayName", { maxLength: 200 }) ||
+              rawUsername,
+          ),
           passwordHash: await passwords.hash(requirePassword(body, "password")),
           isAdministrator:
             optionalBodyBoolean(body, "isAdministrator") === true,
@@ -253,14 +268,13 @@ export function createUserRoutes({
           throw validationError("libraryIds is invalid.");
         }
 
+        const rawDisplayName = optionalBodyString(body, "displayName", {
+          maxLength: 200,
+        });
         const updated = await users.update(userId, {
-          ...(optionalBodyString(body, "displayName", { maxLength: 100 })
-            ? {
-                displayName: optionalBodyString(body, "displayName", {
-                  maxLength: 100,
-                }) as string,
-              }
-            : {}),
+          ...(rawDisplayName === undefined
+            ? {}
+            : { displayName: requireDisplayName(rawDisplayName) }),
           ...(isAdministrator === undefined ? {} : { isAdministrator }),
           ...(isDisabled === undefined ? {} : { isDisabled }),
           ...(optionalBodyBoolean(body, "allowPlayback") === undefined

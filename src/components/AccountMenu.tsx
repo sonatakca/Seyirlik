@@ -122,9 +122,8 @@ export function AccountMenu({
     window.dispatchEvent(new Event(ROUTE_COLOR_TRANSITION_FORCE_EVENT));
   };
 
-  const [playTapuBefore, playTapuAfter = ""] = t("nav.playTapu").split(
-    "{logo}",
-  );
+  const [playTapuBefore, playTapuAfter = ""] =
+    t("nav.playTapu").split("{logo}");
 
   const handleLogout = () => {
     clearAuthSession();
@@ -138,7 +137,7 @@ export function AccountMenu({
         type="button"
         aria-expanded={isOpen}
         aria-haspopup="menu"
-        aria-label={`${t("nav.account")}: ${session.username}`}
+        aria-label={`${t("nav.account")}: ${session.displayName}`}
         onClick={() => {
           onTriggerClick?.();
           setIsOpen(!isOpen);
@@ -155,7 +154,7 @@ export function AccountMenu({
         />
         {isDesktop ? (
           <span className="navbar-ink-shadow hidden min-w-0 truncate lg:inline">
-            {session.username}
+            {session.displayName}
           </span>
         ) : null}
       </button>
@@ -189,7 +188,7 @@ export function AccountMenu({
             className="absolute right-0 top-full z-[70] mt-2 w-max min-w-[14.5rem] rounded-2xl border border-white/10 bg-[#171719]/95 p-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.055),inset_0_-1px_0_rgba(0,0,0,0.28),0_10px_35px_rgba(0,0,0,0.28)] backdrop-blur-2xl"
           >
             <p className="truncate px-3 pb-2 pt-1.5 text-xs font-semibold text-white/50">
-              {session.username}
+              {session.displayName}
             </p>
             {isOfflineSupported() ? (
               <Link to="/downloads" role="menuitem" className={ITEM}>

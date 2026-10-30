@@ -10,6 +10,12 @@ export interface NativeAuthConfig {
    * the app read the CSRF token the API issued.
    */
   cookieDomain?: string;
+  /**
+   * Cloudflare Turnstile keys. Creating your own account is open only when
+   * both are set: without the check a bot could spend every invite it guesses
+   * at, so sign-up fails closed rather than running unguarded.
+   */
+  turnstile?: { siteKey: string; secretKey: string };
 }
 
 type Environment = Record<string, string | undefined>;
@@ -39,6 +45,7 @@ export function parseNativeAuthConfig(
     "SEYIRLIK_SESSION_HASH_SECRET",
   );
   const csrfSecret = requiredSecret(environment, "SEYIRLIK_CSRF_SECRET");
+  const turnstile = parseTurnstile(environment);
   if (sessionHashSecret === csrfSecret) {
     throw new Error(
       "SEYIRLIK_SESSION_HASH_SECRET and SEYIRLIK_CSRF_SECRET must be different.",
@@ -54,7 +61,22 @@ export function parseNativeAuthConfig(
       : "seyirlik_session",
     csrfCookieName: secureCookies ? "__Secure-seyirlik_csrf" : "seyirlik_csrf",
     ...(cookieDomain ? { cookieDomain } : {}),
+    ...(turnstile ? { turnstile } : {}),
   };
+}
+
+function parseTurnstile(
+  environment: Environment,
+): { siteKey: string; secretKey: string } | undefined {
+  const siteKey = environment.SEYIRLIK_TURNSTILE_SITE_KEY?.trim();
+  const secretKey = environment.SEYIRLIK_TURNSTILE_SECRET_KEY?.trim();
+  if (!siteKey && !secretKey) return undefined;
+  if (!siteKey || !secretKey) {
+    throw new Error(
+      "SEYIRLIK_TURNSTILE_SITE_KEY and SEYIRLIK_TURNSTILE_SECRET_KEY must be set together.",
+    );
+  }
+  return { siteKey, secretKey };
 }
 
 /**

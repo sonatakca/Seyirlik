@@ -27,6 +27,8 @@ import {
   createBoundedRateLimiter,
   type BoundedRateLimiter,
 } from "./rateLimiter";
+import type { SignupService } from "./signupService";
+import type { TurnstileVerifier } from "./turnstile";
 
 const AUTH_BASE_PATH = `${OWN_API_V1_BASE_PATH}/auth`;
 // The session cookie is scoped to the versioned API: every catalogue, image and
@@ -71,7 +73,56 @@ export interface NativeAuthHttpHandlerOptions {
   trustedOrigins?: ReadonlySet<string>;
   loginLimiter?: BoundedRateLimiter;
   refreshLimiter?: BoundedRateLimiter;
+  /** Absent: creating your own account is closed. */
+  signup?: {
+    service: SignupService;
+    turnstile: TurnstileVerifier;
+    turnstileSiteKey: string;
+    limiter?: BoundedRateLimiter;
+  };
   now?: () => Date;
+}
+
+interface SignupBody {
+  username: string;
+  displayName: string;
+  password: string;
+  inviteCode: string;
+  turnstileToken: string;
+}
+
+function parseSignupBody(value: unknown): SignupBody {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new OwnApiError(
+      "VALIDATION_FAILED",
+      "The sign-up request is invalid.",
+      422,
+    );
+  }
+  const candidate = value as Record<string, unknown>;
+  const fields = [
+    ["username", MAX_USERNAME_INPUT_LENGTH],
+    ["displayName", 200],
+    ["password", MAX_PASSWORD_INPUT_BYTES],
+    ["inviteCode", 64],
+    ["turnstileToken", 4_096],
+  ] as const;
+  const allowed = new Set<string>(fields.map(([name]) => name));
+  if (
+    Object.keys(candidate).some((key) => !allowed.has(key)) ||
+    fields.some(
+      ([name, max]) =>
+        typeof candidate[name] !== "string" ||
+        Buffer.byteLength(candidate[name] as string, "utf8") > max,
+    )
+  ) {
+    throw new OwnApiError(
+      "VALIDATION_FAILED",
+      "The sign-up request is invalid.",
+      422,
+    );
+  }
+  return candidate as unknown as SignupBody;
 }
 
 interface LoginBody {
@@ -308,10 +359,105 @@ export function createNativeAuthHttpHandler(
       maxEntries: 10_000,
     });
 
+  const signupLimiter =
+    options.signup?.limiter ??
+    createBoundedRateLimiter({
+      maxAttempts: 10,
+      windowMs: 15 * 60_000,
+      maxEntries: 10_000,
+    });
+
   return async (request, response, { requestId, url }) => {
     if (!url.pathname.startsWith(`${AUTH_BASE_PATH}/`)) return false;
     const cookies = parseCookies(request);
     const sessionToken = uniqueCookie(cookies, options.sessionCookieName);
+
+    // What the sign-up page needs before it can draw: whether sign-up is open
+    // at all, and the public half of the bot check. Nothing here is secret.
+    if (url.pathname === `${AUTH_BASE_PATH}/signup/config`) {
+      if (request.method !== "GET") methodNotAllowed(response, "GET, OPTIONS");
+      sendOwnApiJson(response, 200, {
+        data: options.signup
+          ? { enabled: true, turnstileSiteKey: options.signup.turnstileSiteKey }
+          : { enabled: false },
+        requestId,
+      });
+      return true;
+    }
+
+    if (url.pathname === `${AUTH_BASE_PATH}/signup`) {
+      if (request.method !== "POST")
+        methodNotAllowed(response, "POST, OPTIONS");
+      requireMutationOrigin(
+        request,
+        options.publicOrigin,
+        options.trustedOrigins,
+      );
+      const signup = options.signup;
+      if (!signup) {
+        throw new OwnApiError(
+          "SIGNUP_CLOSED",
+          "Creating an account is not open on this server.",
+          403,
+        );
+      }
+      const body = parseSignupBody(
+        await readJsonBody(request, MAX_JSON_BODY_BYTES),
+      );
+
+      // The bot check comes first, so a script without a browser cannot spend
+      // the attempts below and lock real people out of signing up.
+      const address = remoteAddress(request);
+      const check = await signup.turnstile.verify(body.turnstileToken, address);
+      if (check.status === "unavailable") {
+        throw new OwnApiError(
+          "SIGNUP_CHECK_UNAVAILABLE",
+          "The check that you are not a bot could not be reached. Try again in a moment.",
+          503,
+        );
+      }
+      if (check.status !== "passed") {
+        throw new OwnApiError(
+          "SIGNUP_CHECK_FAILED",
+          "The check that you are not a bot did not pass. Try it again.",
+          403,
+        );
+      }
+
+      const limiterKey = `${address}|signup`;
+      const decision = signupLimiter.consume(limiterKey);
+      if (!decision.allowed) {
+        response.setHeader("Retry-After", String(decision.retryAfterSeconds));
+        throw new OwnApiError(
+          "AUTH_RATE_LIMITED",
+          "Too many sign-up attempts. Try again later.",
+          429,
+        );
+      }
+
+      const created = await signup.service.signUp(body);
+
+      // The account exists whatever happens next; failing to sign in now only
+      // means the person signs in by hand.
+      let session: NativeSessionResult;
+      try {
+        session = await options.auth.login({
+          username: created.username,
+          password: body.password,
+        });
+        const authenticated = await options.auth.getCurrentSession(
+          session.token,
+        );
+        setSessionCookies(request, response, session, authenticated, options);
+      } catch (error) {
+        throw mapAuthError(error);
+      }
+      sendOwnApiJson(response, 201, {
+        data: { user: session.user },
+        requestId,
+      });
+      return true;
+    }
 
     if (url.pathname === `${AUTH_BASE_PATH}/login`) {
       if (request.method !== "POST")

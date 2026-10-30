@@ -34,6 +34,7 @@ function setup() {
         allowPlayback: true,
         allowDownloads: false,
         allowAllLibraries: true,
+        inviteId: input.inviteId ?? null,
       } satisfies NativeUserRecord;
     },
   } as unknown as UserRepository;

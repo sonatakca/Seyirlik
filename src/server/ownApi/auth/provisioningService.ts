@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import { withTransaction } from "../database/transaction";
 import {
+  validateDisplayName,
   validatePassword,
   validateUsername,
   type PasswordHasher,
@@ -30,16 +31,6 @@ export interface ProvisionInitialAdministratorOptions {
   displayName: string;
   password: string;
   idFactory?: () => string;
-}
-
-function validateDisplayName(value: string): string {
-  const normalized = value.normalize("NFKC").trim();
-
-  if (!normalized || normalized.length > 100) {
-    throw new Error("Display name must contain between 1 and 100 characters.");
-  }
-
-  return normalized;
 }
 
 export async function provisionInitialAdministrator({
