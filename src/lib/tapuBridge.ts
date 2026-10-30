@@ -2,8 +2,8 @@
  * Tapu, the board game at monopoly.seyirlik.org, takes its player's name from
  * Seyirlik. It cannot read this origin's session, so `/tapu` hands it over:
  * signed out, `RequireAuth` sends the visitor to sign in and back; signed in,
- * the page leaves for the game with the username in the fragment, which never
- * reaches a server. The name is not a credential, only who is playing.
+ * the page leaves with the username and display name in the fragment, which
+ * never reaches a server. The name is not a credential, only who is playing.
  */
 
 export const TAPU_ORIGIN = "https://monopoly.seyirlik.org";
@@ -13,7 +13,11 @@ export const TAPU_ORIGIN = "https://monopoly.seyirlik.org";
  * so an invite link survives sign-in). `back` arrives in the URL, so it is
  * untrusted: anything that would leave the game's origin lands on its lobby.
  */
-export function tapuUrlFor(username: string, back?: string | null): string {
+export function tapuUrlFor(
+  username: string,
+  back?: string | null,
+  displayName?: string,
+): string {
   let url = new URL(TAPU_ORIGIN);
   if (back?.startsWith("/")) {
     try {
@@ -24,5 +28,6 @@ export function tapuUrlFor(username: string, back?: string | null): string {
     }
   }
   url.hash = `seyirlik=${encodeURIComponent(username)}`;
+  if (displayName?.trim()) url.hash += `&ad=${encodeURIComponent(displayName)}`;
   return url.href;
 }
