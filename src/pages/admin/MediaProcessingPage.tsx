@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   ChevronsDown,
   ChevronsUp,
   Cpu,
@@ -170,6 +172,12 @@ const BUTTON =
  * never appeared to run at all.
  */
 const PROCESSING_REFRESH_MS = 1_000;
+
+/**
+ * Concluded jobs per page. Only history is paged: the queue is one order, and
+ * a move to the top has to be able to reach the job at the bottom of it.
+ */
+const HISTORY_PAGE_SIZE = 25;
 
 /** The page's own translator, so a helper cannot be handed an unknown key. */
 type Translate = ReturnType<typeof useLanguage>["t"];
@@ -1481,6 +1489,13 @@ export function MediaProcessingPage() {
    * happened" — and only the first of them can be reordered.
    */
   const [outcomeTab, setOutcomeTab] = useState<ProcessingOutcomeTab>("active");
+  /** The page of concluded jobs on show, from zero (the newest). */
+  const [historyPage, setHistoryPage] = useState(0);
+  /*
+   * Read by the poll through a ref so turning the page does not rebuild the
+   * poll's timer; the page change itself asks for a refresh below.
+   */
+  const historyPageRef = useRef(historyPage);
   /**
    * The order the operator has just dragged the queue into.
    *
@@ -1600,7 +1615,14 @@ export function MediaProcessingPage() {
     if (overviewRequestRef.current) return overviewRequestRef.current;
     const request = (async () => {
       try {
-        setOverview(await getProcessingOverview());
+        setOverview(
+          await getProcessingOverview({
+            history: {
+              offset: historyPageRef.current * HISTORY_PAGE_SIZE,
+              limit: HISTORY_PAGE_SIZE,
+            },
+          }),
+        );
         setRefreshedAt(Date.now());
       } catch {
         notify({ tone: "error", title: t("common.somethingWentWrong") });
@@ -1633,6 +1655,20 @@ export function MediaProcessingPage() {
       window.removeEventListener("focus", refreshWhenVisible);
     };
   }, [refreshOverview]);
+
+  /*
+   * A new page of history is fetched at once rather than on the next tick. A
+   * poll already in flight was asked for the old page, so it is let finish
+   * and a fresh one follows it.
+   */
+  useEffect(() => {
+    if (historyPageRef.current === historyPage) return;
+    historyPageRef.current = historyPage;
+    void (async () => {
+      await overviewRequestRef.current;
+      await refreshOverview();
+    })();
+  }, [historyPage, refreshOverview]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2235,6 +2271,22 @@ export function MediaProcessingPage() {
       ),
     [activeJobs, dragFreeze, queueOverride],
   );
+  /*
+   * Every concluded job, not the page of them on show: the count on the tab
+   * answers "how much history is there", and the pager needs the same figure.
+   */
+  const finishedTotal = counts
+    ? counts.succeeded + counts.failed + counts.cancelled
+    : finishedJobs.length;
+  const historyPages = Math.max(1, Math.ceil(finishedTotal / HISTORY_PAGE_SIZE));
+  /*
+   * History shrinks when an entry is removed, and the page on show can end up
+   * past the last one. Step back rather than show an empty page that claims
+   * nothing has finished.
+   */
+  useEffect(() => {
+    if (historyPage > historyPages - 1) setHistoryPage(historyPages - 1);
+  }, [historyPage, historyPages]);
   /** The rows that are genuinely still waiting, and so can be moved. */
   const movableQueue = useMemo(() => queue.filter(canReorder), [queue]);
   const visibleJobs = outcomeTab === "active" ? queue : finishedJobs;
@@ -2561,7 +2613,7 @@ export function MediaProcessingPage() {
                 }`}
               >
                 {t(`processing.tabs.${tab}`)}
-                {tab === "processes" && jobs.length > 0 ? (
+                {tab === "processes" && activeJobs.length > 0 ? (
                   <span
                     className={`rounded-full px-1.5 py-auto text-[0.6875rem] tabular-nums ${
                       selected
@@ -2569,7 +2621,7 @@ export function MediaProcessingPage() {
                         : "bg-white/10 text-white/55"
                     }`}
                   >
-                    {jobs.length}
+                    {activeJobs.length}
                   </span>
                 ) : null}
               </button>
@@ -3390,9 +3442,7 @@ export function MediaProcessingPage() {
                 {PROCESSING_OUTCOME_TABS.map((outcome) => {
                   const selected = outcomeTab === outcome;
                   const count =
-                    outcome === "active"
-                      ? activeJobs.length
-                      : finishedJobs.length;
+                    outcome === "active" ? activeJobs.length : finishedTotal;
                   return (
                     <button
                       key={outcome}
@@ -4263,6 +4313,43 @@ export function MediaProcessingPage() {
                     );
                   })}
                 </ul>
+                {outcomeTab === "finished" && historyPages > 1 ? (
+                  <nav
+                    aria-label={t("processing.history.pages")}
+                    className="mt-3 flex items-center justify-between gap-3"
+                  >
+                    <button
+                      type="button"
+                      disabled={historyPage === 0}
+                      onClick={() => setHistoryPage((page) => page - 1)}
+                      className="inline-flex h-9 items-center gap-1 rounded-xl px-3 text-xs font-bold text-white/70 transition hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-30 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                    >
+                      <ChevronLeft size={14} aria-hidden="true" />
+                      {t("processing.history.newer")}
+                    </button>
+                    <span className="text-xs tabular-nums text-white/45">
+                      {formatTemplate(t("processing.history.range"), {
+                        from: String(historyPage * HISTORY_PAGE_SIZE + 1),
+                        to: String(
+                          Math.min(
+                            (historyPage + 1) * HISTORY_PAGE_SIZE,
+                            finishedTotal,
+                          ),
+                        ),
+                        total: String(finishedTotal),
+                      })}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={historyPage >= historyPages - 1}
+                      onClick={() => setHistoryPage((page) => page + 1)}
+                      className="inline-flex h-9 items-center gap-1 rounded-xl px-3 text-xs font-bold text-white/70 transition hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-30 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                    >
+                      {t("processing.history.older")}
+                      <ChevronRight size={14} aria-hidden="true" />
+                    </button>
+                  </nav>
+                ) : null}
               </div>
             )}
           </section>

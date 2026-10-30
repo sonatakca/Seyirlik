@@ -306,6 +306,13 @@ const COLUMNS = `
 const QUEUE_PRIORITY_BASE = 100;
 
 /**
+ * A guard on the whole-queue listing, not a page size. The queue is listed in
+ * full so it can be reordered in full; this only stops a runaway enqueue from
+ * turning one poll into an unbounded read.
+ */
+export const ACTIVE_LISTING_CEILING = 5_000;
+
+/**
  * The ceiling on a recorded failure message.
  *
  * Trimmed rather than rejected, which is the whole point. The column was once
@@ -493,9 +500,19 @@ export interface ProcessingJobStore {
   findActiveForFile(mediaFileId: string): Promise<ProcessingJobRecord | null>;
   /** Removes a finished history entry. Active work is deliberately retained. */
   deleteFinished(id: string): Promise<boolean>;
+  /**
+   * Jobs for the processing page.
+   *
+   * `outcome` splits the listing the way the page does. `active` is the whole
+   * queue — unbounded by default, because the line is one order and a page that
+   * shows only its head cannot move anything past it. `finished` is history,
+   * newest first, and is paged with `limit` and `offset`.
+   */
   list(options?: {
     state?: ProcessingState;
+    outcome?: "active" | "finished";
     limit?: number;
+    offset?: number;
   }): Promise<ProcessingJobRecord[]>;
   /**
    * The priority a newly queued job should take to land at the back of the
@@ -737,7 +754,33 @@ export function createProcessingJobStore(
     },
 
     async list(options = {}) {
-      const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
+      const ceiling =
+        options.outcome === "active" ? ACTIVE_LISTING_CEILING : 200;
+      const limit = Math.min(
+        Math.max(
+          options.limit ?? (options.outcome === "active" ? ceiling : 50),
+          1,
+        ),
+        ceiling,
+      );
+      const offset = Math.max(0, Math.trunc(options.offset ?? 0));
+      if (options.outcome === "finished") {
+        /*
+         * Ordered by when the job ended, with the id as a tiebreak, so pages
+         * neither repeat nor skip a row. `finished_at` can be missing on a row
+         * whose worker vanished; the creation time stands in for it, as it
+         * does on the page.
+         */
+        const result = await pool.query<RawRow>(
+          `SELECT ${QUALIFIED_COLUMNS}, NULL::int AS queue_priority
+             FROM processing_jobs AS job
+            WHERE job.state IN ('succeeded', 'failed', 'cancelled')
+            ORDER BY COALESCE(job.finished_at, job.created_at) DESC, job.id DESC
+            LIMIT $1 OFFSET $2`,
+          [limit, offset],
+        );
+        return result.rows.map(toRecord);
+      }
       /*
        * Joined to the attempt so every listing can say where a job stands in
        * the line. The join is `LEFT`: a job whose attempt has finished, failed
@@ -759,6 +802,8 @@ export function createProcessingJobStore(
                FROM processing_jobs AS job
                LEFT JOIN jobs AS attempt
                  ON attempt.id = job.job_id AND attempt.status = 'queued'
+              WHERE $2::boolean IS FALSE
+                 OR job.state IN ('pending', 'queued', 'running', 'paused')
               -- Apply the limit after choosing active work. Otherwise newer
               -- history and bulk-enqueued jobs hide an older running encode.
               ORDER BY CASE job.state
@@ -774,7 +819,7 @@ export function createProcessingJobStore(
                          THEN job.created_at END ASC,
                        job.created_at DESC
               LIMIT $1`,
-            [limit],
+            [limit, options.outcome === "active"],
           );
       return result.rows.map(toRecord);
     },

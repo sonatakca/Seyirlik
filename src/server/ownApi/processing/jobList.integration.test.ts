@@ -95,4 +95,40 @@ integration("processing job listing", () => {
       recent,
     );
   });
+  it("lists the whole queue past the old page size, with no history in it", async () => {
+    const running = await make("running");
+    for (let n = 0; n < 5; n++) await make("succeeded");
+    const waiting: string[] = [];
+    for (let n = 0; n < 230; n++) waiting.push(await make("queued", 100 + n));
+    const jobs = await store.list({ outcome: "active" });
+    expect(jobs).toHaveLength(231);
+    expect(jobs[0]?.id).toBe(running);
+    expect(jobs.slice(1).map((job) => job.id)).toEqual(waiting);
+  });
+  it("pages concluded jobs newest-ended first without repeating a row", async () => {
+    await make("queued", 100);
+    const ended: string[] = [];
+    for (let n = 0; n < 7; n++) {
+      const id = await make(n % 2 ? "failed" : "succeeded");
+      await pool.query(
+        "UPDATE processing_jobs SET finished_at = now() - make_interval(mins => $2) WHERE id = $1",
+        [id, n],
+      );
+      ended.push(id);
+    }
+    const first = await store.list({ outcome: "finished", limit: 3 });
+    const second = await store.list({
+      outcome: "finished",
+      limit: 3,
+      offset: 3,
+    });
+    const third = await store.list({
+      outcome: "finished",
+      limit: 3,
+      offset: 6,
+    });
+    expect([...first, ...second, ...third].map((job) => job.id)).toEqual(
+      ended,
+    );
+  });
 });

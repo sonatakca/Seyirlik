@@ -327,8 +327,12 @@ function createStore(seed: ProcessingJobRecord) {
     async findActiveForFile() {
       return ACTIVE.includes(job.state) ? { ...job } : null;
     },
-    async list() {
-      return [{ ...job }];
+    async list(options: { outcome?: "active" | "finished" } = {}) {
+      const active = ACTIVE.includes(job.state);
+      return options.outcome === undefined ||
+        active === (options.outcome === "active")
+        ? [{ ...job }]
+        : [];
     },
     async counts() {
       return {} as never;

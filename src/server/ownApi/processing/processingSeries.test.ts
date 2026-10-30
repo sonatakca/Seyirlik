@@ -286,8 +286,12 @@ function createStore(seed: ProcessingJobRecord[] = []) {
     async counts() {
       return {} as never;
     },
-    async list() {
-      return [...jobs.values()];
+    async list(options: { outcome?: "active" | "finished" } = {}) {
+      return [...jobs.values()].filter(
+        (job) =>
+          options.outcome === undefined ||
+          ACTIVE.has(job.state) === (options.outcome === "active"),
+      );
     },
     async reconcileTerminalQueueJobs() {
       return 0;

@@ -584,11 +584,22 @@ export interface ProcessingOverview {
   jobTitles?: ProcessingJobTitle[];
 }
 
+/**
+ * The overview carries every unfinished job and one page of concluded ones.
+ * `history` picks that page; without it the server sends the newest.
+ */
 export function getProcessingOverview({
   background = false,
-}: { background?: boolean } = {}): Promise<ProcessingOverview> {
+  history,
+}: {
+  background?: boolean;
+  history?: { offset: number; limit: number };
+} = {}): Promise<ProcessingOverview> {
+  const query = history
+    ? `?historyOffset=${history.offset}&historyLimit=${history.limit}`
+    : "";
   return ownApiClient.request<ProcessingOverview>(
-    "/processing/overview",
+    `/processing/overview${query}`,
     background ? { background } : undefined,
   );
 }

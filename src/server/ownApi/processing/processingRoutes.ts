@@ -9,6 +9,7 @@ import {
   isUuid,
   optionalBodyString,
   parseLimit,
+  parseOffset,
   requireUuid,
   validationError,
 } from "../api/validation";
@@ -21,10 +22,14 @@ import {
 } from "../../../renditions/hardware/detect";
 import { ADAPTIVE_PROFILE_VERSION } from "../../../renditions/adaptive/profile";
 import {
+  ACTIVE_LISTING_CEILING,
   type ProcessingJobRecord,
   type ProcessingJobStore,
   type ProcessingState,
 } from "./jobStore";
+
+/** Concluded jobs per page of the overview when the page does not say. */
+const HISTORY_PAGE_SIZE = 25;
 import {
   PROCESSING_JOB_TYPE,
   createProcessingEnqueuer,
@@ -632,11 +637,30 @@ export function createProcessingRoutes({
       access: "admin",
       handle: async (context) => {
         context.requirePrincipal();
+        /*
+         * The whole queue, and one page of history. The queue is never paged:
+         * it is a single order, and a reorder or a "move to top" has to be able
+         * to reach every job in it. History is paged because it only grows,
+         * and nothing on it is ever moved.
+         */
+        const historyLimit = parseLimit(
+          context.url.searchParams.get("historyLimit"),
+          200,
+          HISTORY_PAGE_SIZE,
+        );
+        const historyOffset = parseOffset(
+          context.url.searchParams.get("historyOffset"),
+        );
         await store.reconcileTerminalQueueJobs();
-        const [counts, report, jobs, view] = await Promise.all([
+        const [counts, report, active, history, view] = await Promise.all([
           store.counts(),
           hardware(),
-          store.list({ limit: 50 }),
+          store.list({ outcome: "active" }),
+          store.list({
+            outcome: "finished",
+            limit: historyLimit,
+            offset: historyOffset,
+          }),
           /*
            * The catalogue projection, which fails soft. A page that cannot
            * list titles must still be able to show the jobs that are running
@@ -647,6 +671,7 @@ export function createProcessingRoutes({
             (): ProcessingCatalogueView => ({ movies: [], series: [] }),
           ),
         ]);
+        const jobs = [...active, ...history];
         sendData(context.response, context.requestId, {
           counts,
           hardware: report,
@@ -1056,11 +1081,7 @@ export function createProcessingRoutes({
         context.requirePrincipal();
         await store.reconcileTerminalQueueJobs();
         const stateParam = context.url.searchParams.get("state");
-        const limit = parseLimit(
-          context.url.searchParams.get("limit"),
-          50,
-          200,
-        );
+        const limit = parseLimit(context.url.searchParams.get("limit"), 200, 50);
         const jobs = await store.list({
           ...(stateParam ? { state: stateParam as ProcessingState } : {}),
           limit,
@@ -1075,12 +1096,23 @@ export function createProcessingRoutes({
       access: "admin",
       handle: async (context) => {
         context.requirePrincipal();
-        const body = asObjectBody(await context.readJson(32 * 1024), [
-          "jobIds",
-        ]);
+        /*
+         * Sized for the whole queue, which is what the page sends: a reorder
+         * capped below the length of the line could not move a job past it.
+         */
+        const body = asObjectBody(
+          await context.readJson(64 * ACTIVE_LISTING_CEILING),
+          ["jobIds"],
+        );
         const raw = body.jobIds;
-        if (!Array.isArray(raw) || raw.length === 0 || raw.length > 200) {
-          throw validationError("jobIds must be a list of 1 to 200 job ids.");
+        if (
+          !Array.isArray(raw) ||
+          raw.length === 0 ||
+          raw.length > ACTIVE_LISTING_CEILING
+        ) {
+          throw validationError(
+            `jobIds must be a list of 1 to ${ACTIVE_LISTING_CEILING} job ids.`,
+          );
         }
         const jobIds = raw.map((value) => {
           if (!isUuid(value)) throw validationError("jobIds is invalid.");

@@ -1108,6 +1108,10 @@ export const tr = {
   "processing.counts.warnings": "Uyarılı",
   "processing.outcome.active": "İşlemde",
   "processing.outcome.finished": "Sonuçlandı",
+  "processing.history.pages": "Sonuçlanan işler sayfaları",
+  "processing.history.newer": "Daha yeni",
+  "processing.history.older": "Daha eski",
+  "processing.history.range": "{from}–{to} / {total}",
   "processing.outcome.chooseOutcome": "İşlem durumu",
   "processing.outcome.emptyActive": "İşlenen bir şey yok.",
   "processing.outcome.emptyActiveHint":
