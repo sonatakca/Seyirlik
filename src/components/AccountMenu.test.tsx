@@ -95,7 +95,7 @@ describe("account menu", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /nav\.account/ }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "nav.playTapu" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Monopoly/ }));
 
     expect(screen.getByText("bridge")).toBeInTheDocument();
   });

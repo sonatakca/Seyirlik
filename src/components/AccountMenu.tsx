@@ -16,6 +16,7 @@ import { formatBuildLabel } from "../lib/appVersion/buildInfo";
 import { clearAuthSession, getCachedSession } from "../lib/authStorage";
 import { isOfflineSupported } from "../lib/offline/offlineLibrary";
 import { ROUTE_COLOR_TRANSITION_FORCE_EVENT } from "./RouteColorTransition";
+import tapuLogo from "../assets/tapu-logo.webp";
 import type { Language } from "../i18n/translations";
 
 const ITEM =
@@ -121,6 +122,10 @@ export function AccountMenu({
     window.dispatchEvent(new Event(ROUTE_COLOR_TRANSITION_FORCE_EVENT));
   };
 
+  const [playTapuBefore, playTapuAfter = ""] = t("nav.playTapu").split(
+    "{logo}",
+  );
+
   const handleLogout = () => {
     clearAuthSession();
     navigate("/login", { replace: true });
@@ -192,9 +197,22 @@ export function AccountMenu({
                 {t("downloads.title")}
               </Link>
             ) : null}
+            {/* The game's own logo stands in for its name, where each
+                language puts it: "Play ⟨logo⟩", "⟨logo⟩ oyna". */}
             <Link to="/tapu" role="menuitem" className={ITEM}>
               <Dices size={16} className="shrink-0" />
-              {t("nav.playTapu")}
+              <span className="flex items-center gap-[0.3em]">
+                {playTapuBefore.trim()}
+                <img
+                  src={tapuLogo}
+                  alt="Monopoly"
+                  width={101}
+                  height={18}
+                  draggable={false}
+                  className="h-[18px] w-auto shrink-0"
+                />
+                {playTapuAfter.trim()}
+              </span>
             </Link>
             {session.isAdministrator ? (
               <Link to="/admin" role="menuitem" className={ITEM}>
