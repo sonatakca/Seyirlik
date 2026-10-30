@@ -4754,9 +4754,11 @@ export function CustomVideoPlayer({
       url: subtitleUrl,
       refresh: !activeSource.offline && subtitleStream.IsExternal === true,
       onText: (text) => setSubtitleCues(parseSubtitleCues(text)),
-      onError: (error) => console.warn(
-        "[Seyirlik Subtitles] Could not load subtitle stream", error,
-      ),
+      onError: (error) =>
+        console.warn(
+          "[Seyirlik Subtitles] Could not load subtitle stream",
+          error,
+        ),
     });
   }, [
     activeSource.itemId,
