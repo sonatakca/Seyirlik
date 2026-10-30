@@ -302,14 +302,21 @@ export function MediaCard({
     fallbackLogoUrl,
   );
 
-  const logoLayout = getLogoLayout(item);
+  // A Continue Watching episode draws its series' poster, so the logo sits
+  // where it was placed on that poster, drawn from the series' own layout.
+  const isSeriesPosterCover = isContinueWatchingCard && isEpisode;
+  const logoLayout = getLogoLayout(
+    isSeriesPosterCover ? { ...item, LogoLayout: item.SeriesLogoLayout } : item,
+  );
+  const logoLayoutItemId = isSeriesPosterCover ? item.SeriesId : item.Id;
   const logoOverlayUrl =
     logoUrl &&
     logoLayout &&
+    logoLayoutItemId &&
     logoLayout.shadow > 0 &&
     variant !== "landscape" &&
-    !isEpisode
-      ? getCardLogoOverlayImageUrl(logoUrl, item.Id, logoLayout, 600)
+    (!isEpisode || isSeriesPosterCover)
+      ? getCardLogoOverlayImageUrl(logoUrl, logoLayoutItemId, logoLayout, 600)
       : null;
   const logoShadowFrame = getLogoShadowFrameStyle(
     logoLayout?.shadow ?? DEFAULT_LOGO_SHADOW,
@@ -450,12 +457,20 @@ export function MediaCard({
 
           <div className="pointer-events-none relative isolate z-30 flex h-full min-w-0 flex-col overflow-hidden bg-black/40 px-4 py-3.5 shadow-[inset_1px_0_0_rgba(255,255,255,0.1)] sm:px-5 sm:py-4 transform-gpu [backface-visibility:hidden]">
             {continueCoverImageUrl && !imageFailed ? (
-              <img
-                src={continueCoverImageUrl}
-                alt=""
+              // The mirror reflects the whole cover, logo included, so the
+              // colour it spreads under the text is the colour beside it.
+              <div
                 aria-hidden="true"
-                className="absolute inset-y-0 left-0 -z-30 h-full w-full -scale-x-100 object-cover opacity-100 blur-[50px] transform-gpu [backface-visibility:hidden]"
-              />
+                data-testid="media-card-cover-mirror"
+                className="absolute inset-0 -z-30 -scale-x-100 blur-[50px] transform-gpu [backface-visibility:hidden]"
+              >
+                <img
+                  src={continueCoverImageUrl}
+                  alt=""
+                  className="h-full w-full object-cover"
+                />
+                {renderLogo(true)}
+              </div>
             ) : null}
             <div className="absolute inset-0 -z-20" />
             <div className="absolute inset-y-0 left-0 -z-[5] w-px bg-gradient-to-b from-transparent via-white/25 to-transparent" />
@@ -579,20 +594,27 @@ export function MediaCard({
       );
     }
 
+    return renderLogo(false);
+  };
+
+  // `decorative` draws a copy for the blurred mirror: unlabelled, and with no
+  // title standing in when there is no logo to reflect.
+  const renderLogo = (decorative: boolean) => {
+    const logoAlt = decorative ? "" : displayTitle;
     return (
       <>
         {logoOverlayUrl ? (
           <img
-            data-logo-overlay="true"
+            data-logo-overlay={decorative ? undefined : "true"}
             src={logoOverlayUrl}
-            alt={displayTitle}
+            alt={logoAlt}
             loading="lazy"
             decoding="async"
             className="pointer-events-none absolute inset-0 z-20 h-full w-full"
           />
         ) : logoUrl && logoLayout ? (
           <div
-            data-logo-layout="true"
+            data-logo-layout={decorative ? undefined : "true"}
             style={getLogoLayoutStyle(
               logoLayout,
               getLogoShadowReach(logoLayout.shadow),
@@ -603,19 +625,19 @@ export function MediaCard({
               {logoShadowBackdropStyle ? (
                 <span
                   aria-hidden="true"
-                  data-logo-shadow-backdrop="true"
+                  data-logo-shadow-backdrop={decorative ? undefined : "true"}
                   style={logoShadowBackdropStyle}
                   className="absolute inset-[6%] rounded-[45%]"
                 />
               ) : null}
               <div
-                data-logo-shadow="true"
+                data-logo-shadow={decorative ? undefined : "true"}
                 style={logoShadowFrame}
                 className="relative z-10"
               >
                 <img
                   src={logoUrl}
-                  alt={displayTitle}
+                  alt={logoAlt}
                   className="block h-auto w-full object-contain"
                 />
               </div>
@@ -627,17 +649,17 @@ export function MediaCard({
           // The frame spans the card; the logo is centred on its foot, and
           // its height follows its width so the aspect ratio is preserved.
           <div
-            data-logo-shadow="true"
+            data-logo-shadow={decorative ? undefined : "true"}
             style={logoShadowFrame}
             className="pointer-events-none absolute inset-x-0 bottom-4 z-20 flex items-end justify-center"
           >
             <img
               src={logoUrl}
-              alt={displayTitle}
+              alt={logoAlt}
               className="h-auto max-h-16 w-auto max-w-[80%] object-contain sm:max-h-24"
             />
           </div>
-        ) : (
+        ) : decorative ? null : (
           // A card with neither logo nor title would be unidentifiable, so the
           // title stands in — carrying its own shadow for the same reason.
           <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 p-3 sm:p-4">

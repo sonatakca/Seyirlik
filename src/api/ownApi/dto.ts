@@ -77,6 +77,7 @@ export interface ItemDto {
   isMissing: boolean;
   /** Fine logo placement on the card, or null when never adjusted. */
   logoLayout: { x: number; y: number; width: number; shadow: number } | null;
+  seriesLogoLayout?: { x: number; y: number; width: number; shadow: number };
   images: ItemImagesDto;
   userState?: UserItemStateDto;
 }

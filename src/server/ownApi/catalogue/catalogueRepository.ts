@@ -37,6 +37,11 @@ export interface CatalogueItemRow {
   missingSince: Date | null;
   /** Fine logo placement on the card, or null when never adjusted. */
   logoLayout: { x: number; y: number; width: number; shadow: number } | null;
+  /**
+   * An episode's card shows its series' poster and logo, so it needs the
+   * series' placement too. Absent when the series was never adjusted.
+   */
+  seriesLogoLayout?: { x: number; y: number; width: number; shadow: number };
   seriesTitle: string | null;
   seasonTitle: string | null;
   genres: string[];
@@ -69,6 +74,10 @@ const ITEM_COLUMNS = `
   item.logo_offset_y,
   item.logo_width,
   item.logo_shadow,
+  series.logo_offset_x AS series_logo_offset_x,
+  series.logo_offset_y AS series_logo_offset_y,
+  series.logo_width AS series_logo_width,
+  series.logo_shadow AS series_logo_shadow,
   series.title AS series_title,
   season.title AS season_title,
   COALESCE(
@@ -115,12 +124,33 @@ interface RawItemRow extends Record<string, unknown> {
   logo_offset_y: number | null;
   logo_width: number | null;
   logo_shadow: number | null;
+  series_logo_offset_x: number | null;
+  series_logo_offset_y: number | null;
+  series_logo_width: number | null;
+  series_logo_shadow: number | null;
   series_title: string | null;
   season_title: string | null;
   genres: string[];
 }
 
+function toLogoLayout(
+  x: number | null,
+  y: number | null,
+  width: number | null,
+  shadow: number | null,
+): CatalogueItemRow["logoLayout"] {
+  return x === null || y === null || width === null || shadow === null
+    ? null
+    : { x, y, width, shadow };
+}
+
 function toItemRow(row: RawItemRow): CatalogueItemRow {
+  const seriesLogoLayout = toLogoLayout(
+    row.series_logo_offset_x,
+    row.series_logo_offset_y,
+    row.series_logo_width,
+    row.series_logo_shadow,
+  );
   return {
     id: row.id,
     libraryId: row.library_id,
@@ -144,18 +174,13 @@ function toItemRow(row: RawItemRow): CatalogueItemRow {
     recursiveItemCount: row.recursive_item_count,
     dateCreated: row.date_created,
     missingSince: row.missing_since,
-    logoLayout:
-      row.logo_offset_x === null ||
-      row.logo_offset_y === null ||
-      row.logo_width === null ||
-      row.logo_shadow === null
-        ? null
-        : {
-            x: row.logo_offset_x,
-            y: row.logo_offset_y,
-            width: row.logo_width,
-            shadow: row.logo_shadow,
-          },
+    logoLayout: toLogoLayout(
+      row.logo_offset_x,
+      row.logo_offset_y,
+      row.logo_width,
+      row.logo_shadow,
+    ),
+    ...(seriesLogoLayout ? { seriesLogoLayout } : {}),
     seriesTitle: row.series_title,
     seasonTitle: row.season_title,
     genres: row.genres ?? [],

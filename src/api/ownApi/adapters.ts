@@ -172,6 +172,9 @@ export function toMediaItem(item: ItemDto): MediaItem {
     Genres: item.genres,
     ProviderIds: item.providerIds,
     ...(item.logoLayout ? { LogoLayout: item.logoLayout } : {}),
+    ...(item.seriesLogoLayout
+      ? { SeriesLogoLayout: item.seriesLogoLayout }
+      : {}),
     ...(item.childCount === undefined ? {} : { ChildCount: item.childCount }),
     ...(item.recursiveItemCount === undefined
       ? {}

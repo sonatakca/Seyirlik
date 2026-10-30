@@ -190,6 +190,8 @@ export interface MediaItem {
    * Absent means never adjusted, which draws the card as it always was.
    */
   LogoLayout?: { x: number; y: number; width: number; shadow: number } | null;
+  /** An episode's series placement, for cards that draw the series poster. */
+  SeriesLogoLayout?: { x: number; y: number; width: number; shadow: number };
   OfficialRating?: string;
   CommunityRating?: number;
   RunTimeTicks?: number;

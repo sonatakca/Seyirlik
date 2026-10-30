@@ -149,4 +149,63 @@ describe("media card logo layout", () => {
 
     expect(screen.getByText("Arrival")).toBeInTheDocument();
   });
+
+  describe("continue watching", () => {
+    function episode(): MediaItem {
+      return {
+        Id: "episode-1",
+        Name: "Chocolate with Nuts",
+        Type: "Episode",
+        SeriesId: "series-1",
+        SeriesName: "Dune",
+        SeriesPrimaryImageTag: "sp",
+        ParentLogoItemId: "series-1",
+        ParentLogoImageTag: "sl",
+        // Episodes are never adjusted themselves; their series is.
+        SeriesLogoLayout: { x: 0.5, y: 0.2, width: 0.7, shadow: 1.5 },
+      } as MediaItem;
+    }
+
+    function renderContinue(item: MediaItem) {
+      return render(
+        <MemoryRouter>
+          <MediaCard
+            item={item}
+            to="/shows/series-1"
+            onClearContinueWatching={() => {}}
+          />
+        </MemoryRouter>,
+      );
+    }
+
+    it("draws an episode's logo as its series poster does", () => {
+      renderContinue(episode());
+
+      const overlays = document.querySelectorAll<HTMLImageElement>(
+        '[data-logo-overlay="true"]',
+      );
+      expect(overlays).toHaveLength(1);
+      // The same raster the series' library poster asks for.
+      const url = new URL(overlays[0]!.src);
+      expect(url.pathname).toBe("/ownAPI/v1/items/series-1/images/logo");
+      expect(url.searchParams.get("layoutItemId")).toBe("series-1");
+      expect(url.searchParams.get("layout")).toBe(
+        "0.500000,0.200000,0.700000,1.500000",
+      );
+    });
+
+    it("reflects the logo in the blurred mirror", () => {
+      renderContinue(episode());
+
+      const mirror = screen.getByTestId("media-card-cover-mirror");
+      const reflected = Array.from(mirror.querySelectorAll("img")).filter(
+        (element) => element.getAttribute("src")?.includes("/images/logo"),
+      );
+      expect(reflected).toHaveLength(1);
+      expect(reflected[0]?.getAttribute("alt")).toBe("");
+      expect(reflected[0]?.getAttribute("src")).toContain(
+        "layoutItemId=series-1",
+      );
+    });
+  });
 });

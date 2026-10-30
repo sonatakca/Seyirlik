@@ -75,6 +75,8 @@ export interface ItemDto {
   isMissing: boolean;
   /** Fine logo placement on the card, or null when never adjusted. */
   logoLayout: { x: number; y: number; width: number; shadow: number } | null;
+  /** An episode's series placement, for cards that show the series poster. */
+  seriesLogoLayout?: { x: number; y: number; width: number; shadow: number };
   images: ItemImagesDto;
   userState?: UserItemStateDto;
 }
@@ -258,6 +260,9 @@ export function toItemDto(
     dateCreated: row.dateCreated.toISOString(),
     isMissing: row.missingSince !== null,
     logoLayout: row.logoLayout,
+    ...(row.seriesLogoLayout
+      ? { seriesLogoLayout: row.seriesLogoLayout }
+      : {}),
     images: buildImages(images, inheritedImages),
     ...(userState === undefined
       ? {}
