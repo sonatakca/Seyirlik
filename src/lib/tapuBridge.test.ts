@@ -20,6 +20,17 @@ describe("tapu bridge", () => {
     expect(url.searchParams.has("ad")).toBe(false);
   });
 
+  it("includes the account id when provided and omits it otherwise", () => {
+    const userId = "8f14e45f-ceea-467a-9575-9d7b1c3b6a21";
+    const url = new URL(tapuUrlFor("sonat", null, "Sonat", userId));
+    const identity = new URLSearchParams(url.hash.slice(1));
+    expect(identity.get("id")).toBe(userId);
+    expect(identity.get("seyirlik")).toBe("sonat");
+
+    const legacyUrl = new URL(tapuUrlFor("sonat"));
+    expect(new URLSearchParams(legacyUrl.hash.slice(1)).has("id")).toBe(false);
+  });
+
   it("returns to the invite the game was opened with", () => {
     expect(tapuUrlFor("sonat", "/?oda=AB12")).toBe(
       "https://monopoly.seyirlik.org/?oda=AB12#seyirlik=sonat",

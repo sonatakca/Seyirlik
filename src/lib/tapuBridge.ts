@@ -17,6 +17,7 @@ export function tapuUrlFor(
   username: string,
   back?: string | null,
   displayName?: string,
+  userId?: string,
 ): string {
   let url = new URL(TAPU_ORIGIN);
   if (back?.startsWith("/")) {
@@ -29,5 +30,7 @@ export function tapuUrlFor(
   }
   url.hash = `seyirlik=${encodeURIComponent(username)}`;
   if (displayName?.trim()) url.hash += `&ad=${encodeURIComponent(displayName)}`;
+  // The account’s id, which never changes and no two accounts share: Tapu keeps each player’s settings under it.
+  if (userId) url.hash += `&id=${encodeURIComponent(userId)}`;
   return url.href;
 }
