@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { tapuUrlFor } from "./tapuBridge";
+import { monopolyUrlFor } from "./monopolyBridge";
 
-describe("tapu bridge", () => {
+describe("monopoly bridge", () => {
   it("hands the username over in the fragment, encoded", () => {
-    expect(tapuUrlFor("sonat")).toBe(
+    expect(monopolyUrlFor("sonat")).toBe(
       "https://monopoly.seyirlik.org/#seyirlik=sonat",
     );
-    expect(tapuUrlFor("Ayşe & Can")).toBe(
+    expect(monopolyUrlFor("Ayşe & Can")).toBe(
       "https://monopoly.seyirlik.org/#seyirlik=Ay%C5%9Fe%20%26%20Can",
     );
   });
 
   it("includes the visible name separately from the login username", () => {
-    const url = new URL(tapuUrlFor("sonat", "/?oda=AB12", "Ayşe & Can"));
+    const url = new URL(monopolyUrlFor("sonat", "/?oda=AB12", "Ayşe & Can"));
     const identity = new URLSearchParams(url.hash.slice(1));
     expect(identity.get("seyirlik")).toBe("sonat");
     expect(identity.get("ad")).toBe("Ayşe & Can");
@@ -22,17 +22,17 @@ describe("tapu bridge", () => {
 
   it("includes the account id when provided and omits it otherwise", () => {
     const userId = "8f14e45f-ceea-467a-9575-9d7b1c3b6a21";
-    const url = new URL(tapuUrlFor("sonat", null, "Sonat", userId));
+    const url = new URL(monopolyUrlFor("sonat", null, "Sonat", userId));
     const identity = new URLSearchParams(url.hash.slice(1));
     expect(identity.get("id")).toBe(userId);
     expect(identity.get("seyirlik")).toBe("sonat");
 
-    const legacyUrl = new URL(tapuUrlFor("sonat"));
+    const legacyUrl = new URL(monopolyUrlFor("sonat"));
     expect(new URLSearchParams(legacyUrl.hash.slice(1)).has("id")).toBe(false);
   });
 
   it("returns to the invite the game was opened with", () => {
-    expect(tapuUrlFor("sonat", "/?oda=AB12")).toBe(
+    expect(monopolyUrlFor("sonat", "/?oda=AB12")).toBe(
       "https://monopoly.seyirlik.org/?oda=AB12#seyirlik=sonat",
     );
   });
@@ -44,7 +44,7 @@ describe("tapu bridge", () => {
       "/\\evil.example",
       "javascript:alert(1)",
     ]) {
-      expect(new URL(tapuUrlFor("sonat", back)).origin).toBe(
+      expect(new URL(monopolyUrlFor("sonat", back)).origin).toBe(
         "https://monopoly.seyirlik.org",
       );
     }

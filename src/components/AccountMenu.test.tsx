@@ -83,12 +83,12 @@ describe("account menu", () => {
     ).toBeNull();
   });
 
-  it("opens Tapu through its sign-in bridge", () => {
+  it("opens Monopoly through its sign-in bridge", () => {
     render(
       <MemoryRouter>
         <AccountMenu />
         <Routes>
-          <Route path="/tapu" element={<p>bridge</p>} />
+          <Route path="/monopoly" element={<p>bridge</p>} />
           <Route path="*" element={null} />
         </Routes>
       </MemoryRouter>,

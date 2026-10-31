@@ -16,7 +16,7 @@ import { formatBuildLabel } from "../lib/appVersion/buildInfo";
 import { clearAuthSession, getCachedSession } from "../lib/authStorage";
 import { isOfflineSupported } from "../lib/offline/offlineLibrary";
 import { ROUTE_COLOR_TRANSITION_FORCE_EVENT } from "./RouteColorTransition";
-import tapuLogo from "../assets/tapu-logo.webp";
+import monopolyLogo from "../assets/monopoly-logo.webp";
 import type { Language } from "../i18n/translations";
 
 const ITEM =
@@ -122,8 +122,8 @@ export function AccountMenu({
     window.dispatchEvent(new Event(ROUTE_COLOR_TRANSITION_FORCE_EVENT));
   };
 
-  const [playTapuBefore, playTapuAfter = ""] =
-    t("nav.playTapu").split("{logo}");
+  const [playMonopolyBefore, playMonopolyAfter = ""] =
+    t("nav.playMonopoly").split("{logo}");
 
   const handleLogout = () => {
     clearAuthSession();
@@ -198,19 +198,19 @@ export function AccountMenu({
             ) : null}
             {/* The game's own logo stands in for its name, where each
                 language puts it: "Play ⟨logo⟩", "⟨logo⟩ oyna". */}
-            <Link to="/tapu" role="menuitem" className={ITEM}>
+            <Link to="/monopoly" role="menuitem" className={ITEM}>
               <Dices size={16} className="shrink-0" />
               <span className="flex items-center gap-[0.3em]">
-                {playTapuBefore.trim()}
+                {playMonopolyBefore.trim()}
                 <img
-                  src={tapuLogo}
+                  src={monopolyLogo}
                   alt="Monopoly"
                   width={101}
                   height={18}
                   draggable={false}
                   className="h-[18px] w-auto shrink-0"
                 />
-                {playTapuAfter.trim()}
+                {playMonopolyAfter.trim()}
               </span>
             </Link>
             {session.isAdministrator ? (
