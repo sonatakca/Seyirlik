@@ -75,3 +75,44 @@ it("carries a journey on from where it is when a re-bake lands mid-flight", asyn
   expect(drawn).toBeGreaterThanOrEqual(before - 1);
   expect(drawn).toBeLessThan(DISTANCE * 0.5);
 });
+
+function Pair({ x, offset }: { x: Curve; offset: number }) {
+  const still = useRef<HTMLDivElement>(null);
+  const moved = useRef<HTMLDivElement>(null);
+  useBake(
+    [x],
+    (at) => [
+      [still.current, { transform: `translateX(${x.get(at)}px)` }],
+      [moved.current, { transform: `translateX(${x.get(at) + offset}px)` }],
+    ],
+    [offset],
+  );
+  return (
+    <>
+      <div ref={still} data-testid="still" />
+      <div ref={moved} data-testid="moved" />
+    </>
+  );
+}
+
+it("leaves an element playing when a mid-flight re-bake does not change its journey", async () => {
+  const x = new Curve(0);
+  const view = render(<Pair x={x} offset={0} />);
+  const still = view.getByTestId("still");
+  const moved = view.getByTestId("moved");
+
+  x.tween(DISTANCE, { duration: 2, ease: "linear" });
+  await afterFlush();
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const [playing] = still.getAnimations();
+  const [before] = moved.getAnimations();
+
+  // Restarting the unchanged element would hold it at the main thread's "now"
+  // for a frame while the compositor had already drawn it further on.
+  act(() => view.rerender(<Pair x={x} offset={1} />));
+
+  expect(still.getAnimations()).toHaveLength(1);
+  expect(still.getAnimations()[0]).toBe(playing);
+  expect(moved.getAnimations()).toHaveLength(1);
+  expect(moved.getAnimations()[0]).not.toBe(before);
+});

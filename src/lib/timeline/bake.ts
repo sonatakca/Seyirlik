@@ -30,11 +30,22 @@ const SAMPLES_PER_SECOND = 120;
  * the animation finishes or is replaced by the next one, which picks up from
  * the exact value of the moment.
  */
+/** An element's baked journey: its animation and the samples it plays. */
+interface Playing {
+  animation: Animation;
+  keyframes: Keyframe[];
+  /** When its first sample is, and how many steps it takes to `until`. */
+  start: number;
+  steps: number;
+}
+
 class Bakery {
   constructor(private readonly render: (at: number) => BakedFrame) {}
   private sources: readonly ValueSource[] = [];
   private unsubscribe: Array<() => void> = [];
-  private running: Animation[] = [];
+  private playing = new Map<HTMLElement, Playing>();
+  /** When the journeys in `playing` end. */
+  private until = 0;
 
   setSources(sources: readonly ValueSource[]) {
     if (
@@ -57,15 +68,13 @@ class Bakery {
    * frame that a waiting tween has asked for bakes its journey.
    */
   flush(now: number, frame: boolean) {
-    for (const animation of this.running) animation.cancel();
-    this.running = [];
-
     if (frame) for (const source of this.sources) source.anchor?.(now);
     const until = Math.max(
       0,
       ...this.sources.map((source) => source.settlesAt),
     );
     if (!Number.isFinite(until)) {
+      this.stopAll();
       for (const [element, style] of this.render(now)) {
         if (element) applyStyle(element, style);
       }
@@ -75,29 +84,52 @@ class Bakery {
     for (const [element, style] of end) {
       if (element) applyStyle(element, style);
     }
-    if (until <= now + 1) return;
+    if (until <= now + 1) {
+      this.stopAll();
+      return;
+    }
+
+    /*
+     * A re-bake with the same timing is a prop changing mid-flight, usually
+     * one that moves a single element (an artwork's size arriving). Every
+     * element whose journey comes out the same keeps the animation it is
+     * playing. Restarting it would hold its first sample, which is where the
+     * journey stood on the main thread's clock, until the timeline reached it,
+     * while the compositor had already drawn it further on: a frame back and
+     * then a leap forward.
+     */
+    const kept = new Map<HTMLElement, Playing>();
+    if (until === this.until) {
+      const schedules = new Map<string, Map<HTMLElement, Keyframe[]>>();
+      for (const [element, playing] of this.playing) {
+        const key = `${playing.start}:${playing.steps}`;
+        let again = schedules.get(key);
+        if (!again) {
+          again = this.sample(playing.start, until, playing.steps);
+          schedules.set(key, again);
+        }
+        if (sameKeyframes(again.get(element), playing.keyframes)) {
+          kept.set(element, playing);
+        }
+      }
+    }
+    for (const [element, playing] of this.playing) {
+      if (!kept.has(element)) playing.animation.cancel();
+    }
+    this.playing = kept;
+    this.until = until;
 
     const duration = until - now;
     const steps = Math.max(
       2,
       Math.ceil((duration / 1000) * SAMPLES_PER_SECOND),
     );
-    const frames = new Map<HTMLElement, Keyframe[]>();
-    for (let step = 0; step <= steps; step += 1) {
-      const offset = step / steps;
-      for (const [element, style] of this.render(now + duration * offset)) {
-        if (!element) continue;
-        let list = frames.get(element);
-        if (!list) {
-          list = [];
-          frames.set(element, list);
-        }
-        list.push({ ...style, offset });
-      }
-    }
-
-    for (const [element, keyframes] of frames) {
-      if (typeof element.animate !== "function" || isStill(keyframes)) {
+    for (const [element, keyframes] of this.sample(now, until, steps)) {
+      if (
+        kept.has(element) ||
+        typeof element.animate !== "function" ||
+        isStill(keyframes)
+      ) {
         continue;
       }
       const animation = element.animate(keyframes, {
@@ -116,16 +148,41 @@ class Bakery {
       // together moves on one clock, and what the sources report mid-flight
       // matches what is on screen.
       animation.startTime = now;
-      this.running.push(animation);
+      this.playing.set(element, { animation, keyframes, start: now, steps });
     }
+  }
+
+  /** Each element's look at `steps + 1` even moments from `start` to `until`. */
+  private sample(start: number, until: number, steps: number) {
+    const frames = new Map<HTMLElement, Keyframe[]>();
+    for (let step = 0; step <= steps; step += 1) {
+      const offset = step / steps;
+      for (const [element, style] of this.render(
+        start + (until - start) * offset,
+      )) {
+        if (!element) continue;
+        let list = frames.get(element);
+        if (!list) {
+          list = [];
+          frames.set(element, list);
+        }
+        list.push({ ...style, offset });
+      }
+    }
+    return frames;
+  }
+
+  private stopAll() {
+    for (const { animation } of this.playing.values()) animation.cancel();
+    this.playing.clear();
+    this.until = 0;
   }
 
   dispose() {
     this.unsubscribe.forEach((stop) => stop());
     this.unsubscribe = [];
     this.sources = [];
-    for (const animation of this.running) animation.cancel();
-    this.running = [];
+    this.stopAll();
     dirty.delete(this);
   }
 }
@@ -135,6 +192,21 @@ function applyStyle(element: HTMLElement, style: BakedStyle) {
   if (style.opacity !== undefined) {
     element.style.opacity = String(style.opacity);
   }
+}
+
+function sameKeyframes(
+  next: Keyframe[] | undefined,
+  previous: Keyframe[],
+): boolean {
+  return (
+    next !== undefined &&
+    next.length === previous.length &&
+    next.every(
+      (frame, index) =>
+        frame.transform === previous[index].transform &&
+        frame.opacity === previous[index].opacity,
+    )
+  );
 }
 
 function isStill(keyframes: Keyframe[]) {
