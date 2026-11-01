@@ -1702,6 +1702,43 @@ export const tr = {
   "devtools.motionLab.close": "Hareket laboratuvarını kapat",
   "devtools.motionLab.actualLift": "Bu ekranda yükselme:",
   "devtools.motionLab.capped": "hız sınırıyla uzadı",
+  "devtools.motionLab.hint.travelS": "Kuyruktan sahneye yükselme süresi",
+  "devtools.motionLab.hint.maxTravelPxPerFrameAt1080":
+    "Hız sınırı; yükselmeyi uzatabilir",
+  "devtools.motionLab.hint.riseUndimShare":
+    "Yeni başlığın ne kadar erken aydınlandığı",
+  "devtools.motionLab.hint.travelEase": "Yükselmenin hız eğrisi",
+  "devtools.motionLab.hint.pushBackScale": "Eski başlığın ne kadar küçüldüğü",
+  "devtools.motionLab.hint.pushBackDim": "Eski başlığın ne kadar karardığı",
+  "devtools.motionLab.hint.slideS": "Kuyruğun kayma süresi",
+  "devtools.motionLab.hint.slideDelayS": "Kuyruk kaymadan önceki bekleme",
+  "devtools.motionLab.hint.dropS": "Atlanan başlıkların batma süresi",
+  "devtools.motionLab.hint.queueArriveDimS": "Yeni küçük resmin kararma süresi",
+  "devtools.motionLab.hint.hoverLiftS": "Üzerine gelince küçük resmin kalkışı",
+  "devtools.motionLab.hint.swipeSettleS": "Kısa kaydırmadan sonra geri oturma",
+  "devtools.motionLab.hint.slideEase": "Kuyruk kaymasının hız eğrisi",
+  "devtools.motionLab.hint.settleEase": "Kalkış ve geri oturma eğrisi",
+  "devtools.motionLab.hint.copyLeadIn": "Yeni yazının çıkışı, yükselme oranı",
+  "devtools.motionLab.hint.copyExitS": "Eski yazının kaybolma süresi",
+  "devtools.motionLab.hint.copyExitStaggerS":
+    "Satırlar giderken aradaki boşluk",
+  "devtools.motionLab.hint.copyEnterS": "Yeni yazının belirme süresi",
+  "devtools.motionLab.hint.copyEnterStaggerS":
+    "Satırlar gelirken aradaki boşluk",
+  "devtools.motionLab.hint.overviewS": "Özetin açılıp kapanması",
+  "devtools.motionLab.hint.openCopyDelayS":
+    "Sayfa açılışı: yazıdan önce bekleme",
+  "devtools.motionLab.hint.openQueueDelayS":
+    "Sayfa açılışı: kuyruktan önce bekleme",
+  "devtools.motionLab.hint.openQueueDimS":
+    "Sayfa açılışı: küçük resimlerin kararması",
+  "devtools.motionLab.hint.openQueueStaggerS":
+    "Sayfa açılışı: küçük resimler arası",
+  "devtools.motionLab.hint.openQueueFadeS":
+    "Sayfa açılışı: kontrollerin belirmesi",
+  "devtools.motionLab.hint.skeletonFadeS": "Yer tutucunun görsele dönüşmesi",
+  "devtools.motionLab.hint.trailerS": "Fragmanın belirip kaybolması",
+  "devtools.motionLab.hint.progressFadeS": "İlerleme çizgisinin solması",
   "devtools.motionLab.reset": "Sıfırla",
   "devtools.motionLab.copy": "Değişiklikleri kopyala",
   "devtools.motionLab.copied": "Kopyalandı",

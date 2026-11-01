@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
+import type { TranslationKey } from "../../i18n/translations";
 import {
   getMotionLabValues,
   setMotionLabEnabled,
@@ -351,6 +352,10 @@ export default function HeroMotionLab({
   );
 }
 
+/** The one-line description each value carries under its name. */
+const hintKey = (key: keyof HeroMotion) =>
+  `devtools.motionLab.hint.${key}` as TranslationKey;
+
 function DialRow({
   dial,
   value,
@@ -362,16 +367,21 @@ function DialRow({
   isChanged: boolean;
   onChange: (value: number) => void;
 }) {
+  const { t } = useLanguage();
   const id = `motion-lab-${dial.key}`;
   return (
     <div className="grid grid-cols-[1fr_4.5rem] items-center gap-x-2">
-      <label
-        htmlFor={id}
-        className={`truncate font-mono text-[0.6875rem] ${
-          isChanged ? "text-amber-300" : "text-white/70"
-        }`}
-      >
-        {dial.key}
+      <label htmlFor={id} className="min-w-0">
+        <span
+          className={`block truncate font-mono text-[0.6875rem] ${
+            isChanged ? "text-amber-300" : "text-white/70"
+          }`}
+        >
+          {dial.key}
+        </span>
+        <span className="block text-[0.6875rem] font-semibold leading-4 text-white/40">
+          {t(hintKey(dial.key))}
+        </span>
       </label>
       <input
         type="number"
@@ -405,11 +415,12 @@ function EaseRow({
   isChanged,
   onChange,
 }: {
-  name: string;
+  name: EaseKey;
   value: Bezier;
   isChanged: boolean;
   onChange: (value: Bezier) => void;
 }) {
+  const { t } = useLanguage();
   const [x1, y1, x2, y2] = value;
   // The curve in a 40-unit box, y up, with room for overshoot.
   const path = `M0 40 C${x1 * 40} ${40 - y1 * 40} ${x2 * 40} ${40 - y2 * 40} 40 0`;
@@ -421,6 +432,9 @@ function EaseRow({
         }`}
       >
         {name}
+        <span className="block font-sans text-[0.6875rem] font-semibold leading-4 text-white/40">
+          {t(hintKey(name))}
+        </span>
       </div>
       <div className="flex items-center gap-2">
         <svg
