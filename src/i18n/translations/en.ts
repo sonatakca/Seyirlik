@@ -1692,6 +1692,25 @@ export const en = {
   "devtools.title": "Devtools",
   "devtools.pageDescription":
     "Tools for debugging, maintenance, bug tracking, and future planning.",
+  "devtools.card.motionLab.title": "Motion Lab",
+  "devtools.card.motionLab.description":
+    "Retune the home hero's animation timings on the real home page, and copy the values that feel right.",
+  "devtools.card.motionLab.tag": "UI Development",
+  "devtools.motionLab.title": "Motion Lab",
+  "devtools.motionLab.description":
+    "A panel over the real home hero that sets every duration, delay, ease and speed limit it moves by. Nothing is simulated: the next and previous buttons run the hero's own travel, so what you see is exactly what these values ship as. Changes stay in this browser and are undone when you leave the home page.",
+  "devtools.motionLab.panelLabel": "Panel on the home page",
+  "devtools.motionLab.panelOn": "Panel on",
+  "devtools.motionLab.panelOff": "Panel off",
+  "devtools.motionLab.open": "Open the home page",
+  "devtools.motionLab.collapse": "Collapse",
+  "devtools.motionLab.expand": "Expand",
+  "devtools.motionLab.close": "Close the motion lab",
+  "devtools.motionLab.actualLift": "Lift on this screen:",
+  "devtools.motionLab.capped": "lengthened by the speed limit",
+  "devtools.motionLab.reset": "Reset",
+  "devtools.motionLab.copy": "Copy changes",
+  "devtools.motionLab.copied": "Copied",
   "devtools.card.skeletonLab.title": "Skeleton Lab",
   "devtools.card.skeletonLab.description":
     "Freeze and compare loading skeletons against loaded Home and Library layouts without reloading.",

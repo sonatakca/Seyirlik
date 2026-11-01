@@ -1686,6 +1686,25 @@ export const tr = {
   "devtools.title": "Devtools",
   "devtools.pageDescription":
     "Hata ayıklama, bakım, hata takibi ve gelecek planları için araçlar.",
+  "devtools.card.motionLab.title": "Hareket Laboratuvarı",
+  "devtools.card.motionLab.description":
+    "Ana sayfa vitrininin animasyon sürelerini gerçek ana sayfada ayarla, doğru gelen değerleri kopyala.",
+  "devtools.card.motionLab.tag": "Arayüz Geliştirme",
+  "devtools.motionLab.title": "Hareket Laboratuvarı",
+  "devtools.motionLab.description":
+    "Gerçek ana sayfa vitrininin üstünde, onu hareket ettiren her süreyi, gecikmeyi, eğriyi ve hız sınırını ayarlayan bir panel. Hiçbir şey taklit edilmez: ileri ve geri düğmeleri vitrinin kendi geçişini çalıştırır, yani gördüğün tam olarak bu değerlerle yayınlanacak olandır. Değişiklikler bu tarayıcıda kalır ve ana sayfadan ayrılınca geri alınır.",
+  "devtools.motionLab.panelLabel": "Ana sayfadaki panel",
+  "devtools.motionLab.panelOn": "Panel açık",
+  "devtools.motionLab.panelOff": "Panel kapalı",
+  "devtools.motionLab.open": "Ana sayfayı aç",
+  "devtools.motionLab.collapse": "Daralt",
+  "devtools.motionLab.expand": "Genişlet",
+  "devtools.motionLab.close": "Hareket laboratuvarını kapat",
+  "devtools.motionLab.actualLift": "Bu ekranda yükselme:",
+  "devtools.motionLab.capped": "hız sınırıyla uzadı",
+  "devtools.motionLab.reset": "Sıfırla",
+  "devtools.motionLab.copy": "Değişiklikleri kopyala",
+  "devtools.motionLab.copied": "Kopyalandı",
   "devtools.card.skeletonLab.title": "İskelet Laboratuvarı",
   "devtools.card.skeletonLab.description":
     "Sayfayı yenilemeden yükleme iskeletlerini yüklü Ana Sayfa ve Kütüphane düzenleriyle karşılaştır.",

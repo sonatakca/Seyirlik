@@ -1,4 +1,6 @@
 import {
+  Suspense,
+  lazy,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -19,6 +21,7 @@ import {
 } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
 import { DwellClock } from "../../lib/dwellClock";
+import { useMotionLabEnabled } from "../../lib/heroMotionLab";
 import { useBake } from "../../lib/timeline/bake";
 import { Curve, derive, type TweenControls } from "../../lib/timeline/curve";
 import { getItemDisplayMetadata } from "../../lib/itemMetadataPreferences";
@@ -106,6 +109,9 @@ const QUEUE_DIM = 0;
  * thing being pushed.
  */
 const SWIPE_DISTANCE_PX = 56;
+// Only for an administrator who switched the motion lab on.
+const HeroMotionLab = lazy(() => import("./HeroMotionLab"));
+
 const SWIPE_VELOCITY_PX_PER_MS = 0.45;
 const SWIPE_GIVE = 0.22;
 const SWIPE_GIVE_MAX_PX = 44;
@@ -185,6 +191,7 @@ export function HomeHero({
   const [isArtworkReady, setIsArtworkReady] = useState(false);
   const [isSkeletonGone, setIsSkeletonGone] = useState(false);
   const [isTravelling, setIsTravelling] = useState(false);
+  const isMotionLabOn = useMotionLabEnabled();
   const readyRef = useRef(false);
 
   const [isPaused, setIsPaused] = useState(false);
@@ -318,7 +325,7 @@ export function HomeHero({
         } else {
           const entry = motionFor(id, target, 1);
           void entry.dim.tween(QUEUE_DIM, {
-            duration: reduceMotion ? 0 : 0.4,
+            duration: reduceMotion ? 0 : HERO_MOTION.queueArriveDimS,
             ease: "linear",
           });
         }
@@ -403,8 +410,11 @@ export function HomeHero({
       if (!entry) return;
       place(entry, slotPlacement(size, slots[position]!));
       void entry.dim.tween(QUEUE_DIM, {
-        duration: reduceMotion ? 0 : 0.5,
-        delay: reduceMotion ? 0 : HERO_MOTION.openQueueDelayS + position * 0.06,
+        duration: reduceMotion ? 0 : HERO_MOTION.openQueueDimS,
+        delay: reduceMotion
+          ? 0
+          : HERO_MOTION.openQueueDelayS +
+            position * HERO_MOTION.openQueueStaggerS,
         ease: "easeOut",
       });
     });
@@ -528,7 +538,10 @@ export function HomeHero({
         // The incoming title grows out of its slot over the stage.
         const rising = motions.current.get(incoming.Id)!;
         moveTo(rising, stagePlacement(), liftOptions);
-        void rising.dim.tween(0, { duration: lift * 0.5, ease: "linear" });
+        void rising.dim.tween(0, {
+          duration: lift * HERO_MOTION.riseUndimShare,
+          ease: "linear",
+        });
 
         // The outgoing one recedes beneath it.
         const under = motions.current.get(outgoing.Id)!;
@@ -762,7 +775,7 @@ export function HomeHero({
     const entry = motions.current.get(stageItem.Id);
     if (!entry) return;
     const options = {
-      duration: reduceMotion ? 0 : 0.8,
+      duration: reduceMotion ? 0 : HERO_MOTION.trailerS,
       ease: HERO_MOTION.travelEase,
     };
     void entry.trailer.tween(isTrailerPlaying ? 1 : 0, options);
@@ -810,7 +823,7 @@ export function HomeHero({
     const entry = stageEntry();
     if (entry)
       void entry.x.tween(0, {
-        duration: reduceMotion ? 0 : 0.32,
+        duration: reduceMotion ? 0 : HERO_MOTION.swipeSettleS,
         ease: HERO_MOTION.settleEase,
       });
   };
@@ -853,7 +866,7 @@ export function HomeHero({
     if (!slot) return;
     const lift = active ? slot.height * 0.06 : 0;
     const options = {
-      duration: reduceMotion ? 0 : 0.3,
+      duration: reduceMotion ? 0 : HERO_MOTION.hoverLiftS,
       ease: HERO_MOTION.settleEase,
     };
     void entry.y.tween(slot.y - lift, options);
@@ -1045,7 +1058,9 @@ export function HomeHero({
               opacity:
                 isArtworkReady && !isTravelling && !isTrailerPlaying ? 1 : 0,
             }}
-            transition={{ duration: reduceMotion ? 0 : 0.35 }}
+            transition={{
+              duration: reduceMotion ? 0 : HERO_MOTION.progressFadeS,
+            }}
           >
             <div
               ref={clock.attach}
@@ -1067,7 +1082,7 @@ export function HomeHero({
             initial={{ opacity: 0 }}
             animate={{ opacity: isArtworkReady ? 1 : 0 }}
             transition={{
-              duration: reduceMotion ? 0 : 0.5,
+              duration: reduceMotion ? 0 : HERO_MOTION.openQueueFadeS,
               delay: reduceMotion ? 0 : HERO_MOTION.openQueueDelayS,
               ease: "easeOut",
             }}
@@ -1162,6 +1177,17 @@ export function HomeHero({
         ) : null}
       </div>
 
+      {isMotionLabOn ? (
+        <Suspense fallback={null}>
+          <HeroMotionLab
+            stage={stage}
+            isTravelling={isTravelling}
+            onPrevious={() => void travel("backward")}
+            onNext={() => void travel("forward")}
+          />
+        </Suspense>
+      ) : null}
+
       {/* Loading: the skeleton, piece for piece where the hero's own pieces
           will be, fading off as the first artwork fades in. */}
       {stage && !isSkeletonGone ? (
@@ -1170,7 +1196,10 @@ export function HomeHero({
           className="pointer-events-none absolute inset-0 z-[7]"
           initial={false}
           animate={{ opacity: isArtworkReady ? 0 : 1 }}
-          transition={{ duration: reduceMotion ? 0 : 0.5, ease: "easeOut" }}
+          transition={{
+            duration: reduceMotion ? 0 : HERO_MOTION.skeletonFadeS,
+            ease: "easeOut",
+          }}
           onAnimationComplete={() => {
             if (isArtworkReady) setIsSkeletonGone(true);
           }}

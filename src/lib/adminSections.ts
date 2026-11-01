@@ -81,6 +81,7 @@ export type AdminIconName =
   | "databaseZap"
   | "download"
   | "fileVideo"
+  | "gauge"
   | "hardDrive"
   | "headphones"
   | "heartPulse"
@@ -306,6 +307,15 @@ export const ADMIN_SECTIONS: readonly AdminSection[] = [
   },
 
   // ---- development: building Seyirlik, not running it
+  {
+    id: "motion-lab",
+    group: "development",
+    path: "/dev/motion-lab",
+    titleKey: "devtools.card.motionLab.title",
+    descriptionKey: "devtools.card.motionLab.description",
+    tagKey: "devtools.card.motionLab.tag",
+    icon: "gauge",
+  },
   {
     id: "skeleton-lab",
     group: "development",

@@ -73,7 +73,9 @@ export function heroDock(
  * Timing, in one place. Every trip of one kind takes the same time wherever it
  * starts, so lifting the third miniature feels like lifting the first.
  */
-export const HERO_MOTION = {
+type Bezier = [number, number, number, number];
+
+const HERO_MOTION_DEFAULTS = {
   /**
    * A title lifting from the queue to the stage, or back. Sine in-out: of the
    * smooth curves it has the lowest peak speed (π/2 × the average), and on
@@ -81,17 +83,17 @@ export const HERO_MOTION = {
    */
   travelS: 0.5,
   overviewS: 0.24,
-  travelEase: [0.37, 0, 0.63, 1] as [number, number, number, number],
+  travelEase: [0.37, 0, 0.63, 1] as Bezier,
   /**
    * The queue sliding along: every miniature in it, the ones closing up and
    * the ones arriving from beyond the edge, on one shared clock.
    */
   slideS: 0.45,
   slideDelayS: 0.06,
-  slideEase: [0.35, 0, 0.25, 1] as [number, number, number, number],
+  slideEase: [0.35, 0, 0.25, 1] as Bezier,
   /** A title skipped over in the queue, sinking out of it. */
   dropS: 0.26,
-  settleEase: [0.61, 1, 0.88, 1] as [number, number, number, number],
+  settleEase: [0.61, 1, 0.88, 1] as Bezier,
   /** What the outgoing title does under the incoming one: it recedes. */
   pushBackScale: 0.95,
   pushBackDim: 0.5,
@@ -105,23 +107,62 @@ export const HERO_MOTION = {
   copyEnterStaggerS: 0.05,
   /** Share of the lift after which the new title's copy starts rising. */
   copyLeadIn: 0.72,
-} as const;
+  /** Share of the lift over which the incoming title's dim clears. */
+  riseUndimShare: 0.5,
+  /** A miniature arriving at the end of the queue dimming to its rest. */
+  queueArriveDimS: 0.4,
+  /** The queue's first appearance: each miniature's dim, and the gap between them. */
+  openQueueDimS: 0.5,
+  openQueueStaggerS: 0.06,
+  /** The queue's controls fading in on the first arrival. */
+  openQueueFadeS: 0.5,
+  /** The trailer fading over the artwork, or away. */
+  trailerS: 0.8,
+  /** A swipe let go short of a change, settling back. */
+  swipeSettleS: 0.32,
+  /** A miniature rising under the pointer, or settling back. */
+  hoverLiftS: 0.3,
+  /** The dwell progress line fading as a title starts or stops travelling. */
+  progressFadeS: 0.35,
+  /** The skeleton giving way to the first artwork. */
+  skeletonFadeS: 0.5,
+  /**
+   * The fastest any edge may move, in px per frame at 60 fps on a 1080-tall
+   * canvas, scaled with the canvas. A lift from the far end of the queue to
+   * the full frame is the longest trip; with the sine lift this keeps it near
+   * half a second on any desktop, the fastest frames still a sweep and not a
+   * jump.
+   */
+  maxTravelPxPerFrameAt1080: 84,
+};
+
+export type HeroMotion = {
+  -readonly [Key in keyof typeof HERO_MOTION_DEFAULTS]: (typeof HERO_MOTION_DEFAULTS)[Key];
+};
+
+/**
+ * Every duration, delay, ease and distance the home hero moves by. Read at the
+ * moment a move starts, never copied, so the motion lab can retune the live
+ * hero (see `tuneHeroMotion`) and what it shows is exactly what ships.
+ */
+export const HERO_MOTION: Readonly<HeroMotion> = { ...HERO_MOTION_DEFAULTS };
+
+export function heroMotionDefaults(): Readonly<HeroMotion> {
+  return HERO_MOTION_DEFAULTS;
+}
+
+/** Sets the given values on the live hero, everything else to its default. */
+export function tuneHeroMotion(values: Partial<HeroMotion>): void {
+  Object.assign(HERO_MOTION, HERO_MOTION_DEFAULTS, values);
+}
 
 /** Time on stage before the next title lifts off. */
 export const HERO_DWELL_MS = 11_000;
 /** With a trailer: how long the artwork and copy hold before it starts. */
 export const HERO_TRAILER_DELAY_MS = 6_000;
 
-/**
- * The fastest any edge may move, in px per frame at 60 fps on a 1080-tall
- * canvas, scaled with the canvas. A lift from the far end of the queue to the
- * full frame is the longest trip; with the sine lift this keeps it near half
- * a second on any desktop, the fastest frames still a sweep and not a jump.
- */
-export const MAX_TRAVEL_PX_PER_FRAME_AT_1080 = 84;
-
 export function travelBudgetPxPerFrame(stage: StageSize): number {
-  return (MAX_TRAVEL_PX_PER_FRAME_AT_1080 * stage.height) / 1080;
+  return (HERO_MOTION.maxTravelPxPerFrameAt1080 * stage.height) / 1080;
 }
 
 const clamp = (value: number, min: number, max: number) =>

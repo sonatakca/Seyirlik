@@ -119,6 +119,9 @@ const MyListPage = lazy(async () => ({
 const CurationPage = lazy(async () => ({
   default: (await import("./pages/admin/CurationPage")).CurationPage,
 }));
+const MotionLabPage = lazy(async () => ({
+  default: (await import("./pages/MotionLabPage")).MotionLabPage,
+}));
 const SkeletonLabPage = lazy(async () => ({
   default: (await import("./pages/SkeletonLabPage")).SkeletonLabPage,
 }));
@@ -529,6 +532,7 @@ export default function App() {
                   {/* The editor grew past the home page; the old path is kept so
                     a bookmark still lands somewhere real. */}
                   <Route path="/dev/home-curation" element={<CurationPage />} />
+                  <Route path="/dev/motion-lab" element={<MotionLabPage />} />
                   {import.meta.env.DEV ? (
                     <Route
                       path="/dev/skeleton-lab"
