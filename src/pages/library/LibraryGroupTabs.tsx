@@ -7,7 +7,7 @@ interface LibraryGroupTabsProps {
   /** How many of the current search's results sit under each tab. */
   counts: Record<LibraryGroupId, number>;
   onChange: (group: LibraryGroupId) => void;
-  /** Share the full width between the tabs, as on a phone. */
+  /** Share the full width between the tabs, each growing from its label. */
   fill?: boolean;
   className?: string;
 }
@@ -56,7 +56,7 @@ export function LibraryGroupTabs({
             aria-selected={isSelected}
             tabIndex={isSelected ? 0 : -1}
             onClick={() => onChange(id)}
-            className={`${fill ? "flex-1" : ""} flex h-10 items-center justify-center gap-2 rounded-full px-4 text-sm font-black transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/30 ${
+            className={`${fill ? "flex-auto" : ""} flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 text-sm font-black transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/30 ${
               isSelected
                 ? "bg-white text-zinc-950"
                 : "text-white/70 hover:bg-white/[0.09] hover:text-white"

@@ -724,7 +724,7 @@ export const tr = {
   "library.sortBy": "Sırala",
   "library.noMatches": "Bu kütüphane görünümünde eşleşen içerik yok.",
   "library.group.shows": "Diziler",
-  "library.group.cartoons": "Çizgi diziler",
+  "library.group.cartoons": "Çizgi dizi & animasyon",
   "library.custom": "Özel",
   "library.name": "Ad",
   "library.latest": "Son eklenen",

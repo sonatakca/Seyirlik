@@ -727,7 +727,7 @@ export const en = {
   "library.sortBy": "Sort by",
   "library.noMatches": "No items matched this library view.",
   "library.group.shows": "Shows",
-  "library.group.cartoons": "Cartoons",
+  "library.group.cartoons": "Cartoons & Animations",
   "library.custom": "Custom",
   "library.name": "Name",
   "library.latest": "Latest",
