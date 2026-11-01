@@ -56,7 +56,7 @@ export function LibraryGroupTabs({
             aria-selected={isSelected}
             tabIndex={isSelected ? 0 : -1}
             onClick={() => onChange(id)}
-            className={`${fill ? "flex-auto" : ""} flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 text-sm font-black transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/30 ${
+            className={`${fill ? "flex-auto gap-1.5 px-2.5 max-[359px]:text-xs" : "gap-2 px-4"} flex h-10 items-center justify-center whitespace-nowrap rounded-full text-sm font-black transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/30 ${
               isSelected
                 ? "bg-white text-zinc-950"
                 : "text-white/70 hover:bg-white/[0.09] hover:text-white"
