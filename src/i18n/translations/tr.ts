@@ -723,6 +723,8 @@ export const tr = {
   "library.searchLabel": "Bu kütüphanede ara",
   "library.sortBy": "Sırala",
   "library.noMatches": "Bu kütüphane görünümünde eşleşen içerik yok.",
+  "library.group.shows": "Diziler",
+  "library.group.cartoons": "Çizgi diziler",
   "library.custom": "Özel",
   "library.name": "Ad",
   "library.latest": "Son eklenen",

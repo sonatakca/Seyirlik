@@ -40,6 +40,49 @@ export function compareNames(left: MediaItem, right: MediaItem): number {
   );
 }
 
+/** TMDB's animation genre, in either language the metadata may arrive in. */
+const ANIMATION_GENRES = new Set(["animation", "animasyon"]);
+
+export function isCartoonSeries(item: MediaItem): boolean {
+  return (
+    item.Type === "Series" &&
+    (item.Genres ?? []).some((genre) =>
+      ANIMATION_GENRES.has(genre.trim().toLocaleLowerCase("en")),
+    )
+  );
+}
+
+export type LibraryGroupId = "shows" | "cartoons";
+
+/** The tabs a shelf of series splits into, live-action shows first. */
+export const LIBRARY_GROUPS: ReadonlyArray<{
+  id: LibraryGroupId;
+  titleKey: TranslationKey;
+}> = [
+  { id: "shows", titleKey: "library.group.shows" },
+  { id: "cartoons", titleKey: "library.group.cartoons" },
+];
+
+export function libraryGroupOf(item: MediaItem): LibraryGroupId {
+  return isCartoonSeries(item) ? "cartoons" : "shows";
+}
+
+/**
+ * Tabs only help a shelf that holds both kinds. Decided on the whole library,
+ * not on a search, so the tabs stay put while someone types.
+ */
+export function hasLibraryGroups(items: MediaItem[]): boolean {
+  return (
+    items.some(isCartoonSeries) &&
+    items.some((item) => !isCartoonSeries(item))
+  );
+}
+
+/** An unknown or missing `?group=` value falls back to the first tab. */
+export function parseLibraryGroup(value: string | null): LibraryGroupId {
+  return value === "cartoons" ? "cartoons" : "shows";
+}
+
 export function resolveLibraryCanonicalPath({
   activeId,
   canonicalPathOverride,

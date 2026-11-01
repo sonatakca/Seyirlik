@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { move, settle } from "../../lib/compositorMotion";
 import { Search, SlidersHorizontal } from "lucide-react";
-import { useLocation, useParams } from "react-router-dom";
+import { useLocation, useParams, useSearchParams } from "react-router-dom";
 import {
   LibraryBarcodePlaceholder,
   LibraryHeaderArt,
@@ -56,12 +56,17 @@ import {
 import {
   compareNames,
   countLabel,
+  hasLibraryGroups,
   isWatchableScopeItem,
   isWholeWatchedScope,
+  libraryGroupOf,
+  parseLibraryGroup,
   resolveLibraryCanonicalPath,
   withWatchedState,
+  type LibraryGroupId,
   type LibrarySortMode,
 } from "../library/libraryModel";
+import { LibraryGroupTabs } from "../library/LibraryGroupTabs";
 import { hasCuratedOrder, orderItemsByCuration } from "../../lib/curation";
 import { useCuratedList } from "../../hooks/useCuratedList";
 
@@ -371,12 +376,50 @@ export function MobileLibraryPage({
     );
   }, [data, searchTerm, effectiveSortBy, curatedList]);
 
+  // A shelf holding both live-action shows and cartoons splits into tabs. The
+  // tab lives in the URL, so coming back from a cartoon lands on cartoons.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const showsGroupTabs = useMemo(
+    () => hasLibraryGroups(data?.items ?? []),
+    [data],
+  );
+  const activeGroup = parseLibraryGroup(searchParams.get("group"));
+  const groupCounts = useMemo(() => {
+    const counts: Record<LibraryGroupId, number> = { shows: 0, cartoons: 0 };
+    for (const item of filteredItems) {
+      counts[libraryGroupOf(item)] += 1;
+    }
+    return counts;
+  }, [filteredItems]);
+  const visibleItems = useMemo(
+    () =>
+      showsGroupTabs
+        ? filteredItems.filter((item) => libraryGroupOf(item) === activeGroup)
+        : filteredItems,
+    [showsGroupTabs, filteredItems, activeGroup],
+  );
+  const selectGroup = (group: LibraryGroupId) => {
+    setSearchParams(
+      (params) => {
+        const next = new URLSearchParams(params);
+        if (group === "shows") {
+          next.delete("group");
+        } else {
+          next.set("group", group);
+        }
+        return next;
+      },
+      { replace: true },
+    );
+  };
+
+
   // Sorting and filtering move cards rather than reshuffling them in place.
   const gridRef = useRef<HTMLDivElement | null>(null);
   const titleDetailsRef = useRef<HTMLDivElement | null>(null);
   // Where the title hero takes the details' watched button.
   const [watchedSlot, setWatchedSlot] = useState<HTMLSpanElement | null>(null);
-  useFlipLayout(gridRef, filteredItems.map((item) => item.Id).join("|"));
+  useFlipLayout(gridRef, visibleItems.map((item) => item.Id).join("|"));
 
   const handleWatchedStatusReset = (
     resetItems: MediaItem[],
@@ -825,7 +868,17 @@ export function MobileLibraryPage({
         ) : null}
       </div>
 
-      {filteredItems.length > 0 ? (
+      {showsGroupTabs ? (
+        <LibraryGroupTabs
+          activeGroup={activeGroup}
+          counts={groupCounts}
+          onChange={selectGroup}
+          fill
+          className="mb-5"
+        />
+      ) : null}
+
+      {visibleItems.length > 0 ? (
         <div
           ref={gridRef}
           className={
@@ -834,7 +887,7 @@ export function MobileLibraryPage({
               : "relative grid grid-cols-2 gap-x-3 gap-y-4 px-[clamp(0.5rem,4vw,1.75rem)] min-[600px]:grid-cols-3"
           }
         >
-          {filteredItems.map((item) => (
+          {visibleItems.map((item) => (
             <MobileMediaCard
               key={item.Id}
               item={item}

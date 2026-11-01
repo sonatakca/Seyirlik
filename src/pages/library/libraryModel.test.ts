@@ -3,6 +3,10 @@ import type { MediaItem } from "../../lib/types";
 import {
   compareNames,
   countLabel,
+  hasLibraryGroups,
+  isCartoonSeries,
+  libraryGroupOf,
+  parseLibraryGroup,
   isWatchableScopeItem,
   isWholeWatchedScope,
   resolveLibraryCanonicalPath,
@@ -191,5 +195,51 @@ describe("libraryModel", () => {
     expect(
       countLabel(4, "singular" as never, "plural" as never, translate as never),
     ).toBe("4 items");
+  });
+
+  describe("library groups", () => {
+    const series = (Id: string, Genres?: string[]): MediaItem => ({
+      Id,
+      Name: Id,
+      Type: "Series",
+      Genres,
+    });
+
+    it("recognises animation in either metadata language", () => {
+      expect(isCartoonSeries(series("a", ["Comedy", "Animation"]))).toBe(true);
+      expect(isCartoonSeries(series("b", ["Animasyon"]))).toBe(true);
+      expect(isCartoonSeries(series("c", ["Drama"]))).toBe(false);
+      expect(isCartoonSeries(series("d"))).toBe(false);
+      expect(
+        isCartoonSeries({
+          Id: "e",
+          Name: "e",
+          Type: "Movie",
+          Genres: ["Animation"],
+        }),
+      ).toBe(false);
+    });
+
+    it("files each series under its tab", () => {
+      expect(libraryGroupOf(series("arcane", ["Animation"]))).toBe("cartoons");
+      expect(libraryGroupOf(series("andor", ["Drama"]))).toBe("shows");
+    });
+
+    it("offers tabs only when both kinds are on the shelf", () => {
+      const andor = series("andor", ["Drama"]);
+      const arcane = series("arcane", ["Animation"]);
+
+      expect(hasLibraryGroups([andor, arcane])).toBe(true);
+      expect(hasLibraryGroups([andor])).toBe(false);
+      expect(hasLibraryGroups([arcane])).toBe(false);
+      expect(hasLibraryGroups([])).toBe(false);
+    });
+
+    it("reads the tab from the URL, defaulting to shows", () => {
+      expect(parseLibraryGroup("cartoons")).toBe("cartoons");
+      expect(parseLibraryGroup("shows")).toBe("shows");
+      expect(parseLibraryGroup("other")).toBe("shows");
+      expect(parseLibraryGroup(null)).toBe("shows");
+    });
   });
 });

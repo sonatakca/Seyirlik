@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useParams } from "react-router-dom";
+import { useLocation, useParams, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { move, settle } from "../../lib/compositorMotion";
 import { Search, SlidersHorizontal } from "lucide-react";
@@ -53,12 +53,17 @@ import { preloadPlayerPage } from "../PlayerPage";
 import { useDevSkeletonMode } from "../../lib/devSkeletonMode";
 import {
   compareNames,
+  hasLibraryGroups,
   isWatchableScopeItem,
   isWholeWatchedScope,
+  libraryGroupOf,
+  parseLibraryGroup,
   resolveLibraryCanonicalPath,
   withWatchedState,
+  type LibraryGroupId,
   type LibrarySortMode,
 } from "../library/libraryModel";
+import { LibraryGroupTabs } from "../library/LibraryGroupTabs";
 import { hasCuratedOrder, orderItemsByCuration } from "../../lib/curation";
 import { useCuratedList } from "../../hooks/useCuratedList";
 
@@ -423,9 +428,46 @@ export function DesktopLibraryPage({
     );
   }, [data, searchTerm, effectiveSortBy, curatedList]);
 
+  // A shelf holding both live-action shows and cartoons splits into tabs. The
+  // tab lives in the URL, so coming back from a cartoon lands on cartoons.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const showsGroupTabs = useMemo(
+    () => hasLibraryGroups(data?.items ?? []),
+    [data],
+  );
+  const activeGroup = parseLibraryGroup(searchParams.get("group"));
+  const groupCounts = useMemo(() => {
+    const counts: Record<LibraryGroupId, number> = { shows: 0, cartoons: 0 };
+    for (const item of filteredItems) {
+      counts[libraryGroupOf(item)] += 1;
+    }
+    return counts;
+  }, [filteredItems]);
+  const visibleItems = useMemo(
+    () =>
+      showsGroupTabs
+        ? filteredItems.filter((item) => libraryGroupOf(item) === activeGroup)
+        : filteredItems,
+    [showsGroupTabs, filteredItems, activeGroup],
+  );
+  const selectGroup = (group: LibraryGroupId) => {
+    setSearchParams(
+      (params) => {
+        const next = new URLSearchParams(params);
+        if (group === "shows") {
+          next.delete("group");
+        } else {
+          next.set("group", group);
+        }
+        return next;
+      },
+      { replace: true },
+    );
+  };
+
   // Sorting and filtering move cards rather than reshuffling them in place.
   const gridRef = useRef<HTMLDivElement | null>(null);
-  useFlipLayout(gridRef, filteredItems.map((item) => item.Id).join("|"));
+  useFlipLayout(gridRef, visibleItems.map((item) => item.Id).join("|"));
 
   const handleWatchedStatusReset = (
     resetItems: MediaItem[],
@@ -968,12 +1010,21 @@ export function DesktopLibraryPage({
         ) : null}
       </MotionReveal>
 
-      {filteredItems.length > 0 ? (
+      {showsGroupTabs ? (
+        <LibraryGroupTabs
+          activeGroup={activeGroup}
+          counts={groupCounts}
+          onChange={selectGroup}
+          className="mb-5"
+        />
+      ) : null}
+
+      {visibleItems.length > 0 ? (
         <div
           ref={gridRef}
           className="relative grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-4 lg:grid-cols-5 2xl:grid-cols-6"
         >
-          {filteredItems.map((item, index) => (
+          {visibleItems.map((item, index) => (
             <MediaCard
               key={item.Id}
               item={item}
