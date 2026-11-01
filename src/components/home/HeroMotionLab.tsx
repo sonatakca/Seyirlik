@@ -214,11 +214,14 @@ export default function HeroMotionLab({
   const button =
     "inline-flex h-9 items-center justify-center gap-1.5 rounded-full px-3 text-xs font-black text-white/80 transition hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/30 disabled:opacity-40";
 
+  // Solid, with no backdrop blur: Safari would redraw a blur over the moving
+  // hero on every frame, and the swap being judged would run slower than it
+  // does without the panel.
   return createPortal(
     <aside
       aria-label={t("devtools.motionLab.title")}
       style={{ left: place.left, top: place.top }}
-      className="fixed z-[130] flex max-h-[55vh] w-[22rem] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[rgb(12_12_14/0.92)] text-white shadow-[0_18px_60px_rgba(0,0,0,0.6)] backdrop-blur-2xl"
+      className="fixed z-[130] flex max-h-[55vh] w-[22rem] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[rgb(12_12_14)] text-white shadow-[0_18px_60px_rgba(0,0,0,0.6)]"
     >
       <header
         className="flex cursor-grab touch-none select-none items-center gap-1 border-b border-white/10 px-2 py-1.5 active:cursor-grabbing"
