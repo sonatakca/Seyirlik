@@ -22,6 +22,8 @@ import {
   slotPlacement,
   stagePlacement,
   tallFootGradient,
+  miniatureArtworkUrl,
+  miniatureCover,
 } from "./homeHeroModel";
 
 const DESKTOP_SIZES = [
@@ -385,5 +387,22 @@ describe("rounded travelling backdrops", () => {
   it("matches the preview and stage corners at both endpoints", () => {
     expect(heroFrameRadius(0.136, 0.136) * 0.136).toBeCloseTo(12);
     expect(heroFrameRadius(1, 0.136)).toBe(16);
+  });
+});
+
+describe("the miniature's own copy of the artwork", () => {
+  it("asks for the variant width a slot draws near its own size", () => {
+    const url =
+      "/ownAPI/v1/items/a/images/backdrop?tag=t&maxWidth=1920&variant=webp-v1";
+    // 300 px slot × density 2 (jsdom reports 1) × headroom.
+    expect(miniatureArtworkUrl(url, 300)).toMatch(/maxWidth=(520|900)&/);
+    expect(miniatureArtworkUrl(url, 300)).toContain("variant=webp-v1");
+  });
+
+  it("covers the full artwork in a slot and is gone well before the stage", () => {
+    expect(miniatureCover(0.17, 0.17)).toBe(1);
+    expect(miniatureCover(0.2, 0.17)).toBe(1);
+    expect(miniatureCover(0.6, 0.17)).toBe(0);
+    expect(miniatureCover(1, 0.17)).toBe(0);
   });
 });

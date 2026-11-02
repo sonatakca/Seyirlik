@@ -32,6 +32,8 @@ import {
   TITLE_SCALE,
   heroForm,
   heroFrameRadius,
+  miniatureArtworkUrl,
+  miniatureCover,
   queueTitleTransform,
   stageness,
   tallFootGradient,
@@ -195,6 +197,9 @@ export function HeroComposition({
   // itself, where the frame comes to rest, so a lift still under way does
   // not skew where the navbar's wordmark falls on it.
   const artworkUrl = artwork?.url;
+  const miniatureUrl = artworkUrl
+    ? miniatureArtworkUrl(artworkUrl, stage.width * slotScale)
+    : undefined;
   const navbarBackdrop = useMemo(
     () =>
       isStage && artworkUrl
@@ -263,6 +268,7 @@ export function HeroComposition({
   });
   const pictureRef = useRef<HTMLDivElement>(null);
   const artworkRef = useRef<HTMLImageElement>(null);
+  const miniatureRef = useRef<HTMLImageElement>(null);
   const hairlineRef = useRef<HTMLDivElement>(null);
   const trailerRef = videoRef;
   const footRef = useRef<HTMLDivElement>(null);
@@ -337,6 +343,15 @@ export function HeroComposition({
             transform: natural
               ? coverFit(natural, stage, height, objectY).transform
               : "none",
+          },
+        ],
+        [
+          miniatureRef.current,
+          {
+            transform: natural
+              ? coverFit(natural, stage, height, objectY).transform
+              : "none",
+            opacity: miniatureCover(scale, slotScale),
           },
         ],
         [
@@ -453,6 +468,38 @@ export function HeroComposition({
           }}
           onError={() => setFailed((current) => [...current, artwork.url])}
         />
+      ) : null}
+      {/* The same artwork at a miniature's size, over the full one while the
+          frame is small. Safari draws a moving layer by shrinking its whole
+          bitmap on the GPU, with no smoothing, so fine detail in a full-size
+          picture shrunk to a slot breaks into grain while it moves and
+          snaps back when it stops. Drawn near its own size, it holds still. */}
+      {artwork && miniatureUrl ? (
+        <div
+          aria-hidden="true"
+          className={`pointer-events-none absolute inset-0 transition-opacity duration-500 ${
+            isArtworkLoaded && isRevealed ? "opacity-100" : "opacity-0"
+          }`}
+        >
+          <img
+            ref={miniatureRef}
+            src={miniatureUrl}
+            alt=""
+            draggable={false}
+            loading="eager"
+            decoding="async"
+            className={`absolute origin-top-left select-none ${
+              natural ? "max-w-none" : "inset-0 h-full w-full object-cover"
+            } ${artwork.type === "primary" ? "blur-2xl" : ""}`}
+            style={
+              natural
+                ? coverFit(natural, stage, stage.height, objectY).rect
+                : isPoster
+                  ? { objectPosition: "50% 0%" }
+                  : undefined
+            }
+          />
+        </div>
       ) : null}
 
       {trailerUrl ? (

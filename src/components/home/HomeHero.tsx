@@ -857,19 +857,20 @@ export function HomeHero({
     [isTall, hasOpened],
   );
 
+  // The miniature under the pointer stays where it is, as it is: the others
+  // dim round it.
   const hover = (id: string, active: boolean) => {
-    if (busyRef.current) return;
-    const entry = motions.current.get(id);
-    if (!entry || !stage) return;
-    const position = queueIds.indexOf(id);
-    const slot = slots[position];
-    if (!slot) return;
-    const lift = active ? slot.height * 0.06 : 0;
+    if (busyRef.current || !stage) return;
     const options = {
-      duration: reduceMotion ? 0 : HERO_MOTION.hoverLiftS,
+      duration: reduceMotion ? 0 : HERO_MOTION.hoverS,
       ease: HERO_MOTION.settleEase,
     };
-    void entry.y.tween(slot.y - lift, options);
+    for (const other of queueIds) {
+      const entry = motions.current.get(other);
+      if (!entry) continue;
+      const dim = active && other !== id ? HERO_MOTION.hoverDim : QUEUE_DIM;
+      void entry.dim.tween(dim, options);
+    }
   };
 
   if (total === 0) {

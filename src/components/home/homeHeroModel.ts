@@ -10,6 +10,8 @@
  * thumbnail of the title, it is the title, smaller.
  */
 
+import { ARTWORK_VARIANT_WIDTHS } from "../../lib/artworkSizes";
+
 export interface StageSize {
   width: number;
   height: number;
@@ -77,23 +79,22 @@ type Bezier = [number, number, number, number];
 
 const HERO_MOTION_DEFAULTS = {
   /**
-   * A title lifting from the queue to the stage, or back. Sine in-out: of the
-   * smooth curves it has the lowest peak speed (π/2 × the average), and on
-   * the longest trip the peak is what sets how short the trip can be.
+   * A title lifting from the queue to the stage, or back: quick, on a firm
+   * in-out curve, tuned by eye in the motion lab.
    */
-  travelS: 0.5,
+  travelS: 0.375,
   overviewS: 0.24,
-  travelEase: [0.37, 0, 0.63, 1] as Bezier,
+  travelEase: [0.6, 0, 0.4, 1] as Bezier,
   /**
    * The queue sliding along: every miniature in it, the ones closing up and
    * the ones arriving from beyond the edge, on one shared clock.
    */
-  slideS: 0.45,
-  slideDelayS: 0.06,
+  slideS: 0.275,
+  slideDelayS: 0.1,
   slideEase: [0.35, 0, 0.25, 1] as Bezier,
   /** A title skipped over in the queue, sinking out of it. */
-  dropS: 0.26,
-  settleEase: [0.61, 1, 0.88, 1] as Bezier,
+  dropS: 0.275,
+  settleEase: [0.6, 1, 0.9, 1] as Bezier,
   /** What the outgoing title does under the incoming one: it recedes. */
   pushBackScale: 0.95,
   pushBackDim: 0.5,
@@ -106,7 +107,7 @@ const HERO_MOTION_DEFAULTS = {
   copyEnterS: 0.34,
   copyEnterStaggerS: 0.05,
   /** Share of the lift after which the new title's copy starts rising. */
-  copyLeadIn: 0.72,
+  copyLeadIn: 0.7,
   /** Share of the lift over which the incoming title's dim clears. */
   riseUndimShare: 0.5,
   /** A miniature arriving at the end of the queue dimming to its rest. */
@@ -120,8 +121,10 @@ const HERO_MOTION_DEFAULTS = {
   trailerS: 0.8,
   /** A swipe let go short of a change, settling back. */
   swipeSettleS: 0.32,
-  /** A miniature rising under the pointer, or settling back. */
-  hoverLiftS: 0.3,
+  /** The other miniatures dimming round the one under the pointer, or clearing. */
+  hoverS: 0.3,
+  /** How far they dim. */
+  hoverDim: 0.45,
   /** The dwell progress line fading as a title starts or stops travelling. */
   progressFadeS: 0.35,
   /** The skeleton giving way to the first artwork. */
@@ -129,11 +132,10 @@ const HERO_MOTION_DEFAULTS = {
   /**
    * The fastest any edge may move, in px per frame at 60 fps on a 1080-tall
    * canvas, scaled with the canvas. A lift from the far end of the queue to
-   * the full frame is the longest trip; with the sine lift this keeps it near
-   * half a second on any desktop, the fastest frames still a sweep and not a
-   * jump.
+   * the full frame is the longest trip; this only lengthens it on the
+   * largest screens.
    */
-  maxTravelPxPerFrameAt1080: 84,
+  maxTravelPxPerFrameAt1080: 200,
 };
 
 export type HeroMotion = {
@@ -672,3 +674,28 @@ export const LOGO_MENU_CLEARANCE_PX = 112;
 
 /** A title page's back button: under the menu, on the copy's left edge. */
 export const TITLE_BACK_TOP_PX = 88;
+
+/** Widest a miniature's own copy is drawn, against its slot on screen. */
+const MINIATURE_HEADROOM = 1.5;
+
+/** The artwork's URL at a size a miniature of the given width draws near 1:1. */
+export function miniatureArtworkUrl(url: string, slotWidth: number): string {
+  const density =
+    typeof window === "undefined" ? 2 : Math.min(3, window.devicePixelRatio);
+  const wanted = slotWidth * density * MINIATURE_HEADROOM;
+  const width =
+    ARTWORK_VARIANT_WIDTHS.find((candidate) => candidate >= wanted) ??
+    ARTWORK_VARIANT_WIDTHS[ARTWORK_VARIANT_WIDTHS.length - 1];
+  return url.replace(/([?&]maxWidth=)\d+/, `$1${width}`);
+}
+
+/**
+ * How much of the miniature copy covers the full artwork: all of it in a
+ * slot, gone by three times the slot's scale, where the full picture is
+ * shrunk little enough to draw cleanly.
+ */
+export function miniatureCover(scale: number, slotScale: number): number {
+  const from = slotScale * 1.5;
+  const to = slotScale * 3;
+  return Math.min(1, Math.max(0, (to - scale) / (to - from)));
+}
