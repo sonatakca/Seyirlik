@@ -507,6 +507,9 @@ export const COPY_ROWS = {
   factsPx: 20,
   /** Between the facts and the overview. */
   factsGapPx: 12,
+  /** The overview's panel round its lines. */
+  overviewPanelPadXPx: 16,
+  overviewPanelPadYPx: 12,
   overviewLines: 3,
   overviewLineHeight: 1.55,
   /** Above the actions, under whatever sits there. */
@@ -557,7 +560,8 @@ function tallLayout(stage: StageSize, withQueue: boolean): HeroLayout {
     menuClearance: stage.width < 1024 ? 92 : LOGO_MENU_CLEARANCE_PX,
     overviewFontPx,
     overviewHeight,
-    overviewLift: overviewHeight + COPY_ROWS.factsGapPx,
+    overviewLift:
+      overviewHeight + COPY_ROWS.overviewPanelPadYPx * 2 + COPY_ROWS.factsGapPx,
   };
 }
 
@@ -607,7 +611,8 @@ export function heroLayout(
     menuClearance: stage.width < 1024 ? 92 : LOGO_MENU_CLEARANCE_PX,
     overviewFontPx,
     overviewHeight,
-    overviewLift: overviewHeight + COPY_ROWS.factsGapPx,
+    overviewLift:
+      overviewHeight + COPY_ROWS.overviewPanelPadYPx * 2 + COPY_ROWS.factsGapPx,
   };
 }
 

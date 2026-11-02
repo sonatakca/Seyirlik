@@ -289,21 +289,8 @@ export function HeroControlButton({
   );
 }
 
-/**
- * Room around the overview's reveal for its text's shade: the sides and top
- * get the shade's full reach, the foot only as much as the gap above the
- * actions allows.
- *
- * The reveal still needs an edge there, because the overview rises from
- * under the facts and must not show below them over the actions, but the
- * edge is a fade, not a cut: the foot fades out over its whole height, so a
- * line rising through it fades in, and the last line's shadow at rest thins
- * out instead of stopping in a straight line. The text itself ends where the
- * fade begins, so it is never dimmed at rest.
- */
-const OVERVIEW_SHADE_ROOM_PX = 40;
-const OVERVIEW_SHADE_FOOT_PX = 12;
-const OVERVIEW_REVEAL_MASK = `linear-gradient(to bottom, #000 calc(100% - ${OVERVIEW_SHADE_FOOT_PX}px), transparent 100%)`;
+/** How far the overview's panel rises as it fades in. */
+const OVERVIEW_RISE_PX = 12;
 
 /**
  * How bright the copy under the title needs to be, 0–1, from the brightness
@@ -353,9 +340,8 @@ function useCopyShade(
  * stands on the dark-art one.
  *
  * It is a filter, not a text shadow, because a filter is drawn after the
- * text is truncated and clamped: a text shadow is clipped with the text, and
- * ends in a rectangle. The widest blur, 20px, fits the overview's room
- * (OVERVIEW_SHADE_ROOM_PX).
+ * text is truncated: a text shadow is clipped with the text, and ends in a
+ * rectangle. The overview needs none: it stands in a panel of its own.
  */
 function copyTextStyle(shade: number, restingAlpha: number): CSSProperties {
   const a = (value: number) => value.toFixed(3);
@@ -426,11 +412,11 @@ function HeroCopy({
     .join("  ·  ");
 
   // The facts ride up with the title as the overview opens, and the
-  // overview comes up from under them as they rise off it: both baked from
-  // the overview's course, so the compositor plays them.
+  // overview's panel rises a little into place under them as it fades in:
+  // both baked from the overview's course, so the compositor plays them.
   const factsRowRef = useRef<HTMLDivElement>(null);
+  const overviewPanelRef = useRef<HTMLDivElement>(null);
   const overviewTextRef = useRef<HTMLParagraphElement | null>(null);
-  const overviewTravel = layout.overviewHeight + OVERVIEW_SHADE_FOOT_PX;
   useBake(
     [overview],
     (at) => {
@@ -443,9 +429,9 @@ function HeroCopy({
           },
         ],
         [
-          overviewTextRef.current,
+          overviewPanelRef.current,
           {
-            transform: `translateY(${overviewTravel * (1 - value)}px)`,
+            transform: `translateY(${OVERVIEW_RISE_PX * (1 - value)}px)`,
             opacity: value,
           },
         ],
@@ -453,7 +439,6 @@ function HeroCopy({
     },
     [
       layout.overviewLift,
-      overviewTravel,
       Boolean(metadata.overview),
     ],
   );
@@ -524,46 +509,48 @@ function HeroCopy({
       {metadata.overview ? (
         <div
           id={overviewId}
-          className="pointer-events-none absolute overflow-hidden"
+          className="pointer-events-none absolute flex items-end"
           style={{
-            // The reveal's clip, widened by the room the text's shade needs,
-            // and soft along the foot (see OVERVIEW_SHADE_FOOT_PX).
-            WebkitMaskImage: OVERVIEW_REVEAL_MASK,
-            maskImage: OVERVIEW_REVEAL_MASK,
-            left: -OVERVIEW_SHADE_ROOM_PX,
-            right: -OVERVIEW_SHADE_ROOM_PX,
+            // The text column, widened by the panel's own sides, so the text
+            // keeps the column's edge.
+            left: -COPY_ROWS.overviewPanelPadXPx,
+            right: -COPY_ROWS.overviewPanelPadXPx,
             bottom:
-              (layout.form === "wide"
+              layout.form === "wide"
                 ? 0
-                : COPY_ROWS.actionsPx + layout.actionsGap) -
-              OVERVIEW_SHADE_FOOT_PX,
-            height:
-              layout.overviewHeight +
-              OVERVIEW_SHADE_ROOM_PX +
-              OVERVIEW_SHADE_FOOT_PX,
-            padding: `${OVERVIEW_SHADE_ROOM_PX}px ${OVERVIEW_SHADE_ROOM_PX}px ${OVERVIEW_SHADE_FOOT_PX}px`,
+                : COPY_ROWS.actionsPx + layout.actionsGap,
+            height: layout.overviewHeight + COPY_ROWS.overviewPanelPadYPx * 2,
           }}
         >
-          <p
-            ref={(element) => {
-              overviewRef(element);
-              overviewTextRef.current = element;
-            }}
-            // Three lines tall; a longer story scrolls rather than ending in
-            // an ellipsis.
-            className={`max-w-[46ch] overflow-y-auto overscroll-contain font-semibold [scrollbar-width:thin] ${
-              layout.align === "centre" ? "mx-auto text-center" : ""
+          <div
+            ref={overviewPanelRef}
+            className={`hero-copy-panel w-fit max-w-full opacity-0 ${
+              layout.align === "centre" ? "mx-auto" : ""
             }`}
             style={{
-              ...copyTextStyle(shade, 0.8),
-              fontSize: layout.overviewFontPx,
-              lineHeight: COPY_ROWS.overviewLineHeight,
-              maxHeight: layout.overviewHeight,
+              padding: `${COPY_ROWS.overviewPanelPadYPx}px ${COPY_ROWS.overviewPanelPadXPx}px`,
               pointerEvents: isOverviewOpen ? "auto" : "none",
             }}
           >
-            {metadata.overview}
-          </p>
+            <p
+              ref={(element) => {
+                overviewRef(element);
+                overviewTextRef.current = element;
+              }}
+              // Three lines tall; a longer story scrolls rather than ending
+              // in an ellipsis.
+              className={`max-w-[46ch] overflow-y-auto overscroll-contain font-semibold text-white/[0.88] [scrollbar-width:thin] ${
+                layout.align === "centre" ? "text-center" : ""
+              }`}
+              style={{
+                fontSize: layout.overviewFontPx,
+                lineHeight: COPY_ROWS.overviewLineHeight,
+                maxHeight: layout.overviewHeight,
+              }}
+            >
+              {metadata.overview}
+            </p>
+          </div>
         </div>
       ) : null}
       {layout.form === "tall" ? (
