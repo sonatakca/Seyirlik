@@ -126,18 +126,20 @@ const HERO_MOTION_DEFAULTS = {
   trailerS: 0.8,
   /** A swipe let go short of a change, settling back. */
   swipeSettleS: 0.32,
-  /** A dark halo spreading under the miniature beneath the pointer, or going. */
+  /**
+   * A glow of the miniature's own colours spreading round it under the
+   * pointer, or going: its blur in px, and how strong it is.
+   */
   hoverS: 0.3,
-  /** How far the halo spreads, in px, and how dark it is. */
-  hoverHaloPx: 28,
-  hoverHalo: 0.7,
+  hoverHaloPx: 32,
+  hoverHalo: 1,
   /**
    * Where the home hero's title and dock stand on a wide stage. Not motion,
    * but kept here so the motion lab can try other arrangements on the live
    * hero; with the title centred its copy is centred under it.
    */
-  titlePlace: "left" as HeroPlace,
-  dockPlace: "centre" as HeroPlace,
+  titlePlace: "centre" as HeroPlace,
+  dockPlace: "left" as HeroPlace,
   /** The dwell progress line fading as a title starts or stops travelling. */
   progressFadeS: 0.35,
   /** The skeleton giving way to the first artwork. */
@@ -444,6 +446,11 @@ export interface HeroLayout {
   factsWidth: number;
   /** The title and its copy: from the left margin, or centred on the stage. */
   align: HeroPlace;
+  /**
+   * With the dock on the left, the facts line stands under it, level with the
+   * queue's foot, and the title keeps only the overview under it.
+   */
+  factsUnderDock: { left: number; bottom: number; width: number } | null;
   /** Between the facts and the actions. */
   actionsGap: number;
   /**
@@ -537,6 +544,7 @@ function tallLayout(stage: StageSize, withQueue: boolean): HeroLayout {
     },
     factsWidth: column,
     align: "left",
+    factsUnderDock: null,
     actionsGap,
     actions: stage.width < 600 ? "compact" : "full",
     titleScale: TALL_TITLE_SCALE,
@@ -565,6 +573,15 @@ export function heroLayout(
     ? Math.min(stage.width * 0.34, 600)
     : Math.max(160, Math.min(stage.width * 0.34, 600, dock.left - left - 20));
   const titleWidth = Math.min(compact ? 260 : 300, stage.width * 0.3);
+  const head = withQueue ? queueSlots(stage)[0] : undefined;
+  const factsUnderDock =
+    head && dock.left < left + 1
+      ? {
+          left: dock.left,
+          bottom: stage.height - head.y - head.height,
+          width: dock.width,
+        }
+      : null;
   return {
     form: "wide",
     copy: {
@@ -575,12 +592,14 @@ export function heroLayout(
     },
     title: {
       left: isCentred ? (stage.width - titleWidth) / 2 : left,
-      bottom: bottom + COPY_ROWS.factsPx + 16,
+      // Without the facts under it the title stands on the copy's foot.
+      bottom: factsUnderDock ? bottom + 8 : bottom + COPY_ROWS.factsPx + 16,
       width: titleWidth,
       height: 150,
     },
-    factsWidth: width,
+    factsWidth: factsUnderDock ? factsUnderDock.width : width,
     align: isCentred ? "centre" : "left",
+    factsUnderDock,
     actionsGap: COPY_ROWS.actionsGapPx,
     actions: "full",
     titleScale: TITLE_SCALE,
@@ -613,15 +632,29 @@ export interface TitleTransform {
 }
 
 /** What turns the stage's title box into the queue's, in the frame's own px. */
+/** The miniature's title box for a title drawn centred on stage: centred too. */
+export function queueTitleBox(align: HeroPlace): {
+  left: number;
+  bottom: number;
+  width: number;
+  height: number;
+} {
+  return align === "centre"
+    ? { ...QUEUE_TITLE_BOX, left: (1 - QUEUE_TITLE_BOX.width) / 2 }
+    : QUEUE_TITLE_BOX;
+}
+
 export function queueTitleTransform(
   stage: StageSize,
   title: HeroLayout["title"],
+  align: HeroPlace = "left",
 ): TitleTransform {
+  const queueBox = queueTitleBox(align);
   const box = {
-    left: stage.width * QUEUE_TITLE_BOX.left,
-    bottom: stage.height * QUEUE_TITLE_BOX.bottom,
-    width: stage.width * QUEUE_TITLE_BOX.width,
-    height: stage.height * QUEUE_TITLE_BOX.height,
+    left: stage.width * queueBox.left,
+    bottom: stage.height * queueBox.bottom,
+    width: stage.width * queueBox.width,
+    height: stage.height * queueBox.height,
   };
   return {
     x: box.left - title.left,

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   COPY_ROWS,
   HERO_MOTION,
@@ -22,6 +22,7 @@ import {
   slotPlacement,
   stagePlacement,
   tallFootGradient,
+  tuneHeroMotion,
   miniatureArtworkUrl,
   miniatureCover,
 } from "./homeHeroModel";
@@ -162,10 +163,37 @@ describe("the queue sliding as a row", () => {
   );
 });
 
+afterEach(() => tuneHeroMotion({}));
+
 describe("layout", () => {
+  it.each(DESKTOP_SIZES)(
+    "centres the title over its overview, and stands the dock on the left over the facts ($width)",
+    (stage) => {
+      const layout = heroLayout(stage);
+      const slots = queueSlots(stage);
+      const dock = heroDock(stage);
+      const queueFoot = stage.height - (slots[0]!.y + slots[0]!.height);
+      expect(layout.align).toBe("centre");
+      expect(layout.title.left + layout.title.width / 2).toBeCloseTo(
+        stage.width / 2,
+      );
+      expect(layout.copy.left + layout.copy.width / 2).toBeCloseTo(
+        stage.width / 2,
+      );
+      expect(layout.factsUnderDock?.left).toBe(dock.left);
+      expect(layout.factsUnderDock?.width).toBe(dock.width);
+      expect(layout.factsUnderDock?.bottom).toBeCloseTo(queueFoot);
+      expect(dock.left + dock.width).toBeLessThan(layout.title.left);
+      expect(layout.title.left + layout.title.width).toBeLessThan(slots[0]!.x);
+      const titleTop = stage.height - layout.title.bottom - layout.title.height;
+      expect(titleTop - layout.overviewLift).toBeGreaterThan(96);
+    },
+  );
+
   it.each(DESKTOP_SIZES)(
     "keeps copy, centre dock and previews apart with the title above its facts ($width)",
     (stage) => {
+      tuneHeroMotion({ titlePlace: "left", dockPlace: "centre" });
       const layout = heroLayout(stage);
       const slots = queueSlots(stage);
       const queueBottom = stage.height - (slots[0]!.y + slots[0]!.height);
@@ -352,7 +380,8 @@ describe("a title page's dock", () => {
       expect(dock.left + dock.width).toBe(last.x + last.width);
       expect(dock.left + dock.width).toBe(stage.width - layout.copy.left);
       expect(layout.copy.left + layout.copy.width).toBeLessThan(dock.left);
-      expect(heroDock(stage).left).toBe((stage.width - dock.width) / 2);
+      expect(layout.align).toBe("left");
+      expect(layout.factsUnderDock).toBeNull();
     },
   );
 });

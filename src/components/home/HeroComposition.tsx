@@ -28,12 +28,12 @@ import {
   type DrawnSize,
 } from "./useReportedSize";
 import {
-  QUEUE_TITLE_BOX,
   TITLE_SCALE,
   heroForm,
   heroFrameRadius,
   miniatureArtworkUrl,
   miniatureCover,
+  queueTitleBox,
   queueTitleTransform,
   stageness,
   tallFootGradient,
@@ -91,12 +91,15 @@ export function createCompositionMotion(
   };
 }
 
-const QUEUE_LOGO_REGION: SampleRegion = {
-  left: QUEUE_TITLE_BOX.left,
-  top: 1 - QUEUE_TITLE_BOX.bottom - QUEUE_TITLE_BOX.height,
-  width: QUEUE_TITLE_BOX.width,
-  height: QUEUE_TITLE_BOX.height,
-};
+function queueLogoRegion(align: HeroPlace): SampleRegion {
+  const box = queueTitleBox(align);
+  return {
+    left: box.left,
+    top: 1 - box.bottom - box.height,
+    width: box.width,
+    height: box.height,
+  };
+}
 
 interface HeroCompositionProps {
   item: MediaItem;
@@ -239,12 +242,21 @@ export function HeroComposition({
   // reads at that size; on stage it is at its own place and size. Between
   // the two it follows the frame's scale, so a lift carries it smoothly.
   const queueMove = useMemo(
-    () => queueTitleTransform({ ...stage, height: queueHeight }, titleBox),
-    [stage, titleBox, queueHeight],
+    () =>
+      queueTitleTransform(
+        { ...stage, height: queueHeight },
+        titleBox,
+        titleAlign,
+      ),
+    [stage, titleBox, queueHeight, titleAlign],
   );
   // A black silhouette of the logo under it, as strong as the artwork needs,
   // for as long as the frame is a miniature.
-  const shadow = useLogoShadow(logoUrl, artwork?.url, QUEUE_LOGO_REGION);
+  const shadow = useLogoShadow(
+    logoUrl,
+    artwork?.url,
+    queueLogoRegion(titleAlign),
+  );
   // On stage the logo is measured where it rests, at its resting size.
   const stageLogoRegion = useMemo<SampleRegion>(() => {
     const height = titleBox.height * titleRestScale;
@@ -318,12 +330,13 @@ export function HeroComposition({
       // The title stands on the frame's foot, which a short frame raises.
       const titleY =
         queueMove.y * (1 - toStage) + rise * toStage - (stage.height - height);
-      // It grows from its box's bottom-left corner; a centred title is moved
-      // back by half of what it gained, so it grows from its middle.
-      const centring =
+      // It grows from its box's bottom-left corner. A centred title, centred
+      // in its miniature too, is held on the frame's middle all the way, so
+      // it never slides sideways as the frame grows.
+      const titleX =
         titleAlign === "centre"
-          ? ((1 - titleScale) * titleBox.width * toStage) / 2
-          : 0;
+          ? ((1 - titleScale) * titleBox.width) / 2
+          : queueMove.x * (1 - toStage);
       const trailer = m.trailer.get(at);
       // A hairline that stays one pixel on screen in a slot, gone by the
       // time the frame fills the stage.
@@ -382,7 +395,7 @@ export function HeroComposition({
         [
           titleRef.current,
           {
-            transform: `translate(${queueMove.x * (1 - toStage) + centring}px, ${titleY}px) scale(${titleScale})`,
+            transform: `translate(${titleX}px, ${titleY}px) scale(${titleScale})`,
             opacity: 1 - 0.08 * trailer,
           },
         ],

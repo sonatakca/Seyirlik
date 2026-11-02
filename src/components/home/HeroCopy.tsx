@@ -184,12 +184,15 @@ export function HeroCopyBlock({
                 layout={layout}
                 factsRegion={{
                   left:
-                    (isCentred
-                      ? (stage.width - Math.min(layout.factsWidth, 340)) / 2
-                      : layout.copy.left) / stage.width,
+                    (layout.factsUnderDock?.left ??
+                      (isCentred
+                        ? (stage.width - Math.min(layout.factsWidth, 340)) / 2
+                        : layout.copy.left)) / stage.width,
                   top:
                     1 -
-                    (layout.copy.bottom + layout.copy.height) / stage.height,
+                    ((layout.factsUnderDock?.bottom ?? layout.copy.bottom) +
+                      COPY_ROWS.factsPx) /
+                      stage.height,
                   width: Math.min(layout.factsWidth, 340) / stage.width,
                   height: COPY_ROWS.factsPx / stage.height,
                 }}
@@ -212,8 +215,18 @@ export function HeroCopyBlock({
           className="absolute z-[6]"
           style={{
             left: dock.left,
-            top: withQueue ? queueSlots(stage)[0]?.y : undefined,
-            bottom: withQueue ? undefined : dock.bottom,
+            // Over the facts when they stand under it, its foot on theirs.
+            top:
+              withQueue && !layout.factsUnderDock
+                ? queueSlots(stage)[0]?.y
+                : undefined,
+            bottom: layout.factsUnderDock
+              ? layout.factsUnderDock.bottom +
+                COPY_ROWS.factsPx +
+                DOCK_FACTS_GAP_PX
+              : withQueue
+                ? undefined
+                : dock.bottom,
             width: dock.width,
           }}
         >
@@ -252,6 +265,9 @@ export function HeroCopyBlock({
 
 /** Between the dock and the bar over it. */
 export const DOCK_ASIDE_GAP_PX = 10;
+
+/** Between the dock and the facts line under it. */
+const DOCK_FACTS_GAP_PX = 10;
 
 export function HeroControlButton({
   label,
@@ -433,7 +449,11 @@ function HeroCopy({
       return [
         [
           factsRowRef.current,
-          { transform: `translateY(${-value * layout.overviewLift}px)` },
+          {
+            transform: `translateY(${
+              layout.factsUnderDock ? 0 : -value * layout.overviewLift
+            }px)`,
+          },
         ],
         [
           overviewTextRef.current,
@@ -444,7 +464,12 @@ function HeroCopy({
         ],
       ];
     },
-    [layout.overviewLift, overviewTravel, Boolean(metadata.overview)],
+    [
+      layout.overviewLift,
+      overviewTravel,
+      Boolean(metadata.overview),
+      Boolean(layout.factsUnderDock),
+    ],
   );
 
   // The copy changes with the title by fading in place: only the title and
@@ -480,14 +505,30 @@ function HeroCopy({
           title. The facts ride up with the title as the overview opens. */}
       <div
         ref={factsRowRef}
-        className="absolute inset-x-0 top-0"
-        style={{ height: COPY_ROWS.factsPx }}
+        className={
+          layout.factsUnderDock ? "absolute" : "absolute inset-x-0 top-0"
+        }
+        style={
+          layout.factsUnderDock
+            ? {
+                // Under the dock, from the copy's own corner.
+                left: layout.factsUnderDock.left - layout.copy.left,
+                top: layout.copy.bottom - layout.factsUnderDock.bottom,
+                width: layout.factsUnderDock.width,
+                height: COPY_ROWS.factsPx,
+              }
+            : { height: COPY_ROWS.factsPx }
+        }
       >
         <motion.p
           ref={factsRef}
           variants={line(0)}
           className={`truncate text-[0.8125rem] font-bold leading-5 tracking-[0.04em] ${
-            layout.align === "centre" ? "mx-auto text-center" : ""
+            layout.factsUnderDock
+              ? "text-center"
+              : layout.align === "centre"
+                ? "mx-auto text-center"
+                : ""
           }`}
           style={{ ...copyTextStyle(shade, 0.72), maxWidth: layout.factsWidth }}
         >

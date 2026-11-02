@@ -33,6 +33,7 @@ import { NavbarVeil } from "./NavbarVeil";
 import { useSmartContinueItems } from "./useSmartContinueItems";
 import {
   getHeroImageCandidates,
+  getStageImageCandidates,
   readHeroTrailersEnabledPreference,
   saveHeroTrailersEnabledPreference,
 } from "../hero/heroModel";
@@ -54,8 +55,10 @@ import {
   TITLE_SCALE,
   arrivalPlacement,
   droppedPlacement,
+  heroForm,
   heroLayout,
   liftDurationS,
+  miniatureArtworkUrl,
   previousIndex,
   pushedBackPlacement,
   queueCount,
@@ -971,33 +974,59 @@ export function HomeHero({
           })
         : null}
 
-      {/* The hover halo, one per slot: over the stage, under the queue, so
-          it darkens only the stage round the miniature. Dark only. */}
+      {/* The hover halo, one per slot: the miniature's own picture, blurred
+          into a glow of its colours round it. Over the stage, under the
+          queue, so the miniature itself is never touched. */}
       {stage && hasOpened
         ? slots.map((slot, position) => {
+            const id = queueIds[position];
+            const item = id ? itemsById.get(id) : undefined;
+            const url = item
+              ? getStageImageCandidates(item, heroForm(stage), stage.width)[0]
+                  ?.url
+              : undefined;
+            if (!url) return null;
             const isOn =
               !isTravelling &&
               !isQueueAside &&
               hoveredId !== null &&
-              queueIds[position] === hoveredId;
+              id === hoveredId;
+            const blur = HERO_MOTION.hoverHaloPx;
+            // The picture is drawn larger than the miniature, so its colours
+            // reach out past the miniature's edge before the blur spreads
+            // them; round it, room for the blur to fade out in, as Safari
+            // clips a filter to its element's box.
+            const reach = blur * 0.75;
+            const room = reach + blur * 2.5;
             return (
               <div
                 key={position}
                 aria-hidden="true"
-                className="pointer-events-none absolute rounded-[12px] transition-opacity"
+                className="pointer-events-none absolute transition-opacity"
                 style={{
                   zIndex: Z.rising,
-                  left: slot.x,
-                  top: slot.y,
-                  width: slot.width,
-                  height: slot.height,
-                  opacity: isOn ? 1 : 0,
+                  left: slot.x - room,
+                  top: slot.y - room,
+                  width: slot.width + room * 2,
+                  height: slot.height + room * 2,
+                  opacity: isOn ? HERO_MOTION.hoverHalo : 0,
                   transitionDuration: `${reduceMotion ? 0 : HERO_MOTION.hoverS}s`,
-                  boxShadow: `0 0 ${HERO_MOTION.hoverHaloPx}px ${
-                    HERO_MOTION.hoverHaloPx / 4
-                  }px rgba(0, 0, 0, ${HERO_MOTION.hoverHalo})`,
+                  filter: `blur(${blur}px) saturate(1.5)`,
                 }}
-              />
+              >
+                <img
+                  src={miniatureArtworkUrl(url, slot.width)}
+                  alt=""
+                  draggable={false}
+                  className="absolute rounded-[12px] object-cover"
+                  style={{
+                    left: room - reach,
+                    top: room - reach,
+                    width: slot.width + reach * 2,
+                    height: slot.height + reach * 2,
+                  }}
+                />
+              </div>
             );
           })
         : null}
