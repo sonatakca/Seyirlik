@@ -127,12 +127,15 @@ const HERO_MOTION_DEFAULTS = {
   /** A swipe let go short of a change, settling back. */
   swipeSettleS: 0.32,
   /**
-   * A glow of the miniature's own colours spreading round it under the
-   * pointer, or going: its blur in px, and how strong it is.
+   * A glow of the miniature's own colours round it under the pointer: how
+   * long it takes to come or go, its blur, how far past the miniature its
+   * picture reaches before the blur, how strong it is, and its colour boost.
    */
   hoverS: 0.3,
   hoverHaloPx: 32,
+  hoverHaloReachPx: 24,
   hoverHalo: 1,
+  hoverHaloSaturate: 1.5,
   /**
    * Where the home hero's title and dock stand on a wide stage. Not motion,
    * but kept here so the motion lab can try other arrangements on the live
@@ -140,7 +143,7 @@ const HERO_MOTION_DEFAULTS = {
    */
   titlePlace: "centre" as HeroPlace,
   dockPlace: "left" as HeroPlace,
-  /** The dwell progress line fading as a title starts or stops travelling. */
+  /** The dwell ring round the controls fading as a title starts or stops travelling. */
   progressFadeS: 0.35,
   /** The skeleton giving way to the first artwork. */
   skeletonFadeS: 0.5,
@@ -446,11 +449,13 @@ export interface HeroLayout {
   factsWidth: number;
   /** The title and its copy: from the left margin, or centred on the stage. */
   align: HeroPlace;
+  /** The facts line under the title: a title page's hero has it, home's not. */
+  showFacts: boolean;
   /**
-   * With the dock on the left, the facts line stands under it, level with the
-   * queue's foot, and the title keeps only the overview under it.
+   * With the dock on the left, how far its foot stands above the stage's:
+   * level with the queue's foot.
    */
-  factsUnderDock: { left: number; bottom: number; width: number } | null;
+  dockFoot: number | null;
   /** Between the facts and the actions. */
   actionsGap: number;
   /**
@@ -544,7 +549,8 @@ function tallLayout(stage: StageSize, withQueue: boolean): HeroLayout {
     },
     factsWidth: column,
     align: "left",
-    factsUnderDock: null,
+    showFacts: !withQueue,
+    dockFoot: null,
     actionsGap,
     actions: stage.width < 600 ? "compact" : "full",
     titleScale: TALL_TITLE_SCALE,
@@ -574,14 +580,8 @@ export function heroLayout(
     : Math.max(160, Math.min(stage.width * 0.34, 600, dock.left - left - 20));
   const titleWidth = Math.min(compact ? 260 : 300, stage.width * 0.3);
   const head = withQueue ? queueSlots(stage)[0] : undefined;
-  const factsUnderDock =
-    head && dock.left < left + 1
-      ? {
-          left: dock.left,
-          bottom: stage.height - head.y - head.height,
-          width: dock.width,
-        }
-      : null;
+  const dockFoot =
+    head && dock.left < left + 1 ? stage.height - head.y - head.height : null;
   return {
     form: "wide",
     copy: {
@@ -593,13 +593,14 @@ export function heroLayout(
     title: {
       left: isCentred ? (stage.width - titleWidth) / 2 : left,
       // Without the facts under it the title stands on the copy's foot.
-      bottom: factsUnderDock ? bottom + 8 : bottom + COPY_ROWS.factsPx + 16,
+      bottom: withQueue ? bottom + 8 : bottom + COPY_ROWS.factsPx + 16,
       width: titleWidth,
       height: 150,
     },
-    factsWidth: factsUnderDock ? factsUnderDock.width : width,
+    factsWidth: width,
     align: isCentred ? "centre" : "left",
-    factsUnderDock,
+    showFacts: !withQueue,
+    dockFoot,
     actionsGap: COPY_ROWS.actionsGapPx,
     actions: "full",
     titleScale: TITLE_SCALE,

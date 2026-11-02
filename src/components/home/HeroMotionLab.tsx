@@ -95,9 +95,6 @@ const GROUPS: ReadonlyArray<{
       seconds("slideDelayS", 0.5),
       seconds("dropS"),
       seconds("queueArriveDimS"),
-      seconds("hoverS"),
-      { key: "hoverHaloPx", min: 0, max: 80, step: 1, unit: "px" },
-      share("hoverHalo"),
       seconds("swipeSettleS"),
     ],
     eases: ["slideEase", "settleEase"],
@@ -122,6 +119,16 @@ const GROUPS: ReadonlyArray<{
       seconds("openQueueStaggerS", 0.3),
       seconds("openQueueFadeS"),
       seconds("skeletonFadeS"),
+    ],
+  },
+  {
+    title: "Halo",
+    dials: [
+      seconds("hoverS"),
+      { key: "hoverHaloPx", min: 0, max: 100, step: 1, unit: "px" },
+      { key: "hoverHaloReachPx", min: 0, max: 100, step: 1, unit: "px" },
+      share("hoverHalo"),
+      { key: "hoverHaloSaturate", min: 0, max: 3, step: 0.05, unit: "×" },
     ],
   },
   {

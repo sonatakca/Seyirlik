@@ -20,7 +20,7 @@ import {
   VolumeX,
 } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
-import { DwellClock } from "../../lib/dwellClock";
+import { DWELL_STROKE, DwellClock } from "../../lib/dwellClock";
 import { useMotionLabEnabled } from "../../lib/heroMotionLab";
 import { useBake } from "../../lib/timeline/bake";
 import { Curve, derive, type TweenControls } from "../../lib/timeline/curve";
@@ -30,6 +30,7 @@ import type { MediaItem } from "../../lib/types";
 import { HeroControlButton, HeroCopyBlock } from "./HeroCopy";
 import type { DrawnSize } from "./useReportedSize";
 import { NavbarVeil } from "./NavbarVeil";
+import { DwellRing } from "./DwellRing";
 import { useSmartContinueItems } from "./useSmartContinueItems";
 import {
   getHeroImageCandidates,
@@ -206,7 +207,7 @@ export function HomeHero({
   const [isDocumentVisible, setIsDocumentVisible] = useState(
     typeof document === "undefined" ? true : !document.hidden,
   );
-  const [clock] = useState(() => new DwellClock(HERO_DWELL_MS));
+  const [clock] = useState(() => new DwellClock(HERO_DWELL_MS, DWELL_STROKE));
 
   const [areTrailersEnabled, setAreTrailersEnabled] = useState(
     readHeroTrailersEnabledPreference,
@@ -996,7 +997,7 @@ export function HomeHero({
             // reach out past the miniature's edge before the blur spreads
             // them; round it, room for the blur to fade out in, as Safari
             // clips a filter to its element's box.
-            const reach = blur * 0.75;
+            const reach = HERO_MOTION.hoverHaloReachPx;
             const room = reach + blur * 2.5;
             return (
               <div
@@ -1011,7 +1012,7 @@ export function HomeHero({
                   height: slot.height + room * 2,
                   opacity: isOn ? HERO_MOTION.hoverHalo : 0,
                   transitionDuration: `${reduceMotion ? 0 : HERO_MOTION.hoverS}s`,
-                  filter: `blur(${blur}px) saturate(1.5)`,
+                  filter: `blur(${blur}px) saturate(${HERO_MOTION.hoverHaloSaturate})`,
                 }}
               >
                 <img
@@ -1102,30 +1103,7 @@ export function HomeHero({
             })
           : null}
 
-        {stage && headSlot ? (
-          <motion.div
-            aria-hidden="true"
-            className="pointer-events-none absolute z-[5] h-[2px] overflow-hidden rounded-full bg-white/15"
-            style={{
-              left: headSlot.x,
-              top: headSlot.y + headSlot.height + 10,
-              width: headSlot.width,
-            }}
-            initial={{ opacity: 0 }}
-            animate={{
-              opacity:
-                isArtworkReady && !isTravelling && !isTrailerPlaying ? 1 : 0,
-            }}
-            transition={{
-              duration: reduceMotion ? 0 : HERO_MOTION.progressFadeS,
-            }}
-          >
-            <div
-              ref={clock.attach}
-              className="h-full origin-left bg-[var(--accent)] [transform:scaleX(0)]"
-            />
-          </motion.div>
-        ) : null}
+
 
         {stage && headSlot && total > 1 ? (
           <motion.div
@@ -1145,6 +1123,12 @@ export function HomeHero({
               ease: "easeOut",
             }}
           >
+            {/* The title's time on stage, drawn round the controls' border. */}
+            <DwellRing
+              attach={clock.attach}
+              isShown={isArtworkReady && !isTravelling && !isTrailerPlaying}
+              fadeS={reduceMotion ? 0 : HERO_MOTION.progressFadeS}
+            />
             {trailerUrl ? (
               <>
                 {isTrailerPlaying ? (

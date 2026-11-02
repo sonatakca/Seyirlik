@@ -167,7 +167,7 @@ afterEach(() => tuneHeroMotion({}));
 
 describe("layout", () => {
   it.each(DESKTOP_SIZES)(
-    "centres the title over its overview, and stands the dock on the left over the facts ($width)",
+    "centres the title over its overview, with no facts, and stands the dock on the left level with the queue ($width)",
     (stage) => {
       const layout = heroLayout(stage);
       const slots = queueSlots(stage);
@@ -180,9 +180,9 @@ describe("layout", () => {
       expect(layout.copy.left + layout.copy.width / 2).toBeCloseTo(
         stage.width / 2,
       );
-      expect(layout.factsUnderDock?.left).toBe(dock.left);
-      expect(layout.factsUnderDock?.width).toBe(dock.width);
-      expect(layout.factsUnderDock?.bottom).toBeCloseTo(queueFoot);
+      expect(layout.showFacts).toBe(false);
+      expect(dock.left).toBeLessThan(layout.title.left);
+      expect(layout.dockFoot).toBeCloseTo(queueFoot);
       expect(dock.left + dock.width).toBeLessThan(layout.title.left);
       expect(layout.title.left + layout.title.width).toBeLessThan(slots[0]!.x);
       const titleTop = stage.height - layout.title.bottom - layout.title.height;
@@ -191,7 +191,7 @@ describe("layout", () => {
   );
 
   it.each(DESKTOP_SIZES)(
-    "keeps copy, centre dock and previews apart with the title above its facts ($width)",
+    "keeps copy, centre dock and previews apart with the title above its copy ($width)",
     (stage) => {
       tuneHeroMotion({ titlePlace: "left", dockPlace: "centre" });
       const layout = heroLayout(stage);
@@ -204,9 +204,8 @@ describe("layout", () => {
       );
       expect((stage.width + dock.width) / 2).toBeLessThan(slots[0]!.x);
       expect(layout.copy.left + layout.copy.width).toBeLessThan(slots[0]!.x);
-      expect(layout.title.bottom).toBeGreaterThan(
-        layout.copy.bottom + layout.copy.height,
-      );
+      expect(layout.showFacts).toBe(false);
+      expect(layout.title.bottom).toBeGreaterThan(layout.copy.bottom);
       const titleTop = stage.height - layout.title.bottom - layout.title.height;
       expect(titleTop).toBeGreaterThan(stage.height * 0.2);
       // With the overview open, the risen title still clears the top bar.
@@ -381,7 +380,8 @@ describe("a title page's dock", () => {
       expect(dock.left + dock.width).toBe(stage.width - layout.copy.left);
       expect(layout.copy.left + layout.copy.width).toBeLessThan(dock.left);
       expect(layout.align).toBe("left");
-      expect(layout.factsUnderDock).toBeNull();
+      expect(layout.dockFoot).toBeNull();
+      expect(layout.showFacts).toBe(true);
     },
   );
 });

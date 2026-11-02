@@ -8,8 +8,21 @@
  * A requestAnimationFrame loop used to write the bar's scale every frame, which
  * Safari holds to 60 fps and which stalls with the main thread.
  */
+/** How a fraction of the dwell is drawn on the bar: one keyframe's styles. */
+export type DwellLook = (fraction: number) => Record<string, string>;
+
+/** A left-anchored bar, scaled along x. */
+export const DWELL_BAR: DwellLook = (fraction) => ({
+  transform: `scaleX(${fraction})`,
+});
+
+/** A stroke drawn along its path (with `pathLength="1"` and a dash of 1 1). */
+export const DWELL_STROKE: DwellLook = (fraction) => ({
+  strokeDashoffset: String(1 - fraction),
+});
+
 export class DwellClock {
-  private bar: HTMLElement | null = null;
+  private bar: HTMLElement | SVGElement | null = null;
   /** The fraction reached, while no run is going. */
   private done = 0;
   private run: {
@@ -21,10 +34,13 @@ export class DwellClock {
   } | null = null;
   private marks = new Set<{ at: number; fire: () => void; timer: number }>();
 
-  constructor(private readonly durationMs: number) {}
+  constructor(
+    private readonly durationMs: number,
+    private readonly look: DwellLook = DWELL_BAR,
+  ) {}
 
-  /** A callback ref for the bar (a left-anchored element scaled along x). */
-  readonly attach = (element: HTMLElement | null) => {
+  /** A callback ref for the element the dwell is drawn on. */
+  readonly attach = (element: HTMLElement | SVGElement | null) => {
     if (this.bar === element) return;
     this.run?.animation?.cancel();
     this.bar = element;
@@ -124,7 +140,7 @@ export class DwellClock {
     const bar = this.bar;
     if (!bar || typeof bar.animate !== "function") return null;
     return bar.animate(
-      [{ transform: `scaleX(${from})` }, { transform: "scaleX(1)" }],
+      [this.look(from), this.look(1)],
       {
         duration: (1 - from) * this.durationMs,
         easing: "linear",
@@ -134,6 +150,6 @@ export class DwellClock {
   }
 
   private paint(fraction: number) {
-    if (this.bar) this.bar.style.transform = `scaleX(${fraction})`;
+    if (this.bar) Object.assign(this.bar.style, this.look(fraction));
   }
 }

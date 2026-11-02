@@ -184,15 +184,12 @@ export function HeroCopyBlock({
                 layout={layout}
                 factsRegion={{
                   left:
-                    (layout.factsUnderDock?.left ??
-                      (isCentred
-                        ? (stage.width - Math.min(layout.factsWidth, 340)) / 2
-                        : layout.copy.left)) / stage.width,
+                    (isCentred
+                      ? (stage.width - Math.min(layout.factsWidth, 340)) / 2
+                      : layout.copy.left) / stage.width,
                   top:
                     1 -
-                    ((layout.factsUnderDock?.bottom ?? layout.copy.bottom) +
-                      COPY_ROWS.factsPx) /
-                      stage.height,
+                    (layout.copy.bottom + layout.copy.height) / stage.height,
                   width: Math.min(layout.factsWidth, 340) / stage.width,
                   height: COPY_ROWS.factsPx / stage.height,
                 }}
@@ -215,18 +212,13 @@ export function HeroCopyBlock({
           className="absolute z-[6]"
           style={{
             left: dock.left,
-            // Over the facts when they stand under it, its foot on theirs.
+            // On the left, its foot is level with the queue's.
             top:
-              withQueue && !layout.factsUnderDock
+              withQueue && layout.dockFoot === null
                 ? queueSlots(stage)[0]?.y
                 : undefined,
-            bottom: layout.factsUnderDock
-              ? layout.factsUnderDock.bottom +
-                COPY_ROWS.factsPx +
-                DOCK_FACTS_GAP_PX
-              : withQueue
-                ? undefined
-                : dock.bottom,
+            bottom:
+              layout.dockFoot ?? (withQueue ? undefined : dock.bottom),
             width: dock.width,
           }}
         >
@@ -265,9 +257,6 @@ export function HeroCopyBlock({
 
 /** Between the dock and the bar over it. */
 export const DOCK_ASIDE_GAP_PX = 10;
-
-/** Between the dock and the facts line under it. */
-const DOCK_FACTS_GAP_PX = 10;
 
 export function HeroControlButton({
   label,
@@ -450,9 +439,7 @@ function HeroCopy({
         [
           factsRowRef.current,
           {
-            transform: `translateY(${
-              layout.factsUnderDock ? 0 : -value * layout.overviewLift
-            }px)`,
+            transform: `translateY(${-value * layout.overviewLift}px)`,
           },
         ],
         [
@@ -468,9 +455,22 @@ function HeroCopy({
       layout.overviewLift,
       overviewTravel,
       Boolean(metadata.overview),
-      Boolean(layout.factsUnderDock),
     ],
   );
+
+  // Once the overview has fully closed, the story starts again from the top
+  // the next time it opens; opened again while still closing, it keeps its
+  // place.
+  useEffect(() => {
+    if (isOverviewOpen) return undefined;
+    const timer = window.setTimeout(
+      () => {
+        if (overviewTextRef.current) overviewTextRef.current.scrollTop = 0;
+      },
+      reduceMotion ? 0 : HERO_MOTION.overviewS * 1000,
+    );
+    return () => window.clearTimeout(timer);
+  }, [isOverviewOpen, reduceMotion]);
 
   // The copy changes with the title by fading in place: only the title and
   // the artwork travel.
@@ -503,38 +503,24 @@ function HeroCopy({
     >
       {/* Fixed rows: the title above sits at the same height for every
           title. The facts ride up with the title as the overview opens. */}
-      <div
-        ref={factsRowRef}
-        className={
-          layout.factsUnderDock ? "absolute" : "absolute inset-x-0 top-0"
-        }
-        style={
-          layout.factsUnderDock
-            ? {
-                // Under the dock, from the copy's own corner.
-                left: layout.factsUnderDock.left - layout.copy.left,
-                top: layout.copy.bottom - layout.factsUnderDock.bottom,
-                width: layout.factsUnderDock.width,
-                height: COPY_ROWS.factsPx,
-              }
-            : { height: COPY_ROWS.factsPx }
-        }
-      >
-        <motion.p
-          ref={factsRef}
-          variants={line(0)}
-          className={`truncate text-[0.8125rem] font-bold leading-5 tracking-[0.04em] ${
-            layout.factsUnderDock
-              ? "text-center"
-              : layout.align === "centre"
-                ? "mx-auto text-center"
-                : ""
-          }`}
-          style={{ ...copyTextStyle(shade, 0.72), maxWidth: layout.factsWidth }}
+      {layout.showFacts ? (
+        <div
+          ref={factsRowRef}
+          className="absolute inset-x-0 top-0"
+          style={{ height: COPY_ROWS.factsPx }}
         >
-          {facts}
-        </motion.p>
-      </div>
+          <motion.p
+            ref={factsRef}
+            variants={line(0)}
+            className={`truncate text-[0.8125rem] font-bold leading-5 tracking-[0.04em] ${
+              layout.align === "centre" ? "mx-auto text-center" : ""
+            }`}
+            style={{ ...copyTextStyle(shade, 0.72), maxWidth: layout.factsWidth }}
+          >
+            {facts}
+          </motion.p>
+        </div>
+      ) : null}
       {metadata.overview ? (
         <div
           id={overviewId}
@@ -563,13 +549,17 @@ function HeroCopy({
               overviewRef(element);
               overviewTextRef.current = element;
             }}
-            className={`line-clamp-3 max-w-[46ch] font-semibold ${
+            // Three lines tall; a longer story scrolls rather than ending in
+            // an ellipsis.
+            className={`max-w-[46ch] overflow-y-auto overscroll-contain font-semibold [scrollbar-width:thin] ${
               layout.align === "centre" ? "mx-auto text-center" : ""
             }`}
             style={{
               ...copyTextStyle(shade, 0.8),
               fontSize: layout.overviewFontPx,
               lineHeight: COPY_ROWS.overviewLineHeight,
+              maxHeight: layout.overviewHeight,
+              pointerEvents: isOverviewOpen ? "auto" : "none",
             }}
           >
             {metadata.overview}
