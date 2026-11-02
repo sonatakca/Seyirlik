@@ -229,6 +229,42 @@ function identifyPackFile(
 }
 
 /**
+ * An episode download whose name says it holds more: SpongeBob's releases
+ * name a half-hour `S01E01-E03` when TMDB numbers each story. Filing it as
+ * plain `S01E01` lost the two it also holds, so the range is kept when it
+ * starts at the episode wanted, and the scan records all three. One episode's
+ * title would misname the file, so a ranged name carries none.
+ */
+function withReleaseRange(
+  target: DestinationTarget,
+  file: PackFile,
+): DestinationTarget {
+  if (
+    target.kind !== "episode" ||
+    target.season === undefined ||
+    target.episode === undefined
+  ) {
+    return target;
+  }
+  const identity = identifyPackFile(
+    target.season,
+    file.relative,
+    file.role === "media",
+  );
+  if (
+    !identity ||
+    "otherSeason" in identity ||
+    identity.episode !== target.episode ||
+    identity.endEpisode === undefined ||
+    identity.endEpisode <= target.episode
+  ) {
+    return target;
+  }
+  const { episodeTitle: _episodeTitle, ...untitled } = target;
+  return { ...untitled, endEpisode: identity.endEpisode };
+}
+
+/**
  * The season a whole-series pack's folders put a file in, nearest first:
  * `Season 2`, `Series 2`, `S02`, or a release folder like `Show.S02.1080p`.
  * A folder naming an episode is not a season folder.
@@ -321,7 +357,10 @@ export function fileTargetsFor<F extends PackFile>(
     return seriesFileTargets(target, media, subtitles);
   if (target.kind !== "season" || target.episode !== undefined) {
     return {
-      files: [...media, ...subtitles].map((file) => ({ file, target })),
+      files: [...media, ...subtitles].map((file) => ({
+        file,
+        target: withReleaseRange(target, file),
+      })),
       leftBehind: [],
     };
   }

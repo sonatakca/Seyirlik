@@ -1,4 +1,8 @@
 import { mediaAvailableSql } from "./mediaAvailability";
+import {
+  PLAYABLE_FILE_ORDER,
+  playableFileCandidatesSql,
+} from "./fileEpisodes";
 import { contentRatingAllowedSql } from "./contentRating";
 import type { DatabasePool } from "../database/databasePool";
 import type { SearchCandidate } from "./searchRanking";
@@ -316,6 +320,15 @@ export interface CatalogueRepository {
    */
   getItemKind(itemId: string): Promise<ItemKind | null>;
   getPrimaryFile(itemId: string): Promise<MediaFileRow | null>;
+  /**
+   * The file an item plays from: its own, or for an episode held inside
+   * another item's file (`media_file_episodes`), that file. Playback only —
+   * everything that manages files still asks `getPrimaryFile`, which never
+   * answers with a file the item does not own.
+   */
+  getPlayableFile(itemId: string): Promise<MediaFileRow | null>;
+  /** Whether a file holds the item, as its own whole file or as one of its parts. */
+  fileHoldsItem(fileId: string, itemId: string): Promise<boolean>;
   getFileById(fileId: string): Promise<MediaFileRow | null>;
   listStreams(mediaFileId: string): Promise<MediaStreamRow[]>;
   /**
@@ -811,6 +824,30 @@ export function createCatalogueRepository(
       );
       const row = rows[0];
       return row ? toMediaFileRow(row) : null;
+    },
+
+    getPlayableFile: async (itemId) => {
+      const rows = await query<Record<string, never>>(
+        `SELECT * FROM (${playableFileCandidatesSql(
+          `f.id, f.item_id, f.relative_path, f.container, f.size_bytes, f.mtime_ms,
+                f.fingerprint, f.duration_ms, f.bitrate_bps, f.is_primary, f.probe_state, f.missing_since`,
+        )}) candidate
+         ORDER BY ${PLAYABLE_FILE_ORDER}
+         LIMIT 1`,
+        [itemId],
+      );
+      const row = rows[0];
+      return row ? toMediaFileRow(row) : null;
+    },
+
+    fileHoldsItem: async (fileId, itemId) => {
+      const rows = await query<{ holds: boolean }>(
+        `SELECT EXISTS (SELECT 1 FROM media_file_episodes WHERE media_file_id = $1 AND item_id = $2)
+             OR (EXISTS (SELECT 1 FROM media_files WHERE id = $1 AND item_id = $2)
+                 AND NOT EXISTS (SELECT 1 FROM media_file_episodes WHERE media_file_id = $1)) AS holds`,
+        [fileId, itemId],
+      );
+      return rows[0]?.holds === true;
     },
 
     getFileById: async (fileId) => {

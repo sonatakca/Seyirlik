@@ -81,11 +81,14 @@ export function createCatalogueScanStore(
         locked_fields: string[];
         missing_since: Date | null;
         desired: boolean;
+        held_in: string[];
       }>(
         // A provider collection has no folder to be found in, so it is not
         // the scan's to reconcile: listing it here would retire every box set
         // on the first pass.
-        `SELECT id, source_key, kind, locked_fields, missing_since, desired
+        `SELECT id, source_key, kind, locked_fields, missing_since, desired,
+                ARRAY(SELECT part.media_file_id FROM media_file_episodes part
+                       WHERE part.item_id = items.id) AS held_in
          FROM items
          WHERE library_id = $1
            AND source_key NOT LIKE '${PROVIDER_COLLECTION_KEY_PREFIX}%'`,
@@ -98,6 +101,7 @@ export function createCatalogueScanStore(
         lockedFields: row.locked_fields ?? [],
         missingSince: row.missing_since,
         desired: row.desired,
+        ...(row.held_in.length > 0 ? { heldInFileIds: row.held_in } : {}),
       }));
     },
 
@@ -430,6 +434,18 @@ export function createCatalogueScanStore(
         `UPDATE media_files SET probe_state = 'packaged', probe_error = NULL, updated_at = now()
          WHERE id = ANY($1) AND probe_state IN ('pending', 'failed')`,
         [fileIds],
+      );
+    },
+
+    addReleaseParts: async (fileId, itemIds) => {
+      // One statement, so two scans racing cannot interleave two lists.
+      await pool.query(
+        `INSERT INTO media_file_episodes (media_file_id, item_id, ordinal, source)
+         SELECT $1, part.item_id, part.ordinal - 1, 'release'
+           FROM unnest($2::uuid[]) WITH ORDINALITY AS part(item_id, ordinal)
+          WHERE NOT EXISTS (SELECT 1 FROM media_file_episodes held WHERE held.media_file_id = $1)
+         ON CONFLICT DO NOTHING`,
+        [fileId, itemIds],
       );
     },
 

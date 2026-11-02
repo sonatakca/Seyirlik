@@ -212,6 +212,24 @@ export interface MediaItem {
   SeriesPrimaryImageTag?: string;
   SeasonId?: string;
   ParentId?: string;
+  /** Present when this episode plays from a file that holds several. */
+  PlayAs?: {
+    MediaFileId: string;
+    StartSeconds?: number;
+    EndSeconds?: number;
+  };
+  /** Every episode in that file, in playing order. */
+  FileParts?: MediaFilePart[];
+}
+
+/** One episode of a file that holds several; times are on the file's clock. */
+export interface MediaFilePart {
+  Id: string;
+  Name: string;
+  IndexNumber?: number;
+  ParentIndexNumber?: number;
+  StartSeconds?: number;
+  EndSeconds?: number;
 }
 
 export interface MediaLibrary extends MediaItem {

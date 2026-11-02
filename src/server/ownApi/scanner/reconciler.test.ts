@@ -16,6 +16,7 @@ function createStore(): CatalogueScanStore & {
   files: Map<string, StoredFile>;
   probeQueue: string[];
   packaged: string[];
+  parts: Map<string, string[]>;
 } {
   const items = new Map<
     string,
@@ -24,6 +25,7 @@ function createStore(): CatalogueScanStore & {
   const files = new Map<string, StoredFile>();
   const probeQueue: string[] = [];
   const packaged: string[] = [];
+  const parts = new Map<string, string[]>();
   let nextId = 1;
 
   return {
@@ -31,8 +33,16 @@ function createStore(): CatalogueScanStore & {
     files,
     probeQueue,
     packaged,
+    parts,
     listItems: async (libraryId) =>
-      [...items.values()].filter((item) => item.libraryId === libraryId),
+      [...items.values()]
+        .filter((item) => item.libraryId === libraryId)
+        .map((item) => {
+          const heldIn = [...parts.entries()]
+            .filter(([, itemIds]) => itemIds.includes(item.id))
+            .map(([fileId]) => fileId);
+          return heldIn.length > 0 ? { ...item, heldInFileIds: heldIn } : item;
+        }),
     listFiles: async (libraryId) =>
       [...files.values()].filter((file) =>
         [...items.values()].some(
@@ -121,6 +131,9 @@ function createStore(): CatalogueScanStore & {
     markPackaged: async (ids) => {
       packaged.push(...ids);
     },
+    addReleaseParts: async (fileId, itemIds) => {
+      if (!parts.has(fileId)) parts.set(fileId, [...itemIds]);
+    },
     refreshItemCounts: async () => undefined,
   };
 }
@@ -158,6 +171,61 @@ function renditionBackedMovie(sourceKey: string, title: string): ScannedItem {
     files: [],
     subtitles: [],
     renditionBacked: true,
+  };
+}
+
+const SERIES_KEY = "series:series/spongebob squarepants (1999)";
+
+function seriesAndSeason(): ScannedItem[] {
+  return [
+    {
+      sourceKey: SERIES_KEY,
+      kind: "series",
+      title: "SpongeBob SquarePants",
+      sortTitle: "spongebob squarepants",
+      files: [],
+      subtitles: [],
+    },
+    {
+      sourceKey: `season:${SERIES_KEY}:1`,
+      kind: "season",
+      title: "Season 1",
+      sortTitle: "0001",
+      indexNumber: 1,
+      seriesSourceKey: SERIES_KEY,
+      parentSourceKey: SERIES_KEY,
+      files: [],
+      subtitles: [],
+    },
+  ];
+}
+
+function episode(
+  episodeNumber: number,
+  relativePath: string,
+  endIndexNumber?: number,
+): ScannedItem {
+  return {
+    sourceKey: `episode:${SERIES_KEY}:1:${episodeNumber}`,
+    kind: "episode",
+    title: `Episode ${episodeNumber}`,
+    sortTitle: `0001-${String(episodeNumber).padStart(5, "0")}`,
+    indexNumber: episodeNumber,
+    parentIndexNumber: 1,
+    parentSourceKey: `season:${SERIES_KEY}:1`,
+    seriesSourceKey: SERIES_KEY,
+    titleIsPlaceholder: true,
+    files: [
+      {
+        relativePath,
+        container: "mkv",
+        size: 1_000,
+        mtimeMs: 1,
+        fingerprint: relativePath,
+        ...(endIndexNumber === undefined ? {} : { endIndexNumber }),
+      },
+    ],
+    subtitles: [],
   };
 }
 
@@ -680,5 +748,125 @@ describe("reconcileLibraryScan", () => {
     });
     expect(summary.removalsSuppressed).toBe(false);
     expect(summary.filesMarkedMissing).toBe(1);
+  });
+
+  describe("files that hold several episodes", () => {
+    const RANGED = "Series/SpongeBob/Season 1/SpongeBob - S01E01-E03.mkv";
+
+    it("gives the later episodes of a ranged name items and records them as the file's parts", async () => {
+      const store = createStore();
+      await reconcileLibraryScan({
+        store,
+        libraryId: LIBRARY,
+        scan: scan([...seriesAndSeason(), episode(1, RANGED, 3)]),
+      });
+
+      const byKey = (episodeNumber: number) =>
+        [...store.items.values()].find(
+          (item) =>
+            item.sourceKey === `episode:${SERIES_KEY}:1:${episodeNumber}`,
+        );
+      expect(byKey(2)?.kind).toBe("episode");
+      expect(byKey(3)?.kind).toBe("episode");
+      const [fileId] = [...store.files.keys()];
+      expect(store.parts.get(fileId!)).toEqual([
+        byKey(1)!.id,
+        byKey(2)!.id,
+        byKey(3)!.id,
+      ]);
+    });
+
+    it("reuses the item of an episode that also has a file of its own", async () => {
+      const store = createStore();
+      await reconcileLibraryScan({
+        store,
+        libraryId: LIBRARY,
+        scan: scan([
+          ...seriesAndSeason(),
+          episode(1, RANGED, 3),
+          episode(3, "Series/SpongeBob/Season 1/SpongeBob - S01E03.mkv"),
+        ]),
+      });
+      const thirds = [...store.items.values()].filter(
+        (item) => item.sourceKey === `episode:${SERIES_KEY}:1:3`,
+      );
+      expect(thirds).toHaveLength(1);
+    });
+
+    it("never marks an episode held inside a present file missing", async () => {
+      const store = createStore();
+      const first = new Date("2026-11-01T00:00:00Z");
+      await reconcileLibraryScan({
+        store,
+        libraryId: LIBRARY,
+        scan: scan([...seriesAndSeason(), episode(1, RANGED, 3)]),
+        now: () => first,
+      });
+
+      // The file is renamed to a single episode; its parts stay recorded, and
+      // a scan long past the grace period still finds 2 and 3 inside it.
+      const renamed = scan([
+        ...seriesAndSeason(),
+        episode(1, RANGED),
+      ]);
+      for (const days of [1, 30]) {
+        const summary = await reconcileLibraryScan({
+          store,
+          libraryId: LIBRARY,
+          scan: renamed,
+          now: () => new Date(first.getTime() + days * 86_400_000),
+        });
+        expect(summary.itemsMarkedMissing).toBe(0);
+        expect(summary.itemsDeleted).toBe(0);
+      }
+    });
+
+    it("lets an episode held only by a vanished file go missing", async () => {
+      const store = createStore();
+      await reconcileLibraryScan({
+        store,
+        libraryId: LIBRARY,
+        scan: scan([...seriesAndSeason(), episode(1, RANGED, 3)]),
+      });
+      const summary = await reconcileLibraryScan({
+        store,
+        libraryId: LIBRARY,
+        scan: scan([
+          ...seriesAndSeason(),
+          episode(4, "Series/SpongeBob/Season 1/SpongeBob - S01E04.mkv"),
+        ]),
+        allowMassRemoval: true,
+      });
+      // 1 (its file vanished), and 2 and 3 with it.
+      expect(summary.itemsMarkedMissing).toBe(3);
+    });
+
+    it("keeps parts a file already has", async () => {
+      const store = createStore();
+      await reconcileLibraryScan({
+        store,
+        libraryId: LIBRARY,
+        scan: scan([...seriesAndSeason(), episode(1, RANGED, 3)]),
+      });
+      const [fileId] = [...store.files.keys()];
+      store.parts.set(fileId!, ["hand-made"]);
+      await reconcileLibraryScan({
+        store,
+        libraryId: LIBRARY,
+        scan: scan([...seriesAndSeason(), episode(1, RANGED, 3)]),
+      });
+      expect(store.parts.get(fileId!)).toEqual(["hand-made"]);
+    });
+
+    it("ignores a range too long to be one file", async () => {
+      const store = createStore();
+      await reconcileLibraryScan({
+        store,
+        libraryId: LIBRARY,
+        scan: scan([...seriesAndSeason(), episode(1, RANGED, 40)]),
+      });
+      expect(store.parts.size).toBe(0);
+      expect(store.items.size).toBe(3);
+    });
   });
 });

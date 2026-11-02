@@ -140,7 +140,7 @@ export function DesktopPlayerPage() {
     handlePlaybackProgress,
     handlePlaybackStarted,
     handlePlaybackStopped,
-  } = usePlaybackReporting(playback.activeSource);
+  } = usePlaybackReporting(playback.activeSource, item);
 
   const handlePlayNextUp = useCallback(
     (nextItem: MediaItem) => {

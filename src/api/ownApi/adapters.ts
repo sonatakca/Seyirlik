@@ -208,7 +208,41 @@ export function toMediaItem(item: ItemDto): MediaItem {
         }
       : {}),
     ...(item.userState ? { UserData: toUserData(item.userState) } : {}),
+    ...(item.playAs
+      ? {
+          PlayAs: {
+            MediaFileId: item.playAs.mediaFileId,
+            ...secondsOf("StartSeconds", item.playAs.startMs),
+            ...secondsOf("EndSeconds", item.playAs.endMs),
+          },
+        }
+      : {}),
+    ...(item.fileParts
+      ? {
+          FileParts: item.fileParts.map((part) => ({
+            Id: part.itemId,
+            Name: part.title,
+            ...(part.indexNumber === undefined
+              ? {}
+              : { IndexNumber: part.indexNumber }),
+            ...(part.parentIndexNumber === undefined
+              ? {}
+              : { ParentIndexNumber: part.parentIndexNumber }),
+            ...secondsOf("StartSeconds", part.startMs),
+            ...secondsOf("EndSeconds", part.endMs),
+          })),
+        }
+      : {}),
   };
+}
+
+function secondsOf<K extends string>(
+  key: K,
+  ms: number | undefined,
+): Partial<Record<K, number>> {
+  return ms === undefined
+    ? {}
+    : ({ [key]: ms / 1_000 } as Partial<Record<K, number>>);
 }
 
 export function toMediaItems(items: ItemDto[]): MediaItem[] {

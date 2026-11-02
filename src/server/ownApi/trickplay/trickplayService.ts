@@ -707,7 +707,9 @@ export function createTrickplayService({
 
   return {
     findForItem: async (itemId) => {
-      const file = await catalogue.getPrimaryFile(itemId);
+      // The sheets of the file the item plays from, which for an episode held
+      // inside another item's file are that file's.
+      const file = await catalogue.getPlayableFile(itemId);
       return file ? findByMediaFile(file.id) : null;
     },
 

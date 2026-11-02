@@ -27,6 +27,7 @@ import { parseCookies, uniqueCookie } from "./api/http";
 import { createCatalogueRepository } from "./catalogue/catalogueRepository";
 import { createCatalogueScanStore } from "./catalogue/catalogueScanStore";
 import { createHomeRepository } from "./catalogue/homeRepository";
+import { createFileEpisodeRepository } from "./catalogue/fileEpisodes";
 import { createCatalogueService } from "./catalogue/catalogueService";
 import { createCatalogueRoutes } from "./catalogue/catalogueRoutes";
 import { createCurationRepository } from "./curation/curationRepository";
@@ -589,6 +590,7 @@ export async function createNativeRuntime({
     home,
     images,
     userState,
+    fileEpisodes: createFileEpisodeRepository(pool),
   });
 
   const syncplay = createSyncplayRuntime({

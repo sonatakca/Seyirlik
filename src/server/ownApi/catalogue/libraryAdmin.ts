@@ -18,7 +18,11 @@ import {
 import { normalizeLanguage } from "../../../renditions/processing/languages";
 import type { ProcessingPackageState } from "../processing/packageIndex";
 import { importUnderWaySql } from "../imports/importLanding";
-import { MEDIA_STATUS_SQL, mediaAvailableSql } from "./mediaAvailability";
+import {
+  MEDIA_STATUS_SQL,
+  itemHeldSql,
+  mediaAvailableSql,
+} from "./mediaAvailability";
 
 export type LibraryTitleKind = "movie" | "series" | "book";
 
@@ -308,7 +312,7 @@ export function createLibraryAdminRepository(
         `SELECT DISTINCT series.id FROM items series
          JOIN items episode ON episode.series_id = series.id AND episode.kind = 'episode'
          WHERE series.kind = 'series' AND series.provider_ids ? 'tmdb'
-           AND EXISTS (SELECT 1 FROM media_files f WHERE f.item_id = episode.id AND f.missing_since IS NULL)
+           AND ${itemHeldSql("episode")}
            AND NOT EXISTS (SELECT 1 FROM item_images thumb WHERE thumb.item_id = episode.id AND thumb.image_type = 'thumb')`,
       );
       return [

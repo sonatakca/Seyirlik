@@ -242,11 +242,17 @@ export function createPlaybackRoutes({
       );
     }
 
+    // An episode held inside another item's file plays from that file.
     const file = mediaFileId
       ? await catalogue.getFileById(mediaFileId)
-      : await catalogue.getPrimaryFile(itemId);
+      : await catalogue.getPlayableFile(itemId);
 
-    if (!file || file.itemId !== itemId || file.missingSince !== null) {
+    if (
+      !file ||
+      file.missingSince !== null ||
+      (file.itemId !== itemId &&
+        !(await catalogue.fileHoldsItem(file.id, itemId)))
+    ) {
       throw new OwnApiError(
         "MEDIA_NOT_FOUND",
         "The requested media could not be found.",

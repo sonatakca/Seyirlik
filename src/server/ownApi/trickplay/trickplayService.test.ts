@@ -1179,6 +1179,7 @@ describe("legacy *.trickplay never counts as generated trickplay", () => {
     } as unknown as DatabasePool;
     const catalogue = {
       getPrimaryFile: async () => SOURCE,
+      getPlayableFile: async () => SOURCE,
       getFileById: async () => SOURCE,
       getItemKind: async () => "movie",
       listStreams: async () => [videoStream()],

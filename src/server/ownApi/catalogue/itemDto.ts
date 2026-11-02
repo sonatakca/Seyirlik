@@ -1,3 +1,4 @@
+import type { FileEpisodeView } from "./fileEpisodes";
 import type { CatalogueItemRow, ItemKind } from "./catalogueRepository";
 
 /**
@@ -79,6 +80,13 @@ export interface ItemDto {
   seriesLogoLayout?: { x: number; y: number; width: number; shadow: number };
   images: ItemImagesDto;
   userState?: UserItemStateDto;
+  /**
+   * Present when the episode plays from a file that holds several: that file,
+   * and this episode's stretch of its timeline when known.
+   */
+  playAs?: FileEpisodeView["playAs"];
+  /** Every episode in that file, in playing order, for the player to name. */
+  fileParts?: FileEpisodeView["fileParts"];
 }
 
 export interface ImageRecord {
@@ -206,11 +214,12 @@ export interface ToItemDtoContext {
   /** Series or season artwork, used when the item has none of its own. */
   inheritedImages?: ImageRecord[];
   userState?: UserStateRecord;
+  fileEpisodes?: FileEpisodeView;
 }
 
 export function toItemDto(
   row: CatalogueItemRow,
-  { images, inheritedImages, userState }: ToItemDtoContext = {},
+  { images, inheritedImages, userState, fileEpisodes }: ToItemDtoContext = {},
 ): ItemDto {
   const runtimeMs =
     row.runtimeMs === null ? undefined : Number(row.runtimeMs) || undefined;
@@ -267,6 +276,12 @@ export function toItemDto(
     ...(userState === undefined
       ? {}
       : { userState: toUserStateDto(userState, runtimeMs) }),
+    ...(fileEpisodes === undefined
+      ? {}
+      : {
+          playAs: fileEpisodes.playAs,
+          fileParts: fileEpisodes.fileParts,
+        }),
   };
 }
 

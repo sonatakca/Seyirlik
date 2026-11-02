@@ -7,6 +7,7 @@ import type {
 import type { HomeRepository } from "./homeRepository";
 import type { ImageRepository } from "../images/imageRepository";
 import type { UserStateRepository } from "../progress/userStateRepository";
+import type { FileEpisodeRepository } from "./fileEpisodes";
 import { groupImages, itemCursorKey, toItemDto, type ItemDto } from "./itemDto";
 import { rankSearchCandidates } from "./searchRanking";
 
@@ -22,6 +23,8 @@ export interface CatalogueServiceOptions {
   home: HomeRepository;
   images: ImageRepository;
   userState: UserStateRepository;
+  /** Episodes held inside another item's file; absent, every item plays its own. */
+  fileEpisodes?: Pick<FileEpisodeRepository, "listForItems">;
 }
 
 export interface PagedItems {
@@ -53,7 +56,7 @@ export interface HomeDto {
  * DTO.
  *
  * The enrichment is always batched: one query for images, one for inherited
- * artwork and one for user state, no matter how many items are in the page.
+ * artwork, one for user state and two for shared files, no matter how many items are in the page.
  * Doing it per item is the classic way a media home screen becomes unusable.
  */
 export function createCatalogueService({
@@ -61,6 +64,7 @@ export function createCatalogueService({
   home,
   images,
   userState,
+  fileEpisodes,
 }: CatalogueServiceOptions) {
   async function enrich(
     userId: string,
@@ -69,10 +73,11 @@ export function createCatalogueService({
     if (rows.length === 0) return [];
 
     const itemIds = rows.map((row) => row.id);
-    const [imageRecords, inheritedImages, states] = await Promise.all([
+    const [imageRecords, inheritedImages, states, held] = await Promise.all([
       images.listForItems(itemIds),
       images.listInheritedForItems(itemIds),
       userState.getMany(userId, itemIds),
+      fileEpisodes?.listForItems(itemIds) ?? new Map(),
     ]);
     const imagesByItem = groupImages(imageRecords);
 
@@ -80,11 +85,13 @@ export function createCatalogueService({
       const ownImages = imagesByItem.get(row.id);
       const parentImages = inheritedImages.get(row.id);
       const state = states.get(row.id);
+      const fileEpisodeView = held.get(row.id);
 
       return toItemDto(row, {
         ...(ownImages ? { images: ownImages } : {}),
         ...(parentImages ? { inheritedImages: parentImages } : {}),
         ...(state ? { userState: state } : {}),
+        ...(fileEpisodeView ? { fileEpisodes: fileEpisodeView } : {}),
       });
     });
   }

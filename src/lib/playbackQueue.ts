@@ -5,6 +5,7 @@ import {
   getBoxSetItems,
 } from "./mediaApi";
 import { sortCollectionItemsForWatching } from "./collectionUtils";
+import { sharesFile } from "./fileParts";
 import type { MediaItem } from "./types";
 
 export interface PlaybackQueueSeason {
@@ -104,6 +105,7 @@ function getSeasonGroupId(item: MediaItem): string {
 function getNextItem(
   items: MediaItem[],
   currentItemId: string,
+  isPlayingAlready: (item: MediaItem) => boolean = () => false,
 ): MediaItem | null {
   const currentIndex = items.findIndex((item) => item.Id === currentItemId);
 
@@ -111,7 +113,11 @@ function getNextItem(
     return null;
   }
 
-  return items[currentIndex + 1] ?? null;
+  return (
+    items
+      .slice(currentIndex + 1)
+      .find((item) => !isPlayingAlready(item)) ?? null
+  );
 }
 
 function buildSeriesSeasons(episodes: MediaItem[]): PlaybackQueueSeason[] {
@@ -187,7 +193,11 @@ async function getSeriesPlaybackQueue(
     title: currentEpisode.SeriesName,
     items: orderedEpisodes,
     seasons,
-    nextItem: getNextItem(orderedEpisodes, currentEpisode.Id),
+    // The stories after this one in the same half-hour have already played
+    // by the time the file ends; next is the first one after them.
+    nextItem: getNextItem(orderedEpisodes, currentEpisode.Id, (episode) =>
+      sharesFile(currentEpisode, episode),
+    ),
   };
 }
 

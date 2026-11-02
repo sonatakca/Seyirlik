@@ -22,6 +22,7 @@ function scanStore(): CatalogueScanStore {
     deleteFiles: async () => undefined,
     queueProbe: async () => undefined,
     markPackaged: async () => undefined,
+    addReleaseParts: async () => undefined,
     refreshItemCounts: async () => undefined,
   };
 }

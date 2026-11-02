@@ -391,6 +391,40 @@ describe("a season pack, explored file by file", () => {
     const outcome = fileTargetsFor(EPISODE, [file("x/at.all.S09E09.mkv")], []);
     expect(!isRefusal(outcome) && outcome.files[0]!.target).toBe(EPISODE);
   });
+
+  it("keeps the range of a release that holds the episode and the ones after it", () => {
+    const wanted: DestinationTarget = {
+      kind: "episode",
+      title: "SpongeBob SquarePants",
+      season: 1,
+      episode: 1,
+      episodeTitle: "Help Wanted",
+    };
+    const outcome = fileTargetsFor(
+      wanted,
+      [file("SpongeBob.S01E01-E03.1080p-Frys/SpongeBob.S01E01-E03.mkv")],
+      [],
+    );
+    if (isRefusal(outcome)) throw new Error(outcome.detail);
+    const target = outcome.files[0]!.target;
+    expect(target).toMatchObject({ episode: 1, endEpisode: 3 });
+    expect(canonicalStem(target)).toBe("SpongeBob SquarePants - S01E01-E03");
+  });
+
+  it("ignores a range that does not start at the episode wanted", () => {
+    const wanted: DestinationTarget = {
+      kind: "episode",
+      title: "SpongeBob SquarePants",
+      season: 9,
+      episode: 2,
+    };
+    const outcome = fileTargetsFor(
+      wanted,
+      [file("SpongeBob.S10E11-E12.mkv")],
+      [],
+    );
+    expect(!isRefusal(outcome) && outcome.files[0]!.target).toBe(wanted);
+  });
 });
 
 describe("a whole-series pack, filed under each file's own season", () => {

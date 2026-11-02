@@ -1,4 +1,5 @@
 import { getBackdropImageUrl } from "../../lib/mediaApi";
+import { initialFileSeconds, partStartSeconds } from "../../lib/fileParts";
 import type { MediaItem } from "../../lib/types";
 
 export function getPlayerLoadingBackdropUrl(item: MediaItem | null): string {
@@ -21,5 +22,8 @@ export function getInitialPlaybackSeconds(
       ? item.UserData.PlaybackPositionTicks / 10_000_000
       : 0;
 
-  return shouldStartFromBeginning ? 0 : savedPlaybackSeconds;
+  // An episode inside a shared file starts, and resumes, from its own place.
+  return shouldStartFromBeginning
+    ? partStartSeconds(item)
+    : initialFileSeconds(item, savedPlaybackSeconds);
 }

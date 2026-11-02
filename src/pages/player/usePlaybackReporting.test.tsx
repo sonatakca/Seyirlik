@@ -1,14 +1,16 @@
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PlaybackSourceCandidate } from "../../lib/types";
+import type { MediaItem, PlaybackSourceCandidate } from "../../lib/types";
 import { usePlaybackReporting } from "./usePlaybackReporting";
 
 const {
+  markItemPlayed,
   reportPlaybackProgress,
   reportPlaybackStart,
   reportPlaybackStopped,
   reportPlaybackStoppedBeforeUnload,
 } = vi.hoisted(() => ({
+  markItemPlayed: vi.fn(),
   reportPlaybackProgress: vi.fn(),
   reportPlaybackStart: vi.fn(),
   reportPlaybackStopped: vi.fn(),
@@ -16,6 +18,7 @@ const {
 }));
 
 vi.mock("../../lib/mediaApi", () => ({
+  markItemPlayed,
   reportPlaybackProgress,
   reportPlaybackStart,
   reportPlaybackStopped,
@@ -41,6 +44,57 @@ describe("usePlaybackReporting", () => {
     reportPlaybackProgress.mockResolvedValue(undefined);
     reportPlaybackStart.mockResolvedValue(undefined);
     reportPlaybackStopped.mockResolvedValue(undefined);
+    markItemPlayed.mockResolvedValue(undefined);
+  });
+
+  describe("in a file that holds several episodes", () => {
+    const halfHour = {
+      Id: "item-1",
+      Name: "Help Wanted",
+      Type: "Episode",
+      FileParts: [
+        { Id: "item-1", Name: "Help Wanted", StartSeconds: 0 },
+        { Id: "reef", Name: "Reef Blower", StartSeconds: 549 },
+        { Id: "tea", Name: "Tea at the Treedome", StartSeconds: 720 },
+      ],
+    } as MediaItem;
+
+    it("reports the playing episode on its own clock", () => {
+      const { result } = renderHook(() =>
+        usePlaybackReporting(source, halfHour),
+      );
+      act(() => {
+        result.current.handlePlaybackProgress(600, false);
+      });
+      expect(reportPlaybackProgress).toHaveBeenCalledWith(
+        { ...source, itemId: "reef" },
+        510_000_000,
+        false,
+      );
+    });
+
+    it("marks an episode watched when play runs on into the next", () => {
+      const { result } = renderHook(() =>
+        usePlaybackReporting(source, halfHour),
+      );
+      act(() => {
+        result.current.handlePlaybackStarted(500);
+        result.current.handlePlaybackProgress(560, false);
+      });
+      expect(markItemPlayed).toHaveBeenCalledWith("item-1");
+      expect(markItemPlayed).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not count a seek past an episode as watching it", () => {
+      const { result } = renderHook(() =>
+        usePlaybackReporting(source, halfHour),
+      );
+      act(() => {
+        result.current.handlePlaybackStarted(10);
+        result.current.handlePlaybackProgress(800, false);
+      });
+      expect(markItemPlayed).not.toHaveBeenCalled();
+    });
   });
 
   it("reports start, progress, stop, and before-unload with tick positions", () => {

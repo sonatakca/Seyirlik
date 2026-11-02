@@ -156,12 +156,14 @@ export function createProbeService({
           );
         }
 
-        // The item's runtime comes from its primary file.
+        // The item's runtime comes from its primary file — unless the file
+        // holds several episodes, when it is the length of none of them.
         if (probe.durationMs !== null) {
           await client.query(
             `UPDATE items SET runtime_ms = $2, updated_at = now()
-             WHERE id = $1 AND runtime_ms IS DISTINCT FROM $2`,
-            [itemId, probe.durationMs],
+             WHERE id = $1 AND runtime_ms IS DISTINCT FROM $2
+               AND NOT EXISTS (SELECT 1 FROM media_file_episodes WHERE media_file_id = $3)`,
+            [itemId, probe.durationMs, mediaFileId],
           );
         }
       }

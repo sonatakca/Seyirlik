@@ -1,25 +1,80 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import { partProgress } from "../../lib/fileParts";
 import {
+  markItemPlayed,
   reportPlaybackProgress,
   reportPlaybackStart,
   reportPlaybackStopped,
   reportPlaybackStoppedBeforeUnload,
   ticksFromSeconds,
 } from "../../lib/mediaApi";
-import type { PlaybackSourceCandidate } from "../../lib/types";
+import type { MediaItem, PlaybackSourceCandidate } from "../../lib/types";
 
+/**
+ * Reports playback to the server.
+ *
+ * In a file that holds several episodes the position belongs to the one under
+ * the playhead, on its own clock, and an episode played through to the next
+ * is marked watched. Seeking past one is not watching it, so only the step to
+ * the very next part counts.
+ */
 export function usePlaybackReporting(
   activeSource: PlaybackSourceCandidate | null,
+  item: MediaItem | null = null,
 ) {
-  const handlePlaybackStarted = useCallback(
+  const lastPartRef = useRef<{ itemId: string; index: number } | null>(null);
+
+  useEffect(() => {
+    lastPartRef.current = null;
+  }, [item?.Id]);
+
+  const resolve = useCallback(
     (positionSeconds: number) => {
       if (!activeSource) {
+        return null;
+      }
+
+      const progress = partProgress(item, positionSeconds);
+
+      if (!progress) {
+        return { source: activeSource, positionSeconds };
+      }
+
+      const last = lastPartRef.current;
+      if (last && progress.index === last.index + 1) {
+        void markItemPlayed(last.itemId).catch((error) => {
+          console.warn(
+            "[Seyirlik Playback] Could not mark an episode watched",
+            error,
+          );
+        });
+      }
+      lastPartRef.current = {
+        itemId: progress.itemId,
+        index: progress.index,
+      };
+
+      return {
+        source:
+          progress.itemId === activeSource.itemId
+            ? activeSource
+            : { ...activeSource, itemId: progress.itemId },
+        positionSeconds: progress.positionSeconds,
+      };
+    },
+    [activeSource, item],
+  );
+
+  const handlePlaybackStarted = useCallback(
+    (positionSeconds: number) => {
+      const target = resolve(positionSeconds);
+      if (!target) {
         return;
       }
 
       void reportPlaybackStart(
-        activeSource,
-        ticksFromSeconds(positionSeconds),
+        target.source,
+        ticksFromSeconds(target.positionSeconds),
       ).catch((error) => {
         console.warn(
           "[Seyirlik Playback] Could not report playback start",
@@ -27,18 +82,19 @@ export function usePlaybackReporting(
         );
       });
     },
-    [activeSource],
+    [resolve],
   );
 
   const handlePlaybackProgress = useCallback(
     (positionSeconds: number, isPaused: boolean) => {
-      if (!activeSource) {
+      const target = resolve(positionSeconds);
+      if (!target) {
         return;
       }
 
       void reportPlaybackProgress(
-        activeSource,
-        ticksFromSeconds(positionSeconds),
+        target.source,
+        ticksFromSeconds(target.positionSeconds),
         isPaused,
       ).catch((error) => {
         console.warn(
@@ -47,18 +103,19 @@ export function usePlaybackReporting(
         );
       });
     },
-    [activeSource],
+    [resolve],
   );
 
   const handlePlaybackStopped = useCallback(
     (positionSeconds: number) => {
-      if (!activeSource) {
+      const target = resolve(positionSeconds);
+      if (!target) {
         return;
       }
 
       void reportPlaybackStopped(
-        activeSource,
-        ticksFromSeconds(positionSeconds),
+        target.source,
+        ticksFromSeconds(target.positionSeconds),
       ).catch((error) => {
         console.warn(
           "[Seyirlik Playback] Could not report playback stopped",
@@ -66,21 +123,22 @@ export function usePlaybackReporting(
         );
       });
     },
-    [activeSource],
+    [resolve],
   );
 
   const handlePlaybackBeforeUnload = useCallback(
     (positionSeconds: number) => {
-      if (!activeSource) {
+      const target = resolve(positionSeconds);
+      if (!target) {
         return;
       }
 
       reportPlaybackStoppedBeforeUnload(
-        activeSource,
-        ticksFromSeconds(positionSeconds),
+        target.source,
+        ticksFromSeconds(target.positionSeconds),
       );
     },
-    [activeSource],
+    [resolve],
   );
 
   return {

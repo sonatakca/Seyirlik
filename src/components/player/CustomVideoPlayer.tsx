@@ -1,3 +1,4 @@
+import { useActiveFilePart } from "./useActiveFilePart";
 import {
   useCallback,
   useEffect,
@@ -315,6 +316,7 @@ export function CustomVideoPlayer({
    */
   const videoRef = deck.videoRef;
   const deckEpoch = deck.deckEpoch;
+  const activeFilePart = useActiveFilePart(videoRef, deckEpoch, item);
   activeDeckElementRef.current = () => videoRef.current;
   /**
    * Pulled out individually because `deck` itself is a fresh object on every
@@ -5123,20 +5125,26 @@ export function CustomVideoPlayer({
 
   const subtitle = getItemSubtitle(item, mediaFormatLabels);
   const isEpisodeItem = item.Type === "Episode";
+  // In a half-hour that holds several stories, the one being watched.
+  const playingPart =
+    activeFilePart && activeFilePart.Id !== item.Id ? activeFilePart : null;
   const playerHeaderTitle = isEpisodeItem
     ? item.SeriesName?.trim() || title
     : title;
+  const episodeSeasonNumberSource =
+    playingPart?.ParentIndexNumber ?? item.ParentIndexNumber;
+  const episodeNumberSource = playingPart?.IndexNumber ?? item.IndexNumber;
   const episodeSeasonNumber =
     isEpisodeItem &&
-    typeof item.ParentIndexNumber === "number" &&
-    Number.isFinite(item.ParentIndexNumber)
-      ? item.ParentIndexNumber
+    typeof episodeSeasonNumberSource === "number" &&
+    Number.isFinite(episodeSeasonNumberSource)
+      ? episodeSeasonNumberSource
       : null;
   const episodeNumber =
     isEpisodeItem &&
-    typeof item.IndexNumber === "number" &&
-    Number.isFinite(item.IndexNumber)
-      ? item.IndexNumber
+    typeof episodeNumberSource === "number" &&
+    Number.isFinite(episodeNumberSource)
+      ? episodeNumberSource
       : null;
   const playerEpisodeLabel =
     episodeSeasonNumber !== null && episodeNumber !== null
@@ -5149,7 +5157,10 @@ export function CustomVideoPlayer({
     ? getEpisodeDisplayMetadata(item, language)
     : null;
   const playerEpisodeName = isEpisodeItem
-    ? episodeMetadata?.title?.trim() || item.Name.trim() || null
+    ? playingPart?.Name.trim() ||
+      episodeMetadata?.title?.trim() ||
+      item.Name.trim() ||
+      null
     : null;
   const playerSeriesLogoItemId = isEpisodeItem
     ? (item.ParentLogoItemId ?? item.SeriesId ?? null)

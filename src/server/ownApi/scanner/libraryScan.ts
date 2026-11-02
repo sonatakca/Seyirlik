@@ -68,6 +68,11 @@ export interface ScannedFile {
   size: number;
   mtimeMs: number;
   fingerprint: string;
+  /**
+   * The last episode this file's own name says it holds (`S01E01-E03` → 3).
+   * Per file, because an item's other copies need not be ranges.
+   */
+  endIndexNumber?: number;
 }
 
 export type ScannedItemKind =
@@ -415,6 +420,15 @@ export function buildFingerprint(
 
 function sourceKey(kind: string, ...parts: Array<string | number>): string {
   return `${kind}:${parts.map((part) => String(part).toLowerCase()).join(":")}`;
+}
+
+/** An episode's identity, as the scanner derives it from a numbered name. */
+export function episodeSourceKey(
+  seriesKey: string,
+  seasonNumber: number,
+  episodeNumber: number,
+): string {
+  return sourceKey("episode", seriesKey, seasonNumber, episodeNumber);
 }
 
 async function toScannedFile(
@@ -808,12 +822,18 @@ async function scanEpisodeFiles(
       folderSeriesTitle: context.seriesTitle,
     });
 
-    const file = await toScannedFile(
+    const scannedFile = await toScannedFile(
       fs,
       videoFile.relativePath,
       result.skipped,
     );
-    if (!file) continue;
+    if (!scannedFile) continue;
+    const file =
+      parsed.episodeNumber !== undefined &&
+      parsed.endEpisodeNumber !== undefined &&
+      parsed.endEpisodeNumber > parsed.episodeNumber
+        ? { ...scannedFile, endIndexNumber: parsed.endEpisodeNumber }
+        : scannedFile;
 
     // Without a season the episode cannot be placed in the hierarchy; season 1
     // is the conventional default for a flat series folder.

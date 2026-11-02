@@ -80,6 +80,19 @@ export interface ItemDto {
   seriesLogoLayout?: { x: number; y: number; width: number; shadow: number };
   images: ItemImagesDto;
   userState?: UserItemStateDto;
+  /** The file this episode plays from, when that file holds several. */
+  playAs?: { mediaFileId: string; startMs?: number; endMs?: number };
+  /** Every episode in that file, in playing order. */
+  fileParts?: FilePartDto[];
+}
+
+export interface FilePartDto {
+  itemId: string;
+  title: string;
+  indexNumber?: number;
+  parentIndexNumber?: number;
+  startMs?: number;
+  endMs?: number;
 }
 
 export interface LibraryDto {

@@ -119,6 +119,8 @@ function fakeCatalogue(): CatalogueRepository {
       })),
     listFilesForItem: async () => [],
     getPrimaryFile: async () => null,
+    getPlayableFile: async () => null,
+    fileHoldsItem: async () => false,
     getFileById: async () => null,
     listStreams: async () => [],
     listChapters: async () => [],

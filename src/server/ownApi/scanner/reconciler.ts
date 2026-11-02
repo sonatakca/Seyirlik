@@ -3,7 +3,12 @@ import {
   titleBaseDirectoryOf,
   titleRootLayoutForKind,
 } from "../../../renditions/adaptive/titleRoot";
-import type { ScanResult, ScannedItem, ScannedSubtitle } from "./libraryScan";
+import {
+  episodeSourceKey,
+  type ScanResult,
+  type ScannedItem,
+  type ScannedSubtitle,
+} from "./libraryScan";
 
 /**
  * Reconciliation turns a scan snapshot into durable catalogue state.
@@ -31,6 +36,13 @@ export interface ExistingItemRow {
    * taking the monitoring, the profile and the intent with it.
    */
   desired?: boolean;
+  /**
+   * Files that hold this episode as one of several (`media_file_episodes`).
+   *
+   * An episode held only inside another item's half-hour has no file of its
+   * own for a scan to find; while one of these is seen, neither is it missing.
+   */
+  heldInFileIds?: string[];
 }
 
 export interface ExistingFileRow {
@@ -92,6 +104,12 @@ export interface CatalogueScanStore {
    * their source bytes are gone on purpose, so no probe will ever read them.
    */
   markPackaged(fileIds: string[]): Promise<void>;
+  /**
+   * Records that a file holds these episodes, in this order, as its name
+   * said — unless it already has parts: a detected or hand-made list knows
+   * more than a release name does.
+   */
+  addReleaseParts(fileId: string, itemIds: string[]): Promise<void>;
   refreshItemCounts(libraryId: string): Promise<void>;
 }
 
@@ -139,6 +157,8 @@ export interface ReconcileSummary {
 }
 
 const DEFAULT_MISSING_GRACE_MS = 7 * 24 * 60 * 60 * 1_000;
+/** A longer range in a name is a misparse, not a file of that many episodes. */
+const MAX_RELEASE_RANGE = 4;
 const DEFAULT_MASS_DISAPPEARANCE_RATIO = 0.5;
 
 function orderByDependency(items: ScannedItem[]): ScannedItem[] {
@@ -225,6 +245,11 @@ export async function reconcileLibraryScan({
   }
 
   const itemIdBySourceKey = new Map<string, string>();
+  const heldRelations: Array<{
+    itemId: string;
+    parentSourceKey: string | undefined;
+    seriesSourceKey: string | undefined;
+  }> = [];
   const seenItemIds: string[] = [];
   const seenFileIds: string[] = [];
   const probeFileIds: string[] = [];
@@ -294,6 +319,57 @@ export async function reconcileLibraryScan({
 
       // A new file, or one whose bytes changed, needs a fresh technical probe.
       if (changed) probeFileIds.push(id);
+
+      /*
+       * A release named S01E01-E03 holds three episodes. The ones after the
+       * first get items of their own, numbered and titled like any episode
+       * the scan finds, so the metadata refresh names them and the strip and
+       * the missing search count them as held.
+       */
+      if (
+        file.endIndexNumber !== undefined &&
+        scanned.kind === "episode" &&
+        scanned.indexNumber !== undefined &&
+        scanned.parentIndexNumber !== undefined &&
+        scanned.seriesSourceKey !== undefined &&
+        file.endIndexNumber - scanned.indexNumber <= MAX_RELEASE_RANGE
+      ) {
+        const partIds = [itemId];
+        for (
+          let episode = scanned.indexNumber + 1;
+          episode <= file.endIndexNumber;
+          episode += 1
+        ) {
+          const key = episodeSourceKey(
+            scanned.seriesSourceKey,
+            scanned.parentIndexNumber,
+            episode,
+          );
+          const heldId =
+            itemIdBySourceKey.get(key) ??
+            (await store.upsertItem({
+              libraryId,
+              sourceKey: key,
+              kind: "episode",
+              title: `Episode ${episode}`,
+              sortTitle: `${String(scanned.parentIndexNumber).padStart(4, "0")}-${String(episode).padStart(5, "0")}`,
+              year: undefined,
+              indexNumber: episode,
+              parentIndexNumber: scanned.parentIndexNumber,
+              lockedFields: existingItemsByKey.get(key)?.lockedFields ?? [],
+              titleIsPlaceholder: true,
+            }));
+          itemIdBySourceKey.set(key, heldId);
+          seenItemIds.push(heldId);
+          heldRelations.push({
+            itemId: heldId,
+            parentSourceKey: scanned.parentSourceKey,
+            seriesSourceKey: scanned.seriesSourceKey,
+          });
+          partIds.push(heldId);
+        }
+        await store.addReleaseParts(id, partIds);
+      }
     }
 
     if (
@@ -317,6 +393,29 @@ export async function reconcileLibraryScan({
       : null;
 
     await store.setItemRelations(itemId, { parentId, seriesId });
+  }
+
+  for (const held of heldRelations) {
+    await store.setItemRelations(held.itemId, {
+      parentId: held.parentSourceKey
+        ? (itemIdBySourceKey.get(held.parentSourceKey) ?? null)
+        : null,
+      seriesId: held.seriesSourceKey
+        ? (itemIdBySourceKey.get(held.seriesSourceKey) ?? null)
+        : null,
+    });
+  }
+
+  // An episode held inside a file this scan saw is as present as that file.
+  const seenFileIdsSoFar = new Set(seenFileIds);
+  const seenItemIdsSoFar = new Set(seenItemIds);
+  for (const item of existingItems) {
+    if (
+      !seenItemIdsSoFar.has(item.id) &&
+      item.heldInFileIds?.some((fileId) => seenFileIdsSoFar.has(fileId))
+    ) {
+      seenItemIds.push(item.id);
+    }
   }
 
   await store.markItemsSeen(seenItemIds);

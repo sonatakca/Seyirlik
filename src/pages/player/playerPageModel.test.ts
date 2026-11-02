@@ -51,4 +51,16 @@ describe("playerPageModel", () => {
       ),
     ).toBe(0);
   });
+
+  it("starts an episode inside a shared file at its own place", () => {
+    const reef = {
+      Id: "reef",
+      Name: "Reef Blower",
+      PlayAs: { MediaFileId: "file", StartSeconds: 549, EndSeconds: 720 },
+      UserData: { PlaybackPositionTicks: 300_000_000 },
+    } as MediaItem;
+
+    expect(getInitialPlaybackSeconds(reef, false)).toBe(579);
+    expect(getInitialPlaybackSeconds(reef, true)).toBe(549);
+  });
 });
