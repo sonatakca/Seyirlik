@@ -1749,7 +1749,7 @@ export const tr = {
   "devtools.motionLab.hint.logoLapS": "Logo: renklerin bir turu",
   "devtools.motionLab.hint.logoTailLaps": "Logo: yükleme bitince tur sayısı",
   "devtools.motionLab.hint.logoHoldS": "Logo: tema renginde bekleme",
-  "devtools.motionLab.hint.logoFadeS": "Logo: beyaza geçiş",
+  "devtools.motionLab.hint.logoFadeS": "Logo: soldan sağa beyazlama",
   "devtools.motionLab.hint.progressFadeS": "İlerleme halkasının solması",
   "devtools.motionLab.reset": "Sıfırla",
   "devtools.motionLab.copy": "Değişiklikleri kopyala",

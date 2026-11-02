@@ -1748,7 +1748,7 @@ export const en = {
   "devtools.motionLab.hint.logoLapS": "Logo: one lap of colours",
   "devtools.motionLab.hint.logoTailLaps": "Logo: laps after loading ends",
   "devtools.motionLab.hint.logoHoldS": "Logo: theme colour hold",
-  "devtools.motionLab.hint.logoFadeS": "Logo: fade to white",
+  "devtools.motionLab.hint.logoFadeS": "Logo: sweep to white",
   "devtools.motionLab.hint.progressFadeS": "Progress ring fading",
   "devtools.motionLab.reset": "Reset",
   "devtools.motionLab.copy": "Copy changes",

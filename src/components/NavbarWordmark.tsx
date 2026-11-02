@@ -98,6 +98,21 @@ function getAccentThemeName(): string | undefined {
 const SHADOW_FRAME_STYLE = getWordmarkShadowFrameStyle();
 
 /**
+ * The white's reveal: a mask three times the wordmark's width, opaque on its
+ * left third, clear on its right third, with a soft edge between. Moved from
+ * its right end to its left, the edge crosses the letters from left to right.
+ */
+const WHITE_SWEEP_MASK = {
+  WebkitMaskImage:
+    "linear-gradient(to right, #000 33.333%, transparent 66.667%)",
+  maskImage: "linear-gradient(to right, #000 33.333%, transparent 66.667%)",
+  WebkitMaskSize: "300% 100%",
+  maskSize: "300% 100%",
+  WebkitMaskRepeat: "no-repeat",
+  maskRepeat: "no-repeat",
+} as const;
+
+/**
  * The wordmark, white at rest. While anything is loading it cycles through
  * the palette, and keeps cycling for a further 2.5 seconds once loading ends.
  * Then it carries on until it comes round to the accent colour again, so it
@@ -252,10 +267,12 @@ export function NavbarWordmark({
           }}
         />
       ))}
-      {/* Each frame's white over it: the shown one fades in once a cycle
-          has landed, and is gone at once when the next begins. */}
+      {/* Each frame's white over it: the shown one sweeps in from the left
+          once a cycle has landed, a soft edge crossing the letters, and is
+          gone at once when the next begins. */}
       {FRAMES.map((frame, index) => {
         const isOn = isWhite && index === shownIndex;
+        const sweep = isOn ? `${HERO_MOTION.logoFadeS * 1000}ms ease-out` : "0ms";
         return (
           <img
             key={`${frame.accent} white`}
@@ -266,8 +283,11 @@ export function NavbarWordmark({
             decoding="async"
             className="pointer-events-none absolute inset-0 h-full w-full max-w-none"
             style={{
-              opacity: isOn ? 1 : 0,
-              transition: `opacity ${isOn ? HERO_MOTION.logoFadeS * 1000 : 0}ms ease-out`,
+              ...WHITE_SWEEP_MASK,
+              opacity: index === shownIndex ? 1 : 0,
+              WebkitMaskPosition: isOn ? "0% 0" : "100% 0",
+              maskPosition: isOn ? "0% 0" : "100% 0",
+              transition: `-webkit-mask-position ${sweep}, mask-position ${sweep}`,
             }}
             onTransitionEnd={() => {
               if (isOn) setIsWhiteCovering(true);
