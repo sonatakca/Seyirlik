@@ -54,7 +54,7 @@ export function DwellRing({
           d={stadium(size.width, size.height, STROKE_PX / 2)}
           pathLength={1}
           fill="none"
-          stroke="var(--accent)"
+          stroke="#fff"
           strokeWidth={STROKE_PX}
           strokeDasharray="1 1"
           strokeDashoffset={1}

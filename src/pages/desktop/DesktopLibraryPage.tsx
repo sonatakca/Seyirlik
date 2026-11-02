@@ -574,7 +574,7 @@ export function DesktopLibraryPage({
     "/collections",
   ].includes(canonicalPathOverride ?? "");
   const loadingSkeleton = isAliasLibrary ? (
-    <LibrarySkeleton />
+    <LibrarySkeleton withGroupTabs={canonicalPathOverride === "/shows"} />
   ) : libraryRouteKind === "show" ||
     mode === "series" ||
     mode === "season" ||

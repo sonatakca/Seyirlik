@@ -145,6 +145,16 @@ const HERO_MOTION_DEFAULTS = {
   dockPlace: "left" as HeroPlace,
   /** The dwell ring round the controls fading as a title starts or stops travelling. */
   progressFadeS: 0.35,
+  /**
+   * The navbar wordmark, kept here so the motion lab can tune it too: one lap
+   * through the six colours while anything loads, how many more laps it
+   * keeps going once loading ends (then it finishes coming round to the
+   * accent), how long it holds the accent, and its fade to white.
+   */
+  logoLapS: 0.5,
+  logoTailLaps: 5,
+  logoHoldS: 1,
+  logoFadeS: 0.6,
   /** The skeleton giving way to the first artwork. */
   skeletonFadeS: 0.5,
   /**
@@ -452,6 +462,11 @@ export interface HeroLayout {
   /** The facts line under the title: a title page's hero has it, home's not. */
   showFacts: boolean;
   /**
+   * The overview's panel grows with the title as it opens (home), or only
+   * slides with it (a title page).
+   */
+  panelGrows: boolean;
+  /**
    * With the dock on the left, how far its foot stands above the stage's:
    * level with the queue's foot.
    */
@@ -553,6 +568,7 @@ function tallLayout(stage: StageSize, withQueue: boolean): HeroLayout {
     factsWidth: column,
     align: "left",
     showFacts: !withQueue,
+    panelGrows: false,
     dockFoot: null,
     actionsGap,
     actions: stage.width < 600 ? "compact" : "full",
@@ -604,6 +620,7 @@ export function heroLayout(
     factsWidth: width,
     align: isCentred ? "centre" : "left",
     showFacts: !withQueue,
+    panelGrows: withQueue,
     dockFoot,
     actionsGap: COPY_ROWS.actionsGapPx,
     actions: "full",

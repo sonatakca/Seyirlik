@@ -113,24 +113,33 @@ export function HomeHeroSkeletonPieces({
           height: logoHeight,
         }}
       />
-      <div
-        className="absolute flex items-center gap-1 text-sm font-semibold text-white/[0.84]"
-        style={{
-          left: layout.copy.left,
-          top: copyTop,
-          height: COPY_ROWS.factsPx,
-        }}
-      >
-        <div className="shimmer h-5 w-10 rounded-md" />.
-        <div className="shimmer h-5 w-16 rounded-md" />.
-        <div className="shimmer h-5 w-14 rounded-md" />
-      </div>
+      {layout.showFacts ? (
+        <div
+          className="absolute flex items-center gap-1 text-sm font-semibold text-white/[0.84]"
+          style={{
+            left: layout.copy.left,
+            top: copyTop,
+            height: COPY_ROWS.factsPx,
+          }}
+        >
+          <div className="shimmer h-5 w-10 rounded-md" />.
+          <div className="shimmer h-5 w-16 rounded-md" />.
+          <div className="shimmer h-5 w-14 rounded-md" />
+        </div>
+      ) : null}
       <div
         className={`absolute hero-dock ${dock.compact ? "hero-dock-compact" : ""}`}
+        // Where the hero stands its dock (HeroCopyBlock): on the left, its
+        // foot level with the queue's; centred, its top level with the
+        // queue's; on a title page, on its own foot.
         style={{
           left: dock.left,
-          bottom: dock.bottom,
           width: dock.width,
+          ...(withQueue && layout.form === "wide"
+            ? layout.dockFoot !== null
+              ? { bottom: layout.dockFoot }
+              : { top: head.y }
+            : { bottom: dock.bottom }),
         }}
       >
         <div className="shimmer hero-dock-play" />
@@ -186,14 +195,6 @@ export function HomeHeroSkeletonPieces({
               }}
             />
           ))}
-          <div
-            className="absolute h-[2px] rounded-full bg-white/15"
-            style={{
-              left: head.x,
-              top: head.y + head.height + 10,
-              width: head.width,
-            }}
-          />
           {withControls ? (
             <div
               className="shimmer absolute rounded-full"

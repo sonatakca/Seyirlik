@@ -132,6 +132,15 @@ const GROUPS: ReadonlyArray<{
     ],
   },
   {
+    title: "Logo",
+    dials: [
+      seconds("logoLapS", 2),
+      { key: "logoTailLaps", min: 0, max: 20, step: 1, unit: "×" },
+      seconds("logoHoldS", 3),
+      seconds("logoFadeS", 2),
+    ],
+  },
+  {
     title: "Other",
     dials: [seconds("trailerS", 3), seconds("progressFadeS")],
   },

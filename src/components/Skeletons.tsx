@@ -1,3 +1,4 @@
+import { LibraryGroupTabsSkeleton } from "../pages/library/LibraryGroupTabs";
 import { useLanguage } from "../i18n/LanguageContext";
 import { HomeHeroSkeleton, TitleHeroSkeleton } from "./home/HomeHeroSkeleton";
 import type { MediaItem } from "../lib/types";
@@ -362,7 +363,12 @@ export function DetailsSkeleton() {
   );
 }
 
-export function LibrarySkeleton() {
+export function LibrarySkeleton({
+  withGroupTabs = false,
+}: {
+  /** The shows library's tabs, between the search row and the grid. */
+  withGroupTabs?: boolean;
+} = {}) {
   return (
     <div>
       {/* The library page's header, piece for piece: the barcode's
@@ -382,6 +388,8 @@ export function LibrarySkeleton() {
         <div className="shimmer min-h-12 flex-1 rounded-full" />
         <div className="shimmer min-h-12 w-full rounded-full md:w-40" />
       </div>
+
+      {withGroupTabs ? <LibraryGroupTabsSkeleton className="mb-5" /> : null}
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 2xl:grid-cols-6">
         {Array.from({ length: 12 }, (_, index) => (

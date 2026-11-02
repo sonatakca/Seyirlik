@@ -290,6 +290,9 @@ export function HeroControlButton({
 }
 
 
+/** The scrollbar's room beside the overview's lines, inside its panel. */
+const OVERVIEW_SCROLL_GUTTER_PX = 11;
+
 /**
  * How bright the copy under the title needs to be, 0–1, from the brightness
  * of the artwork behind its facts line: resting over a dark picture, full
@@ -412,10 +415,12 @@ function HeroCopy({
   // The facts and the overview's panel ride up with the title as the
   // overview opens, the panel fading in on the way, and back down with it as
   // it closes: all baked from the overview's course, which the title's rise
-  // and growth are linear in, so the compositor plays them in step. The
-  // panel grows with the title too, from its top edge, so it reaches its own
-  // size just as the title reaches its open one.
-  const { rest: restScale, open: openScale } = layout.titleScale;
+  // and growth are linear in, so the compositor plays them in step. On home
+  // the panel grows with the title too, from its top edge, so it reaches its
+  // own size just as the title reaches its open one.
+  const { rest: restScale, open: openScale } = layout.panelGrows
+    ? layout.titleScale
+    : { rest: 1, open: 1 };
   const factsRowRef = useRef<HTMLDivElement>(null);
   const overviewPanelRef = useRef<HTMLDivElement>(null);
   const overviewTextRef = useRef<HTMLParagraphElement | null>(null);
@@ -546,10 +551,15 @@ function HeroCopy({
               }}
               // Three lines tall; a longer story scrolls rather than ending
               // in an ellipsis.
-              className={`max-w-[46ch] overflow-y-auto overscroll-contain font-semibold text-white/[0.88] [scrollbar-width:thin] ${
+              className={`overflow-y-auto overscroll-contain font-semibold text-white/[0.88] [scrollbar-width:thin] ${
                 layout.align === "centre" ? "text-center" : ""
               }`}
               style={{
+                // Room each side for the scrollbar, taken from the panel's
+                // own padding, so it never lies over the text.
+                maxWidth: `calc(46ch + ${OVERVIEW_SCROLL_GUTTER_PX * 2}px)`,
+                paddingInline: OVERVIEW_SCROLL_GUTTER_PX,
+                marginInline: -OVERVIEW_SCROLL_GUTTER_PX,
                 fontSize: layout.overviewFontPx,
                 lineHeight: COPY_ROWS.overviewLineHeight,
                 maxHeight: layout.overviewHeight,

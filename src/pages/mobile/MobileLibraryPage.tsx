@@ -66,7 +66,10 @@ import {
   type LibraryGroupId,
   type LibrarySortMode,
 } from "../library/libraryModel";
-import { LibraryGroupTabs } from "../library/LibraryGroupTabs";
+import {
+  LibraryGroupTabs,
+  LibraryGroupTabsSkeleton,
+} from "../library/LibraryGroupTabs";
 import { hasCuratedOrder, orderItemsByCuration } from "../../lib/curation";
 import { useCuratedList } from "../../hooks/useCuratedList";
 
@@ -188,7 +191,12 @@ async function loadLibraryItems(
   return getItemsForLibrary(id);
 }
 
-function MobileLibraryLoading() {
+function MobileLibraryLoading({
+  withGroupTabs = false,
+}: {
+  /** The shows library's tabs, between the search row and the grid. */
+  withGroupTabs?: boolean;
+} = {}) {
   // The page's header, piece for piece, so nothing moves when it arrives.
   return (
     <div className="pb-6">
@@ -205,6 +213,7 @@ function MobileLibraryLoading() {
         <div className="shimmer h-12 min-w-0 flex-1 rounded-full" />
         <div className="shimmer h-12 w-[7.4rem] shrink-0 rounded-full" />
       </div>
+      {withGroupTabs ? <LibraryGroupTabsSkeleton fill className="mb-5" /> : null}
       <div className="grid grid-cols-2 gap-x-3 gap-y-4 px-[clamp(0.5rem,4vw,1.75rem)] min-[600px]:grid-cols-3">
         {Array.from({ length: 4 }, (_, index) => (
           <div key={index} className="shimmer aspect-[2/3] rounded-xl" />
@@ -515,7 +524,7 @@ export function MobileLibraryPage({
     "/collections",
   ].includes(canonicalPathOverride ?? "");
   const loadingSkeleton = isAliasLibrary ? (
-    <MobileLibraryLoading />
+    <MobileLibraryLoading withGroupTabs={canonicalPathOverride === "/shows"} />
   ) : libraryRouteKind === "show" ||
     mode === "series" ||
     mode === "season" ||
