@@ -289,8 +289,6 @@ export function HeroControlButton({
   );
 }
 
-/** How far the overview's panel rises as it fades in. */
-const OVERVIEW_RISE_PX = 12;
 
 /**
  * How bright the copy under the title needs to be, 0–1, from the brightness
@@ -411,9 +409,10 @@ function HeroCopy({
     .filter(Boolean)
     .join("  ·  ");
 
-  // The facts ride up with the title as the overview opens, and the
-  // overview's panel rises a little into place under them as it fades in:
-  // both baked from the overview's course, so the compositor plays them.
+  // The facts and the overview's panel ride up with the title as the
+  // overview opens, the panel fading in on the way, and back down with it as
+  // it closes: all baked from the overview's course, which the title's rise
+  // is linear in, so the compositor plays them in step.
   const factsRowRef = useRef<HTMLDivElement>(null);
   const overviewPanelRef = useRef<HTMLDivElement>(null);
   const overviewTextRef = useRef<HTMLParagraphElement | null>(null);
@@ -431,7 +430,7 @@ function HeroCopy({
         [
           overviewPanelRef.current,
           {
-            transform: `translateY(${OVERVIEW_RISE_PX * (1 - value)}px)`,
+            transform: `translateY(${layout.overviewLift * (1 - value)}px)`,
             opacity: value,
           },
         ],

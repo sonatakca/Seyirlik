@@ -219,7 +219,12 @@ export default function HeroMotionLab({
   useEffect(() => {
     onTuneRef.current = onTune;
   });
-  useEffect(() => onTuneRef.current(), [values]);
+  // Set again once mounted: a remount (as React's development mode does at
+  // once) runs the reset below first.
+  useEffect(() => {
+    tuneHeroMotion(values);
+    onTuneRef.current();
+  }, [values]);
   useEffect(
     () => () => {
       tuneHeroMotion({});
