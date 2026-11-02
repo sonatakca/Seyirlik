@@ -133,7 +133,7 @@ const HERO_MOTION_DEFAULTS = {
    */
   hoverS: 0.3,
   hoverHaloPx: 32,
-  hoverHaloReachPx: 24,
+  hoverHaloReachPx: 10,
   hoverHalo: 1,
   hoverHaloSaturate: 1.5,
   /**

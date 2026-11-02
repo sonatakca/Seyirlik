@@ -412,7 +412,10 @@ function HeroCopy({
   // The facts and the overview's panel ride up with the title as the
   // overview opens, the panel fading in on the way, and back down with it as
   // it closes: all baked from the overview's course, which the title's rise
-  // is linear in, so the compositor plays them in step.
+  // and growth are linear in, so the compositor plays them in step. The
+  // panel grows with the title too, from its top edge, so it reaches its own
+  // size just as the title reaches its open one.
+  const { rest: restScale, open: openScale } = layout.titleScale;
   const factsRowRef = useRef<HTMLDivElement>(null);
   const overviewPanelRef = useRef<HTMLDivElement>(null);
   const overviewTextRef = useRef<HTMLParagraphElement | null>(null);
@@ -430,7 +433,9 @@ function HeroCopy({
         [
           overviewPanelRef.current,
           {
-            transform: `translateY(${layout.overviewLift * (1 - value)}px)`,
+            transform: `translateY(${layout.overviewLift * (1 - value)}px) scale(${
+              (restScale + (openScale - restScale) * value) / openScale
+            })`,
             opacity: value,
           },
         ],
@@ -438,6 +443,8 @@ function HeroCopy({
     },
     [
       layout.overviewLift,
+      restScale,
+      openScale,
       Boolean(metadata.overview),
     ],
   );
@@ -527,6 +534,7 @@ function HeroCopy({
               layout.align === "centre" ? "mx-auto" : ""
             }`}
             style={{
+              transformOrigin: layout.align === "centre" ? "50% 0" : "0 0",
               padding: `${COPY_ROWS.overviewPanelPadYPx}px ${COPY_ROWS.overviewPanelPadXPx}px`,
               pointerEvents: isOverviewOpen ? "auto" : "none",
             }}

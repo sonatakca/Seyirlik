@@ -12,6 +12,7 @@ import gold from "../assets/navbar-wordmark/gold.webp";
 import olive from "../assets/navbar-wordmark/olive.webp";
 import green from "../assets/navbar-wordmark/green.webp";
 import teal from "../assets/navbar-wordmark/teal.webp";
+import white from "../assets/navbar-wordmark/white.webp";
 import warmRedShadow from "../assets/navbar-wordmark/shadow/warm-red.webp";
 import amberShadow from "../assets/navbar-wordmark/shadow/amber.webp";
 import goldShadow from "../assets/navbar-wordmark/shadow/gold.webp";
@@ -34,8 +35,9 @@ import {
   wordmarkShadowStrength,
 } from "./navbarWordmarkShadow";
 
-// Palette order, which is also the cycle order. Names match ACCENT_THEMES.
-const FRAMES = [
+// Palette order, which is also the loading cycle's order. Names match
+// ACCENT_THEMES.
+const COLOURS = [
   { accent: "Warm Red", src: warmRed, shadow: warmRedShadow },
   { accent: "Amber", src: amber, shadow: amberShadow },
   { accent: "Gold", src: gold, shadow: goldShadow },
@@ -43,6 +45,14 @@ const FRAMES = [
   { accent: "Green", src: green, shadow: greenShadow },
   { accent: "Teal", src: teal, shadow: tealShadow },
 ].map((frame) => ({ ...frame, luminance: accentLuminance(frame.accent) }));
+
+/**
+ * Where the wordmark rests: white, whatever the accent. The letters' shape
+ * is the same in every colour, so it shares their shadow.
+ */
+const REST = { accent: "White", src: white, shadow: warmRedShadow, luminance: 1 };
+const REST_INDEX = COLOURS.length;
+const FRAMES = [...COLOURS, REST];
 
 /** The letters' luminance: each frame is drawn in its accent's colour. */
 function accentLuminance(name: string): number {
@@ -53,23 +63,10 @@ function accentLuminance(name: string): number {
 }
 
 // One full lap in half a second, the pace of the brand loading animation.
-export const WORDMARK_FRAME_MS = 500 / FRAMES.length;
+export const WORDMARK_FRAME_MS = 500 / COLOURS.length;
 
 // How long the cycle keeps going after loading has finished.
 export const WORDMARK_LOADING_TAIL_MS = 2500;
-
-function subscribeAccentTheme(listener: () => void): () => void {
-  const observer = new MutationObserver(listener);
-  observer.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ["data-accent-theme"],
-  });
-  return () => observer.disconnect();
-}
-
-function getAccentThemeName(): string | undefined {
-  return document.documentElement.dataset.accentTheme;
-}
 
 /**
  * A soft dark shadow under the letters, as much of it as the backdrop needs:
@@ -81,10 +78,10 @@ function getAccentThemeName(): string | undefined {
 const SHADOW_FRAME_STYLE = getWordmarkShadowFrameStyle();
 
 /**
- * The wordmark in the current accent colour. While anything is loading it
- * cycles through the palette, and keeps cycling for a further 2.5 seconds
- * once loading ends. Then it carries on until it comes round to the accent
- * colour again, so it never stops on a stranger's colour and never jumps.
+ * The wordmark, white at rest whatever the accent. While anything is loading
+ * it cycles through the palette, and keeps cycling for a further 2.5 seconds
+ * once loading ends. Then it finishes the lap it is on and turns white again,
+ * so a load always ends on a whole lap.
  */
 export function NavbarWordmark({
   className = "",
@@ -94,11 +91,6 @@ export function NavbarWordmark({
   /** True while the bar is clear over a hero's artwork. */
   overArtwork?: boolean;
 }) {
-  const accentName = useSyncExternalStore(
-    subscribeAccentTheme,
-    getAccentThemeName,
-    () => undefined,
-  );
   const isLoading = useSyncExternalStore(
     subscribeLoadingActivity,
     isLoadingActivityPending,
@@ -106,18 +98,14 @@ export function NavbarWordmark({
   );
   const reduceMotion = useReducedMotion() ?? false;
   const rootRef = useRef<HTMLSpanElement>(null);
-  const accentIndex = Math.max(
-    0,
-    FRAMES.findIndex((frame) => frame.accent === accentName),
-  );
 
-  // Null while resting on the accent colour.
+  // Null while resting on white.
   const [cycleIndex, setCycleIndex] = useState<number | null>(null);
   const timerRef = useRef<number | null>(null);
-  const shownRef = useRef(accentIndex);
-  const latestRef = useRef({ accentIndex, isLoading, reduceMotion });
+  const shownRef = useRef(-1);
+  const latestRef = useRef({ isLoading, reduceMotion });
   useEffect(() => {
-    latestRef.current = { accentIndex, isLoading, reduceMotion };
+    latestRef.current = { isLoading, reduceMotion };
   });
   // When the most recent load finished; null while one is in progress.
   const loadEndedAtRef = useRef<number | null>(null);
@@ -128,7 +116,8 @@ export function NavbarWordmark({
   useEffect(() => {
     if (!isLoading || reduceMotion || timerRef.current !== null) return;
 
-    shownRef.current = latestRef.current.accentIndex;
+    // The first lap starts on the palette's first colour.
+    shownRef.current = -1;
     timerRef.current = window.setInterval(() => {
       const latest = latestRef.current;
       const loadEndedAt = loadEndedAtRef.current;
@@ -136,7 +125,9 @@ export function NavbarWordmark({
         loadEndedAt !== null &&
         Date.now() - loadEndedAt < WORDMARK_LOADING_TAIL_MS;
       const settled =
-        !latest.isLoading && !inTail && shownRef.current === latest.accentIndex;
+        !latest.isLoading &&
+        !inTail &&
+        shownRef.current === COLOURS.length - 1;
 
       if (settled || latest.reduceMotion) {
         window.clearInterval(timerRef.current ?? undefined);
@@ -145,7 +136,7 @@ export function NavbarWordmark({
         return;
       }
 
-      shownRef.current = (shownRef.current + 1) % FRAMES.length;
+      shownRef.current = (shownRef.current + 1) % COLOURS.length;
       setCycleIndex(shownRef.current);
     }, WORDMARK_FRAME_MS);
   }, [isLoading, reduceMotion]);
@@ -157,7 +148,7 @@ export function NavbarWordmark({
     [],
   );
 
-  const shownIndex = cycleIndex ?? accentIndex;
+  const shownIndex = cycleIndex ?? REST_INDEX;
   const backdropLuminances = useBackdropUnder(rootRef, overArtwork);
   const shadowStrength = backdropLuminances
     ? wordmarkShadowStrength(FRAMES[shownIndex].luminance, backdropLuminances)
