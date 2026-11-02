@@ -191,6 +191,10 @@ export function HomeHero({
   const [isArtworkReady, setIsArtworkReady] = useState(false);
   const [isSkeletonGone, setIsSkeletonGone] = useState(false);
   const [isTravelling, setIsTravelling] = useState(false);
+  /** The miniature under the pointer, which the halo stands under. */
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  // The motion lab can move the title and the dock; it asks for a redraw.
+  const [, setLabTuning] = useState(0);
   const isMotionLabOn = useMotionLabEnabled();
   const readyRef = useRef(false);
 
@@ -441,6 +445,7 @@ export function HomeHero({
       if (!size || busyRef.current || total < 2 || !hasOpened) return;
       busyRef.current = true;
       setIsTravelling(true);
+      setHoveredId(null);
       setIsTrailerPlaying(false);
       closeOverview();
       clock.reset();
@@ -857,20 +862,11 @@ export function HomeHero({
     [isTall, hasOpened],
   );
 
-  // The miniature under the pointer stays where it is, as it is: the others
-  // dim round it.
+  // Nothing touches the miniature under the pointer: a dark halo spreads
+  // under it, behind the queue, so no picture is shaded.
   const hover = (id: string, active: boolean) => {
-    if (busyRef.current || !stage) return;
-    const options = {
-      duration: reduceMotion ? 0 : HERO_MOTION.hoverS,
-      ease: HERO_MOTION.settleEase,
-    };
-    for (const other of queueIds) {
-      const entry = motions.current.get(other);
-      if (!entry) continue;
-      const dim = active && other !== id ? HERO_MOTION.hoverDim : QUEUE_DIM;
-      void entry.dim.tween(dim, options);
-    }
+    if (active && busyRef.current) return;
+    setHoveredId((current) => (active ? id : current === id ? null : current));
   };
 
   if (total === 0) {
@@ -940,6 +936,7 @@ export function HomeHero({
                 item={item}
                 stage={stage}
                 titleBox={layout!.title}
+                titleAlign={layout!.align}
                 logoMaxHeight={
                   stage.height -
                   layout!.menuClearance -
@@ -969,6 +966,37 @@ export function HomeHero({
                     ? (size) => setStageTitle({ id: layer.id, ...size })
                     : undefined
                 }
+              />
+            );
+          })
+        : null}
+
+      {/* The hover halo, one per slot: over the stage, under the queue, so
+          it darkens only the stage round the miniature. Dark only. */}
+      {stage && hasOpened
+        ? slots.map((slot, position) => {
+            const isOn =
+              !isTravelling &&
+              !isQueueAside &&
+              hoveredId !== null &&
+              queueIds[position] === hoveredId;
+            return (
+              <div
+                key={position}
+                aria-hidden="true"
+                className="pointer-events-none absolute rounded-[12px] transition-opacity"
+                style={{
+                  zIndex: Z.rising,
+                  left: slot.x,
+                  top: slot.y,
+                  width: slot.width,
+                  height: slot.height,
+                  opacity: isOn ? 1 : 0,
+                  transitionDuration: `${reduceMotion ? 0 : HERO_MOTION.hoverS}s`,
+                  boxShadow: `0 0 ${HERO_MOTION.hoverHaloPx}px ${
+                    HERO_MOTION.hoverHaloPx / 4
+                  }px rgba(0, 0, 0, ${HERO_MOTION.hoverHalo})`,
+                }}
               />
             );
           })
@@ -1185,6 +1213,7 @@ export function HomeHero({
             isTravelling={isTravelling}
             onPrevious={() => void travel("backward")}
             onNext={() => void travel("forward")}
+            onTune={() => setLabTuning((count) => count + 1)}
           />
         </Suspense>
       ) : null}

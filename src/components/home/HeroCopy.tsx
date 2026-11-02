@@ -123,16 +123,24 @@ export function HeroCopyBlock({
   const titleScale = isOverviewOpen
     ? layout.titleScale.open
     : layout.titleScale.rest;
+  const isCentred = layout.align === "centre";
+  // Centred, the copy's lines stand in the middle of its column, so the
+  // target is the whole column, and the title's width round the same middle.
+  const targetWidth = Math.max(
+    (isCentred ? null : copyWidth) ?? layout.copy.width,
+    title.width * titleScale,
+  );
+  const targetLeft = isCentred
+    ? layout.copy.left + (layout.copy.width - targetWidth) / 2
+    : layout.copy.left;
   return (
     <>
       <div
         className="absolute z-[6]"
         style={{
-          left: layout.copy.left - HOVER_ROOM_PX.side,
+          left: targetLeft - HOVER_ROOM_PX.side,
           bottom: layout.copy.bottom,
-          width:
-            Math.max(copyWidth ?? layout.copy.width, title.width * titleScale) +
-            HOVER_ROOM_PX.side * 2,
+          width: targetWidth + HOVER_ROOM_PX.side * 2,
           // The resting title and its copy; while open, the risen, full-size
           // title too, so the pointer can move onto it without closing it.
           height:
@@ -161,7 +169,7 @@ export function HeroCopyBlock({
         <div
           className="pointer-events-none absolute"
           style={{
-            left: HOVER_ROOM_PX.side,
+            left: HOVER_ROOM_PX.side + layout.copy.left - targetLeft,
             bottom: 0,
             width: layout.copy.width,
             height: layout.copy.height,
@@ -175,7 +183,10 @@ export function HeroCopyBlock({
                 stage={stage}
                 layout={layout}
                 factsRegion={{
-                  left: layout.copy.left / stage.width,
+                  left:
+                    (isCentred
+                      ? (stage.width - Math.min(layout.factsWidth, 340)) / 2
+                      : layout.copy.left) / stage.width,
                   top:
                     1 -
                     (layout.copy.bottom + layout.copy.height) / stage.height,
@@ -475,7 +486,9 @@ function HeroCopy({
         <motion.p
           ref={factsRef}
           variants={line(0)}
-          className="truncate text-[0.8125rem] font-bold leading-5 tracking-[0.04em]"
+          className={`truncate text-[0.8125rem] font-bold leading-5 tracking-[0.04em] ${
+            layout.align === "centre" ? "mx-auto text-center" : ""
+          }`}
           style={{ ...copyTextStyle(shade, 0.72), maxWidth: layout.factsWidth }}
         >
           {facts}
@@ -509,7 +522,9 @@ function HeroCopy({
               overviewRef(element);
               overviewTextRef.current = element;
             }}
-            className="line-clamp-3 max-w-[46ch] font-semibold"
+            className={`line-clamp-3 max-w-[46ch] font-semibold ${
+              layout.align === "centre" ? "mx-auto text-center" : ""
+            }`}
             style={{
               ...copyTextStyle(shade, 0.8),
               fontSize: layout.overviewFontPx,

@@ -21,13 +21,17 @@ import {
   liftDurationS,
   tuneHeroMotion,
   type HeroMotion,
+  type HeroPlace,
   type StageSize,
 } from "./homeHeroModel";
 
 type NumberKey = {
   [Key in keyof HeroMotion]: HeroMotion[Key] extends number ? Key : never;
 }[keyof HeroMotion];
-type EaseKey = Exclude<keyof HeroMotion, NumberKey>;
+type PlaceKey = {
+  [Key in keyof HeroMotion]: HeroMotion[Key] extends HeroPlace ? Key : never;
+}[keyof HeroMotion];
+type EaseKey = Exclude<keyof HeroMotion, NumberKey | PlaceKey>;
 type Bezier = [number, number, number, number];
 
 interface Dial {
@@ -58,7 +62,13 @@ const GROUPS: ReadonlyArray<{
   title: string;
   dials: Dial[];
   eases?: EaseKey[];
+  places?: PlaceKey[];
 }> = [
+  {
+    title: "Layout",
+    dials: [],
+    places: ["titlePlace", "dockPlace"],
+  },
   {
     title: "Lift",
     dials: [
@@ -86,7 +96,8 @@ const GROUPS: ReadonlyArray<{
       seconds("dropS"),
       seconds("queueArriveDimS"),
       seconds("hoverS"),
-      share("hoverDim"),
+      { key: "hoverHaloPx", min: 0, max: 80, step: 1, unit: "px" },
+      share("hoverHalo"),
       seconds("swipeSettleS"),
     ],
     eases: ["slideEase", "settleEase"],
@@ -139,6 +150,8 @@ interface HeroMotionLabProps {
   isTravelling: boolean;
   onPrevious: () => void;
   onNext: () => void;
+  /** The values changed: the hero redraws what it lays out from them. */
+  onTune: () => void;
 }
 
 /**
@@ -153,6 +166,7 @@ export default function HeroMotionLab({
   isTravelling,
   onPrevious,
   onNext,
+  onTune,
 }: HeroMotionLabProps) {
   const { t } = useLanguage();
   const defaults = heroMotionDefaults();
@@ -194,7 +208,18 @@ export default function HeroMotionLab({
     return stage ? liftDurationS(stage) : null;
   }, [values, stage]);
   useEffect(() => setMotionLabValues(values), [values]);
-  useEffect(() => () => tuneHeroMotion({}), []);
+  const onTuneRef = useRef(onTune);
+  useEffect(() => {
+    onTuneRef.current = onTune;
+  });
+  useEffect(() => onTuneRef.current(), [values]);
+  useEffect(
+    () => () => {
+      tuneHeroMotion({});
+      onTuneRef.current();
+    },
+    [],
+  );
 
   const current = { ...defaults, ...values };
 
@@ -301,6 +326,15 @@ export default function HeroMotionLab({
                   {group.title}
                 </h3>
                 <div className="space-y-2">
+                  {group.places?.map((key) => (
+                    <PlaceRow
+                      key={key}
+                      name={key}
+                      value={current[key]}
+                      isChanged={current[key] !== defaults[key]}
+                      onChange={(value) => set(key, value)}
+                    />
+                  ))}
                   {group.dials.map((dial) => (
                     <DialRow
                       key={dial.key}
@@ -356,6 +390,59 @@ export default function HeroMotionLab({
 /** The one-line description each value carries under its name. */
 const hintKey = (key: keyof HeroMotion) =>
   `devtools.motionLab.hint.${key}` as TranslationKey;
+
+function PlaceRow({
+  name,
+  value,
+  isChanged,
+  onChange,
+}: {
+  name: PlaceKey;
+  value: HeroPlace;
+  isChanged: boolean;
+  onChange: (value: HeroPlace) => void;
+}) {
+  const { t } = useLanguage();
+  const places: HeroPlace[] = ["left", "centre"];
+  return (
+    <div className="grid grid-cols-[1fr_auto] items-center gap-x-2">
+      <div className="min-w-0">
+        <span
+          className={`block truncate font-mono text-[0.6875rem] ${
+            isChanged ? "text-amber-300" : "text-white/70"
+          }`}
+        >
+          {name}
+        </span>
+        <span className="block text-[0.6875rem] font-semibold leading-4 text-white/40">
+          {t(hintKey(name))}
+        </span>
+      </div>
+      <div
+        role="radiogroup"
+        aria-label={name}
+        className="flex rounded-full bg-white/[0.07] p-0.5"
+      >
+        {places.map((place) => (
+          <button
+            key={place}
+            type="button"
+            role="radio"
+            aria-checked={value === place}
+            onClick={() => onChange(place)}
+            className={`h-7 rounded-full px-3 text-xs font-black transition focus:outline-none focus-visible:ring-1 focus-visible:ring-white/40 ${
+              value === place
+                ? "bg-white text-black"
+                : "text-white/60 hover:text-white"
+            }`}
+          >
+            {t(`devtools.motionLab.place.${place}` as TranslationKey)}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function DialRow({
   dial,

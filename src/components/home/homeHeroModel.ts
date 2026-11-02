@@ -55,11 +55,15 @@ export function heroDock(
   const compact = heroForm(stage) === "tall" || stage.width < 1200;
   const width = Math.min(compact ? 264 : 300, stage.width - 32);
   const isAside = !withQueue && heroForm(stage) === "wide";
+  const isLeft =
+    withQueue && heroForm(stage) === "wide" && HERO_MOTION.dockPlace === "left";
   return {
     width,
     left: isAside
       ? stage.width - wideInset(stage) - width
-      : (stage.width - width) / 2,
+      : isLeft
+        ? wideInset(stage)
+        : (stage.width - width) / 2,
     height: compact ? 102 : 113,
     bottom:
       heroForm(stage) === "tall"
@@ -76,6 +80,7 @@ export function heroDock(
  * starts, so lifting the third miniature feels like lifting the first.
  */
 type Bezier = [number, number, number, number];
+export type HeroPlace = "left" | "centre";
 
 const HERO_MOTION_DEFAULTS = {
   /**
@@ -121,10 +126,18 @@ const HERO_MOTION_DEFAULTS = {
   trailerS: 0.8,
   /** A swipe let go short of a change, settling back. */
   swipeSettleS: 0.32,
-  /** The other miniatures dimming round the one under the pointer, or clearing. */
+  /** A dark halo spreading under the miniature beneath the pointer, or going. */
   hoverS: 0.3,
-  /** How far they dim. */
-  hoverDim: 0.45,
+  /** How far the halo spreads, in px, and how dark it is. */
+  hoverHaloPx: 28,
+  hoverHalo: 0.7,
+  /**
+   * Where the home hero's title and dock stand on a wide stage. Not motion,
+   * but kept here so the motion lab can try other arrangements on the live
+   * hero; with the title centred its copy is centred under it.
+   */
+  titlePlace: "left" as HeroPlace,
+  dockPlace: "centre" as HeroPlace,
   /** The dwell progress line fading as a title starts or stops travelling. */
   progressFadeS: 0.35,
   /** The skeleton giving way to the first artwork. */
@@ -429,6 +442,8 @@ export interface HeroLayout {
   title: { left: number; bottom: number; width: number; height: number };
   /** The facts line's width: on a tall stage it shares its row with the queue. */
   factsWidth: number;
+  /** The title and its copy: from the left margin, or centred on the stage. */
+  align: HeroPlace;
   /** Between the facts and the actions. */
   actionsGap: number;
   /**
@@ -521,6 +536,7 @@ function tallLayout(stage: StageSize, withQueue: boolean): HeroLayout {
       height: titleHeight,
     },
     factsWidth: column,
+    align: "left",
     actionsGap,
     actions: stage.width < 600 ? "compact" : "full",
     titleScale: TALL_TITLE_SCALE,
@@ -544,20 +560,27 @@ export function heroLayout(
     overviewFontPx * COPY_ROWS.overviewLineHeight * COPY_ROWS.overviewLines,
   );
   const dock = heroDock(stage, { withQueue });
-  const width = Math.max(
-    160,
-    Math.min(stage.width * 0.34, 600, dock.left - left - 20),
-  );
+  const isCentred = withQueue && HERO_MOTION.titlePlace === "centre";
+  const width = isCentred
+    ? Math.min(stage.width * 0.34, 600)
+    : Math.max(160, Math.min(stage.width * 0.34, 600, dock.left - left - 20));
+  const titleWidth = Math.min(compact ? 260 : 300, stage.width * 0.3);
   return {
     form: "wide",
-    copy: { left, bottom, width, height: COPY_ROWS.factsPx },
+    copy: {
+      left: isCentred ? (stage.width - width) / 2 : left,
+      bottom,
+      width,
+      height: COPY_ROWS.factsPx,
+    },
     title: {
-      left,
+      left: isCentred ? (stage.width - titleWidth) / 2 : left,
       bottom: bottom + COPY_ROWS.factsPx + 16,
-      width: Math.min(compact ? 260 : 300, stage.width * 0.3),
+      width: titleWidth,
       height: 150,
     },
     factsWidth: width,
+    align: isCentred ? "centre" : "left",
     actionsGap: COPY_ROWS.actionsGapPx,
     actions: "full",
     titleScale: TITLE_SCALE,

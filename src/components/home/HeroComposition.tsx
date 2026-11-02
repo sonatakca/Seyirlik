@@ -38,6 +38,7 @@ import {
   stageness,
   tallFootGradient,
   type HeroLayout,
+  type HeroPlace,
   type Placement,
   type StageSize,
 } from "./homeHeroModel";
@@ -102,6 +103,8 @@ interface HeroCompositionProps {
   stage: StageSize;
   /** Where the title sits in the frame; the copy overlay reads the same. */
   titleBox: HeroLayout["title"];
+  /** Centred, the title stands in the middle of its box and grows from there. */
+  titleAlign?: HeroPlace;
   /**
    * The tallest a logo may be drawn at full size. Every logo takes the title
    * box's width and grows upward as its own proportions ask; only a logo
@@ -155,6 +158,7 @@ export function HeroComposition({
   item,
   stage,
   titleBox,
+  titleAlign = "left",
   logoMaxHeight,
   motion: m,
   slotScale,
@@ -314,6 +318,12 @@ export function HeroComposition({
       // The title stands on the frame's foot, which a short frame raises.
       const titleY =
         queueMove.y * (1 - toStage) + rise * toStage - (stage.height - height);
+      // It grows from its box's bottom-left corner; a centred title is moved
+      // back by half of what it gained, so it grows from its middle.
+      const centring =
+        titleAlign === "centre"
+          ? ((1 - titleScale) * titleBox.width * toStage) / 2
+          : 0;
       const trailer = m.trailer.get(at);
       // A hairline that stays one pixel on screen in a slot, gone by the
       // time the frame fills the stage.
@@ -372,7 +382,7 @@ export function HeroComposition({
         [
           titleRef.current,
           {
-            transform: `translate(${queueMove.x * (1 - toStage)}px, ${titleY}px) scale(${titleScale})`,
+            transform: `translate(${queueMove.x * (1 - toStage) + centring}px, ${titleY}px) scale(${titleScale})`,
             opacity: 1 - 0.08 * trailer,
           },
         ],
@@ -398,6 +408,8 @@ export function HeroComposition({
       Boolean(baked.queue),
       Boolean(baked.halo),
       form,
+      titleAlign,
+      titleBox.width,
     ],
   );
 
@@ -546,7 +558,7 @@ export function HeroComposition({
             }`}
           >
             <div
-              className="relative"
+              className={`relative ${titleAlign === "centre" ? "mx-auto" : ""}`}
               style={{
                 width: baked.aspect
                   ? `min(100%, ${logoMaxHeight * baked.aspect}px)`
@@ -596,7 +608,11 @@ export function HeroComposition({
                   alt={isStage ? title : ""}
                   draggable={false}
                   onLoad={() => setIsLogoLoaded(true)}
-                  className="relative block h-auto w-full select-none object-contain object-left-bottom"
+                  className={`relative block h-auto w-full select-none object-contain ${
+                    titleAlign === "centre"
+                      ? "object-bottom"
+                      : "object-left-bottom"
+                  }`}
                   style={{ maxHeight: logoMaxHeight }}
                 />
               </div>
@@ -606,7 +622,9 @@ export function HeroComposition({
           <div ref={presenceRef}>
             <h2
               ref={letteringRef}
-              className="text-cinematic-title font-black uppercase leading-[0.9] text-white"
+              className={`text-cinematic-title font-black uppercase leading-[0.9] text-white ${
+                titleAlign === "centre" ? "text-center" : ""
+              }`}
               style={{
                 fontSize:
                   form === "tall"
