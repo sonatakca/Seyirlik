@@ -154,7 +154,7 @@ const HERO_MOTION_DEFAULTS = {
   logoLapS: 0.5,
   logoTailLaps: 5,
   logoHoldS: 1,
-  logoFadeS: 0.6,
+  logoFadeS: 1,
   /** The skeleton giving way to the first artwork. */
   skeletonFadeS: 0.5,
   /**
