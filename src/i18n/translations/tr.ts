@@ -780,6 +780,8 @@ export const tr = {
   "player.settingsLabel": "Oynatma ayarları",
   "player.pictureInPicture": "Resim içinde resim",
   "player.fullscreen": "Tam ekran",
+  "player.exitFullscreen": "Tam ekrandan çık",
+  "player.nativeFullscreen": "Apple oynatıcısında tam ekran",
   "player.mute": "Sesi kapat",
   "player.unmute": "Sesi aç",
   "player.volume": "Ses düzeyi",

@@ -784,6 +784,8 @@ export const en = {
   "player.settingsLabel": "Playback settings",
   "player.pictureInPicture": "Picture in picture",
   "player.fullscreen": "Fullscreen",
+  "player.exitFullscreen": "Exit fullscreen",
+  "player.nativeFullscreen": "Fullscreen in Apple's player",
   "player.mute": "Mute",
   "player.unmute": "Unmute",
   "player.volume": "Volume",

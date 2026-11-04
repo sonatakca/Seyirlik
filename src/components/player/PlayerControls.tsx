@@ -2,12 +2,14 @@ import {
   GalleryVerticalEnd,
   Loader2,
   Maximize,
+  Minimize,
   Pause,
   PictureInPicture2,
   Play,
   RotateCcw,
   RotateCw,
   Settings,
+  TvMinimalPlay,
 } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
 import { SeekBar, type SeekPointerAxis } from "./SeekBar";
@@ -68,7 +70,16 @@ interface PlayerControlsProps {
   onSeekBy: (seconds: number) => void;
   onToggleMute: () => void;
   onVolumeChange: (volume: number) => void;
+  /** The page's own player, full screen. Hidden where the page cannot (iPhone). */
   onToggleFullscreen: () => void;
+  canFullscreen?: boolean;
+  isFullscreen?: boolean;
+  /**
+   * Apple's full-screen player, shown only where Safari has one (Mac, iPhone,
+   * iPad). Separate from the page's full screen: the system's controls, not ours.
+   */
+  canNativeFullscreen?: boolean;
+  onEnterNativeFullscreen?: () => void;
   /** Shown only where the element can go into Picture in Picture. */
   canPictureInPicture?: boolean;
   isPictureInPicture?: boolean;
@@ -142,6 +153,10 @@ export function PlayerControls({
   onToggleMute,
   onVolumeChange,
   onToggleFullscreen,
+  canFullscreen = true,
+  isFullscreen = false,
+  canNativeFullscreen = false,
+  onEnterNativeFullscreen,
   canPictureInPicture = false,
   isPictureInPicture = false,
   onTogglePictureInPicture,
@@ -438,21 +453,49 @@ export function PlayerControls({
                   </button>
                 </Tooltip>
               ) : null}
-              <Tooltip
-                content={t("player.fullscreen")}
-                offset="2.5rem"
-                shortcut="F"
-                group="player-controls"
-              >
-                <button
-                  type="button"
-                  onClick={onToggleFullscreen}
-                  className="flex h-11 w-11 items-center justify-center rounded-full text-white/85 transition-[backdrop-filter] hover:bg-white/[0.12] hover:backdrop-blur-lg hover:duration-1000 duration-[500ms] hover:text-white focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                  aria-label={t("player.fullscreen")}
+              {canNativeFullscreen && onEnterNativeFullscreen ? (
+                <Tooltip
+                  content={t("player.nativeFullscreen")}
+                  offset="2.5rem"
+                  shortcut={canFullscreen ? undefined : "F"}
+                  group="player-controls"
                 >
-                  <Maximize size={22} strokeWidth={2.2} />
-                </button>
-              </Tooltip>
+                  <button
+                    type="button"
+                    onClick={onEnterNativeFullscreen}
+                    className="flex h-11 w-11 items-center justify-center rounded-full text-white/85 transition-[backdrop-filter] hover:bg-white/[0.12] hover:backdrop-blur-lg hover:duration-1000 duration-[500ms] hover:text-white focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                    aria-label={t("player.nativeFullscreen")}
+                  >
+                    <TvMinimalPlay size={22} strokeWidth={2.2} />
+                  </button>
+                </Tooltip>
+              ) : null}
+              {canFullscreen ? (
+                <Tooltip
+                  content={t(
+                    isFullscreen ? "player.exitFullscreen" : "player.fullscreen",
+                  )}
+                  offset="2.5rem"
+                  shortcut="F"
+                  group="player-controls"
+                >
+                  <button
+                    type="button"
+                    onClick={onToggleFullscreen}
+                    className="flex h-11 w-11 items-center justify-center rounded-full text-white/85 transition-[backdrop-filter] hover:bg-white/[0.12] hover:backdrop-blur-lg hover:duration-1000 duration-[500ms] hover:text-white focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                    aria-label={t(
+                      isFullscreen ? "player.exitFullscreen" : "player.fullscreen",
+                    )}
+                    aria-pressed={isFullscreen}
+                  >
+                    {isFullscreen ? (
+                      <Minimize size={22} strokeWidth={2.2} />
+                    ) : (
+                      <Maximize size={22} strokeWidth={2.2} />
+                    )}
+                  </button>
+                </Tooltip>
+              ) : null}
             </div>
           </div>
         </div>

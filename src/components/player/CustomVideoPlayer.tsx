@@ -162,6 +162,11 @@ import {
   togglePictureInPicture,
 } from "./pictureInPicture";
 import {
+  enterNativeFullscreen,
+  supportsElementFullscreen,
+  supportsNativeFullscreen,
+} from "./nativeFullscreen";
+import {
   readStoredVideoFit,
   storeVideoFit,
   usePinchVideoFit,
@@ -1607,6 +1612,11 @@ export function CustomVideoPlayer({
     hasAutoPlayedNextRef.current = false;
   }, [activeSource.id, activeSource.url]);
 
+  /**
+   * The page's own player, full screen: our controls, subtitles overlay and
+   * panels, stretched over the screen. Apple's player is the separate
+   * `handleEnterNativeFullscreen` below; neither falls back to the other.
+   */
   const toggleFullscreen = useCallback(() => {
     const container = containerRef.current;
 
@@ -1619,30 +1629,51 @@ export function CustomVideoPlayer({
       return;
     }
 
-    if (document.fullscreenEnabled && container.requestFullscreen) {
+    if (supportsElementFullscreen(container)) {
       // On iPad this is also what makes going home start Picture in Picture:
       // WebKit holds the playing video inside a full-screen element ready for it.
       void container.requestFullscreen();
-      return;
     }
+  }, []);
 
-    // iPhone Safari cannot put an element in full screen, only the video
-    // itself, in the system player. That player is also the only way an
-    // iPhone starts Picture in Picture by itself when the viewer goes home.
-    const video = videoRef.current as
-      | (HTMLVideoElement & { webkitEnterFullscreen?: () => void })
-      | null;
+  /**
+   * Apple's full-screen player (Safari on Mac, iPhone, iPad). On iPhone this
+   * is the only full screen there is, since an element cannot go full screen
+   * there, and also the only way an iPhone starts Picture in Picture by itself
+   * when the viewer goes home. Subtitles follow through the presentation
+   * track, which shows whenever the system holds the element.
+   */
+  const handleEnterNativeFullscreen = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
 
     try {
-      video?.webkitEnterFullscreen?.();
+      enterNativeFullscreen(video);
     } catch (fullscreenError) {
-      // Throws before the element has metadata; the button simply waits.
+      // Throws before the element has metadata; the button is not shown then.
       console.warn(
         "[Seyirlik Playback] Could not enter native full screen",
         fullscreenError,
       );
     }
   }, [videoRef]);
+
+  const [canCustomFullscreen, setCanCustomFullscreen] = useState(false);
+  const [isCustomFullscreen, setIsCustomFullscreen] = useState(false);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return undefined;
+
+    const sync = () => {
+      setCanCustomFullscreen(supportsElementFullscreen(container));
+      setIsCustomFullscreen(document.fullscreenElement === container);
+    };
+
+    sync();
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, []);
 
   const handleSeekBy = useCallback(
     (seconds: number) => {
@@ -1726,6 +1757,7 @@ export function CustomVideoPlayer({
 
   const [canPictureInPicture, setCanPictureInPicture] = useState(false);
   const [isPictureInPicture, setIsPictureInPicture] = useState(false);
+  const [canNativeFullscreen, setCanNativeFullscreen] = useState(false);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -1734,6 +1766,7 @@ export function CustomVideoPlayer({
     const sync = () => {
       setCanPictureInPicture(supportsPictureInPicture(video));
       setIsPictureInPicture(isInPictureInPicture(video));
+      setCanNativeFullscreen(supportsNativeFullscreen(video));
     };
 
     sync();
@@ -1769,7 +1802,11 @@ export function CustomVideoPlayer({
     onTogglePlay: partyWatch.togglePlay,
     onSeekBy: handleSeekBy,
     onToggleMute: progress.toggleMute,
-    onToggleFullscreen: toggleFullscreen,
+    // F is the page's full screen; where there is none (iPhone with a
+    // keyboard), it opens the only full screen there is.
+    onToggleFullscreen: canCustomFullscreen
+      ? toggleFullscreen
+      : handleEnterNativeFullscreen,
   });
 
   useDismissOnOutsidePointer(isSettingsOpen, SETTINGS_ROOTS, () =>
@@ -5766,6 +5803,10 @@ export function CustomVideoPlayer({
             onToggleMute={progress.toggleMute}
             onVolumeChange={progress.setVolume}
             onToggleFullscreen={toggleFullscreen}
+            canFullscreen={canCustomFullscreen}
+            isFullscreen={isCustomFullscreen}
+            canNativeFullscreen={canNativeFullscreen}
+            onEnterNativeFullscreen={handleEnterNativeFullscreen}
             canPictureInPicture={canPictureInPicture}
             isPictureInPicture={isPictureInPicture}
             onTogglePictureInPicture={handleTogglePictureInPicture}
