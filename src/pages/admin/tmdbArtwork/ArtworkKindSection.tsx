@@ -15,19 +15,28 @@ import type {
 import { formatTemplate } from "../../../lib/format";
 import {
   ARTWORK_PAGE_SIZE,
+  artworkQuality,
   countCandidates,
   formatDimensions,
   getCustomUploadLabelKey,
   getKindDescriptionKey,
   getKindLabelKey,
+  getQualityLabelKey,
   hasStoredArtwork,
   isKindLocked,
   languageName,
   languageOptions,
   selectCandidates,
+  type ArtworkQualityTone,
   type ImageLanguageFilter,
 } from "../tmdbArtworkModel";
 import { LanguageChips } from "./LanguageChips";
+
+const QUALITY_CHIP_CLASSES: Record<ArtworkQualityTone, string> = {
+  high: "bg-emerald-400/15 text-emerald-200",
+  good: "bg-sky-400/15 text-sky-100",
+  low: "bg-amber-400/15 text-amber-200",
+};
 
 /**
  * One kind of artwork — posters, backdrops or logos — with its own language.
@@ -167,40 +176,70 @@ export function ArtworkKindSection({
               : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"
           }`}
         >
-          {candidates.map((candidate) => (
-            <li key={candidate.filePath}>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => onApply(candidate)}
-                aria-label={`${t("tmdbArtwork.replaceFile")} · ${
-                  candidate.language
-                    ? languageName(candidate.language, uiLanguage)
-                    : t("tmdbArtwork.language.none")
-                } · ${formatDimensions(candidate.width, candidate.height)}`}
-                className="group w-full overflow-hidden rounded-2xl border border-white/10 bg-black/40 text-left transition hover:border-sky-300/50 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
-              >
-                <img
-                  src={candidate.previewUrl}
-                  alt=""
-                  loading="lazy"
-                  className={`w-full object-contain ${
-                    kind === "poster" ? "aspect-[2/3]" : "aspect-video"
-                  } ${kind === "logo" ? "bg-[repeating-conic-gradient(#ffffff0d_0_25%,transparent_0_50%)] bg-[length:16px_16px] p-2" : ""}`}
-                />
-                <span className="flex items-center justify-between gap-2 px-2 py-1.5 text-[0.68rem] font-semibold text-white/40">
-                  <span className="truncate font-black uppercase tracking-[0.08em] text-white/55">
-                    {candidate.language
+          {candidates.map((candidate) => {
+            const dimensions = formatDimensions(
+              candidate.width,
+              candidate.height,
+            );
+            const quality = artworkQuality(
+              kind,
+              candidate.width,
+              candidate.height,
+            );
+            const qualityText = quality
+              ? (quality.resolution ?? t(getQualityLabelKey(quality.tone)))
+              : null;
+            return (
+              <li key={candidate.filePath}>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onApply(candidate)}
+                  aria-label={`${t("tmdbArtwork.replaceFile")} · ${
+                    candidate.language
                       ? languageName(candidate.language, uiLanguage)
-                      : t("tmdbArtwork.language.none")}
+                      : t("tmdbArtwork.language.none")
+                  } · ${dimensions}${
+                    qualityText
+                      ? ` · ${t("tmdbArtwork.qualityLabel")}: ${qualityText}`
+                      : ""
+                  }`}
+                  className="group w-full overflow-hidden rounded-2xl border border-white/10 bg-black/40 text-left transition hover:border-sky-300/50 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                >
+                  <img
+                    src={candidate.previewUrl}
+                    alt=""
+                    loading="lazy"
+                    className={`w-full object-contain ${
+                      kind === "poster" ? "aspect-[2/3]" : "aspect-video"
+                    } ${kind === "logo" ? "bg-[repeating-conic-gradient(#ffffff0d_0_25%,transparent_0_50%)] bg-[length:16px_16px] p-2" : ""}`}
+                  />
+                  <span className="flex items-center justify-between gap-2 px-2 py-1.5 text-[0.68rem] font-semibold text-white/40">
+                    <span className="truncate font-black uppercase tracking-[0.08em] text-white/55">
+                      {candidate.language
+                        ? languageName(candidate.language, uiLanguage)
+                        : t("tmdbArtwork.language.none")}
+                    </span>
+                    <span className="tabular-nums">
+                      {candidate.voteAverage.toFixed(1)}
+                    </span>
                   </span>
-                  <span className="tabular-nums">
-                    {candidate.voteAverage.toFixed(1)}
+                  <span className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-2 pb-1.5 text-[0.68rem] font-semibold text-white/45">
+                    <span className="whitespace-nowrap tabular-nums">
+                      {dimensions}
+                    </span>
+                    {quality && qualityText ? (
+                      <span
+                        className={`shrink-0 rounded-full px-1.5 py-px text-[0.6rem] font-black uppercase tracking-[0.06em] ${QUALITY_CHIP_CLASSES[quality.tone]}`}
+                      >
+                        {qualityText}
+                      </span>
+                    ) : null}
                   </span>
-                </span>
-              </button>
-            </li>
-          ))}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
 

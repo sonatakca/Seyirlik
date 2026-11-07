@@ -1992,6 +1992,10 @@ export const tr = {
   "tmdbArtwork.language.turkish": "Türkçe",
   "tmdbArtwork.language.none": "Dilsiz",
   "tmdbArtwork.loadMoreChoices": "{count} tane daha yükle",
+  "tmdbArtwork.quality.high": "Yüksek",
+  "tmdbArtwork.quality.good": "İyi",
+  "tmdbArtwork.quality.low": "Düşük",
+  "tmdbArtwork.qualityLabel": "Kalite",
   "tmdbArtwork.lockedBadge": "Sizin seçiminiz",
   "tmdbArtwork.lockedExplanation":
     "Veri yenileme, sizin seçtiğiniz bir görseli değiştirmez.",

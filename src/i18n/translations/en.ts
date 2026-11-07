@@ -1989,6 +1989,10 @@ export const en = {
   "tmdbArtwork.language.turkish": "Turkish",
   "tmdbArtwork.language.none": "No language",
   "tmdbArtwork.loadMoreChoices": "Load {count} more",
+  "tmdbArtwork.quality.high": "High",
+  "tmdbArtwork.quality.good": "Good",
+  "tmdbArtwork.quality.low": "Low",
+  "tmdbArtwork.qualityLabel": "Quality",
   "tmdbArtwork.lockedBadge": "Chosen by you",
   "tmdbArtwork.lockedExplanation":
     "A metadata refresh will not replace an image you chose.",

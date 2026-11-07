@@ -169,6 +169,56 @@ export function formatDimensions(
   return width && height ? `${width} × ${height}` : "—";
 }
 
+/** Whether an image is sharp enough for where Seyirlik draws it. */
+export type ArtworkQualityTone = "high" | "good" | "low";
+
+export interface ArtworkQuality {
+  readonly tone: ArtworkQualityTone;
+  /**
+   * A screen-resolution name for backdrops ("4K", "Full HD"), which is how
+   * people already think about a full-screen picture. Posters and logos have
+   * no such names, so they carry only the tone.
+   */
+  readonly resolution: string | null;
+}
+
+/**
+ * How good one image is for its kind, judged by the edge that limits it where
+ * it is drawn.
+ *
+ * - Backdrops fill the screen, so their width is measured against display
+ *   resolutions; anything under Full HD is soft on a laptop's retina screen.
+ * - Posters are tall cards, so their height counts. TMDB serves 2000 × 3000,
+ *   1000 × 1500 and 500 × 750 most often; the last is visibly soft on a phone.
+ * - Logos sit over the backdrop at up to roughly half the screen's width.
+ *
+ * `null` when the provider gave no size, since a guess would be worse than
+ * saying nothing.
+ */
+export function artworkQuality(
+  kind: ArtworkKind,
+  width: number | null,
+  height: number | null,
+): ArtworkQuality | null {
+  if (!width || !height) return null;
+  if (kind === "backdrop") {
+    if (width >= 3840) return { tone: "high", resolution: "4K" };
+    if (width >= 2560) return { tone: "high", resolution: "2K" };
+    if (width >= 1920) return { tone: "good", resolution: "Full HD" };
+    if (width >= 1280) return { tone: "low", resolution: "HD" };
+    return { tone: "low", resolution: "SD" };
+  }
+  const edge = kind === "poster" ? height : width;
+  const [high, good] = kind === "poster" ? [2400, 1400] : [1000, 500];
+  if (edge >= high) return { tone: "high", resolution: null };
+  if (edge >= good) return { tone: "good", resolution: null };
+  return { tone: "low", resolution: null };
+}
+
+export function getQualityLabelKey(tone: ArtworkQualityTone): TranslationKey {
+  return `tmdbArtwork.quality.${tone}` as TranslationKey;
+}
+
 export type StatusTone = "idle" | "busy" | "success" | "error";
 
 export interface ActionStatus {

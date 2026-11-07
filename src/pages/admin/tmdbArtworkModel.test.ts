@@ -3,6 +3,7 @@ import type { ArtworkCandidate } from "../../lib/artworkApi";
 import type { MediaItem } from "../../lib/types";
 import {
   ARTWORK_PAGE_SIZE,
+  artworkQuality,
   countCandidates,
   filterTitles,
   formatDimensions,
@@ -197,6 +198,40 @@ describe("stored artwork state", () => {
     expect(formatDimensions(2000, 3000)).toBe("2000 × 3000");
     expect(formatDimensions(null, 3000)).toBe("—");
     expect(formatDimensions(null, null)).toBe("—");
+  });
+});
+
+describe("artwork quality", () => {
+  it("names backdrops by the screen resolution they fill", () => {
+    expect(artworkQuality("backdrop", 3840, 2160)).toEqual({
+      tone: "high",
+      resolution: "4K",
+    });
+    expect(artworkQuality("backdrop", 2560, 1440)?.resolution).toBe("2K");
+    expect(artworkQuality("backdrop", 1920, 1080)).toEqual({
+      tone: "good",
+      resolution: "Full HD",
+    });
+    expect(artworkQuality("backdrop", 1280, 720)).toEqual({
+      tone: "low",
+      resolution: "HD",
+    });
+    expect(artworkQuality("backdrop", 780, 439)?.resolution).toBe("SD");
+  });
+
+  it("judges posters by height and logos by width", () => {
+    expect(artworkQuality("poster", 2000, 3000)?.tone).toBe("high");
+    expect(artworkQuality("poster", 1000, 1500)?.tone).toBe("good");
+    expect(artworkQuality("poster", 500, 750)?.tone).toBe("low");
+    expect(artworkQuality("logo", 1200, 300)?.tone).toBe("high");
+    expect(artworkQuality("logo", 600, 150)?.tone).toBe("good");
+    expect(artworkQuality("logo", 300, 80)?.tone).toBe("low");
+    expect(artworkQuality("poster", 2000, 3000)?.resolution).toBeNull();
+  });
+
+  it("says nothing when the provider gave no size", () => {
+    expect(artworkQuality("backdrop", null, 1080)).toBeNull();
+    expect(artworkQuality("poster", 2000, null)).toBeNull();
   });
 });
 
