@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createAcquisitionFallback,
   MAX_AUTOMATIC_REPLACEMENTS,
+  type AcquisitionFallbackOptions,
   type MissingEpisodePlan,
   type SeasonEpisode,
 } from "./acquisitionFallback";
@@ -83,6 +84,8 @@ interface World {
   record: AcquisitionSummary;
   /** What the series is missing, when the fallback can read it. */
   missingPlan?: MissingEpisodePlan;
+  /** What TMDB says the title is. */
+  identify?: AcquisitionFallbackOptions["identify"];
 }
 
 function world(over: Partial<World> = {}): World {
@@ -198,6 +201,7 @@ function build(w: World) {
     ...(w.missingPlan
       ? { missingPlanOf: async () => w.missingPlan ?? null }
       : {}),
+    ...(w.identify ? { identify: w.identify } : {}),
   });
   const handlers = createAcquisitionJobHandlers(service, repository, {
     fallback,
@@ -703,5 +707,129 @@ describe("searching for a series of which nothing is held", () => {
     expect(result).toMatchObject({
       coveredBy: [{ season: null, episode: null }],
     });
+  });
+});
+
+describe("searching by the title's own name, never its Turkish one", () => {
+  const FILM = "00000000-0000-4000-8000-000000000002";
+  const starWars = {
+    tmdbId: "11",
+    title: "Yıldız Savaşları: Yeni Umut",
+    englishTitle: "Star Wars",
+    originalTitle: "Star Wars",
+    year: 1977,
+    imdbId: "tt0076759",
+  };
+  const film: AcquisitionTarget = {
+    kind: "movie",
+    itemId: FILM,
+    title: "Yıldız Savaşları: Yeni Umut",
+    year: 1977,
+  };
+  const asked = (h: ReturnType<typeof build>) =>
+    vi
+      .mocked(h.search.search)
+      .mock.calls.map(
+        ([query]) =>
+          (query as { imdbId?: string; term?: string }).imdbId ??
+          (query as { term?: string }).term,
+      );
+
+  it("asks for a film by its IMDb id and accepts its original name", async () => {
+    const identify = vi.fn(async () => starWars);
+    const w = world({ target: film, identify });
+    w.releases.set(-1, [
+      release("Star.Wars.1977.1080p.BluRay.x264-AMIABLE", "sw"),
+    ]);
+    const h = build(w);
+    const choice = await h.fallback.choose(
+      film,
+      (await h.fallback.policyFor("p1"))!,
+      null,
+    );
+    expect(identify).toHaveBeenCalledWith({
+      kind: "movie",
+      title: film.title,
+      year: 1977,
+      itemId: FILM,
+    });
+    expect(asked(h)).toEqual(["tt0076759"]);
+    expect(choice).toMatchObject({
+      kind: "release",
+      winner: { release: { guid: "sw" } },
+    });
+  });
+
+  it("falls back to the original name, then the English one, and never the Turkish", async () => {
+    const w = world({
+      target: film,
+      identify: async () => ({
+        ...starWars,
+        imdbId: undefined,
+        originalTitle: "Star Wars: Episode IV",
+      }),
+    });
+    const h = build(w);
+    await h.fallback.choose(film, (await h.fallback.policyFor("p1"))!, null);
+    expect(asked(h)).toEqual(["Star Wars Episode IV", "Star Wars"]);
+  });
+
+  it("searches a series' missing episodes under the series' identity, resolved once", async () => {
+    const identify = vi.fn(async () => ({
+      tmdbId: "387",
+      title: "Süngerbob Kare Pantolon",
+      englishTitle: "SpongeBob SquarePants",
+      originalTitle: "SpongeBob SquarePants",
+    }));
+    const w = world({ identify });
+    w.releases.set(1, [
+      release("SpongeBob.SquarePants.S01E01.1080p.WEB-DL.x264-NTb", "e1"),
+    ]);
+    const h = build(w);
+    await createMissingSearchJobHandler(h.fallback)({
+      job: {
+        jobType: MISSING_SEARCH_JOB_TYPE,
+        payload: {
+          profileId: "p1",
+          plan: {
+            seriesItemId: SERIES,
+            title: "Süngerbob Kare Pantolon",
+            seasons: [
+              {
+                season: 1,
+                whole: false,
+                episodes: [1, 2].map((episode) => ({
+                  episode,
+                  itemId: episodeId(episode),
+                })),
+              },
+            ],
+          },
+        },
+      } as unknown as JobRecord,
+      reportProgress: vi.fn(async () => undefined),
+      isCancelled: async () => false,
+    } as JobContext);
+    expect(identify).toHaveBeenCalledTimes(1);
+    expect(identify).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "tv", itemId: SERIES }),
+    );
+    expect(asked(h)).toEqual([
+      "SpongeBob SquarePants",
+      "SpongeBob SquarePants",
+    ]);
+    expect(h.created.map((input) => input.releaseGuid)).toEqual(["e1"]);
+  });
+
+  it("still searches the held title when TMDB cannot answer", async () => {
+    const w = world({
+      target: film,
+      identify: async () => {
+        throw new Error("TMDB is down");
+      },
+    });
+    const h = build(w);
+    await h.fallback.choose(film, (await h.fallback.policyFor("p1"))!, null);
+    expect(asked(h)).toEqual(["Yildiz Savaslari Yeni Umut"]);
   });
 });

@@ -195,6 +195,7 @@ import { createBlocklistRepository } from "./releases/blocklistRepository";
 import {
   createAcquisitionFallback,
   createCatalogueEpisodeLookup,
+  createCatalogueTitleIdentifier,
 } from "./acquisition/acquisitionFallback";
 import { createMonitoringRepository } from "./releases/monitoringRepository";
 import { createWantedRoutes } from "./catalogue/wantedRoutes";
@@ -1335,6 +1336,8 @@ export async function createNativeRuntime({
   const releasePolicies = createPolicyRepository(pool);
   const releaseBlocklist = createBlocklistRepository(pool);
   const seasonEpisodes = createCatalogueEpisodeLookup(pool);
+  // Automatic searches ask for a title by its original name, never its Turkish one.
+  const titleIdentity = tmdb && createCatalogueTitleIdentifier(pool, tmdb);
   const monitoringRepository = createMonitoringRepository(pool);
   const libraryAdminRepository = createLibraryAdminRepository(pool, {
     artworkExists: (image) => imageStorage.hasSource(image),
@@ -1391,6 +1394,7 @@ export async function createNativeRuntime({
             // A pack with no replacement is searched smaller, from what
             // the series' season strip shows missing.
             missingPlanOf,
+            ...(titleIdentity ? { identify: titleIdentity } : {}),
           }),
         };
       })()
@@ -2191,6 +2195,7 @@ export async function createNativeRuntime({
           blocklist: releaseBlocklist,
           episodesOf: seasonEpisodes,
           missingEpisodes: missingPlanOf,
+          ...(titleIdentity ? { identify: titleIdentity } : {}),
           profileOf: async (itemId) =>
             (await monitoringRepository.readTitle(itemId))?.profileId,
           seriesByTmdb: async (tmdbId) =>

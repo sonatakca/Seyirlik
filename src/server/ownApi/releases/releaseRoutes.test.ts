@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import { createReleaseRoutes } from "./releaseRoutes";
+import { createReleaseRoutes, searchPlan } from "./releaseRoutes";
 import { profileFromIds } from "./qualityProfile";
 import { HEVC_PREFERENCE } from "./preferences";
 import type { PolicyRepository } from "./policyRepository";
@@ -500,5 +500,37 @@ describe("searching for the title the words mean", () => {
     expect(
       (payload as { data: { resolved: unknown } }).data.resolved,
     ).toBeNull();
+  });
+});
+
+describe("the names a title is searched by", () => {
+  it("is its IMDb id, then original, then English name, never the Turkish one", () => {
+    const plan = searchPlan(
+      { kind: "movie", title: "Ruhların Kaçışı", year: 2001 },
+      {
+        tmdbId: "129",
+        title: "Ruhların Kaçışı",
+        englishTitle: "Spirited Away",
+        originalTitle: "千と千尋の神隠し",
+        year: 2001,
+        imdbId: "tt0245429",
+      },
+      undefined,
+    );
+    expect(plan.map((query) => query.imdbId ?? query.term)).toEqual([
+      "tt0245429",
+      "千と千尋の神隠し",
+      "Spirited Away",
+    ]);
+  });
+
+  it("is the typed words only when there is no identity", () => {
+    expect(
+      searchPlan(
+        { kind: "movie", title: "Ruhların Kaçışı" },
+        null,
+        undefined,
+      ).map((query) => query.term),
+    ).toEqual(["Ruhlarin Kacisi"]);
   });
 });

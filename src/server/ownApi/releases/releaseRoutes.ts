@@ -168,9 +168,11 @@ export function searchFor(
  * anything is the one judged.
  *
  * A film with an IMDb id is asked for by that id, which no spelling can
- * miss. After it, each name the title goes by — English, then original, then
- * as typed — because which of them a release group used is not knowable in
- * advance, and most titles answer to the first.
+ * miss. After it, the original title, then the English one. The Turkish name
+ * Seyirlik shows is never searched once TMDB has said what the title is:
+ * releases are not posted under it, and an indexer's word match on it finds
+ * only something else. The typed words are searched only when there is no
+ * identity to go by, since they are then all there is.
  */
 export function searchPlan(
   target: MediaTarget,
@@ -186,7 +188,7 @@ export function searchPlan(
     });
   }
   const names = identity
-    ? [identity.englishTitle, identity.originalTitle, target.title]
+    ? [identity.originalTitle, identity.englishTitle]
     : [target.title];
   const tried = new Set<string>();
   for (const name of names) {
@@ -251,7 +253,7 @@ export async function runSearchPlan(
 }
 
 /** Where the identity came from never changes what the operator typed. */
-function withIdentity(
+export function withIdentity(
   target: MediaTarget,
   identity: TitleIdentity | null,
 ): MediaTarget {

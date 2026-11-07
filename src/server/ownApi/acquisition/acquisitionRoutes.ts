@@ -267,6 +267,8 @@ export interface CreateAcquisitionRoutesOptions {
   readonly profileOf?: (itemId: string) => Promise<string | undefined>;
   /** The library's series for a TMDB id, for a search that only knows that. */
   readonly seriesByTmdb?: (tmdbId: string) => Promise<string | undefined>;
+  /** What TMDB says a title is, so replacements search its original name. */
+  readonly identify?: AcquisitionFallbackOptions["identify"];
 }
 
 /**
@@ -311,6 +313,7 @@ export function createAcquisitionRoutes({
   missingEpisodes,
   profileOf,
   seriesByTmdb,
+  identify,
 }: CreateAcquisitionRoutesOptions): RouteDefinition[] {
   const fallback = createAcquisitionFallback({
     repository,
@@ -321,6 +324,7 @@ export function createAcquisitionRoutes({
     episodesOf,
     submitJobType: ACQUISITION_JOB_TYPES.submit,
     ...(missingEpisodes ? { missingPlanOf: missingEpisodes } : {}),
+    ...(identify ? { identify } : {}),
   });
   const missingRoutes: RouteDefinition[] = missingEpisodes
     ? [

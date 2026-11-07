@@ -20,7 +20,16 @@ import type { JobQueue } from "../tasks/jobQueue";
 import type { IndexerSearchService } from "../indexers/searchService";
 import type { IndexerRelease } from "../indexers/indexerTypes";
 import { selectRelease, type MediaTarget } from "../releases/decide";
-import { runSearchPlan, searchPlan } from "../releases/releaseRoutes";
+import {
+  runSearchPlan,
+  searchPlan,
+  withIdentity,
+} from "../releases/releaseRoutes";
+import {
+  resolveTitleIdentity,
+  type TitleIdentity,
+} from "../releases/titleIdentity";
+import type { TmdbClient } from "../metadata/tmdbClient";
 import {
   MISSING_SEARCH_JOB_TYPE,
   countMissing,
@@ -67,6 +76,22 @@ export interface AcquisitionFallbackOptions {
     seriesItemId: string,
     season?: number,
   ) => Promise<MissingEpisodePlan | null>;
+  /**
+   * What TMDB says the title is: its original and English names and, for a
+   * film, its IMDb id. Catalogue titles are Turkish, and releases are never
+   * posted under them, so without this a search by itself finds nothing.
+   * Null, or absent, searches the target's own title as before.
+   */
+  readonly identify?: (query: TitleQuery) => Promise<TitleIdentity | null>;
+}
+
+/** The title a search is for: a film, or the series an episode belongs to. */
+export interface TitleQuery {
+  readonly kind: "movie" | "tv";
+  readonly title: string;
+  readonly year?: number;
+  /** The film, series or episode item; the series' identity is used for an episode. */
+  readonly itemId?: string;
 }
 
 type Selected = NonNullable<ReturnType<typeof selectRelease>["winner"]>;
@@ -173,17 +198,39 @@ export function createAcquisitionFallback({
   episodesOf,
   submitJobType,
   missingPlanOf,
+  identify,
 }: AcquisitionFallbackOptions) {
+  /** Never fails a search: without an identity the title is searched as held. */
+  async function identityOf(query: TitleQuery): Promise<TitleIdentity | null> {
+    if (!identify) return null;
+    try {
+      return await identify(query);
+    } catch {
+      return null;
+    }
+  }
+
+  function titleQueryOf(target: AcquisitionTarget): TitleQuery {
+    return {
+      kind: target.kind === "movie" ? "movie" : "tv",
+      title: target.title,
+      ...(target.year === undefined ? {} : { year: target.year }),
+      ...(target.itemId ? { itemId: target.itemId } : {}),
+    };
+  }
+
   async function best(
-    target: MediaTarget,
+    typed: MediaTarget,
     policy: AcquisitionPolicy,
     exclude: { indexerId: string; releaseGuid: string } | null,
+    identity: TitleIdentity | null,
     signal?: AbortSignal,
   ) {
+    const target = withIdentity(typed, identity);
     const { found } = await runSearchPlan(
       search,
       target,
-      searchPlan(target, null, undefined),
+      searchPlan(target, identity, undefined),
       signal ? { signal } : {},
     );
     const releases: readonly IndexerRelease[] = exclude
@@ -230,6 +277,7 @@ export function createAcquisitionFallback({
   ): Promise<ReplacementChoice> {
     const media = mediaTargetOf(target);
     if (!media) return { kind: "none" };
+    const identity = await identityOf(titleQueryOf(target));
     if (!stepDownOnly) {
       const result = await best(
         media.kind === "series" && target.itemId
@@ -237,6 +285,7 @@ export function createAcquisitionFallback({
           : media,
         policy,
         exclude,
+        identity,
         signal,
       );
       if (result.winner) {
@@ -275,6 +324,7 @@ export function createAcquisitionFallback({
       target.season,
       episodes,
       policy,
+      identity,
       signal,
     );
     return picks.length > 0
@@ -296,6 +346,7 @@ export function createAcquisitionFallback({
       readonly episode: number;
     }>,
     policy: AcquisitionPolicy,
+    identity: TitleIdentity | null,
     signal?: AbortSignal,
   ) {
     const picks: Array<{ target: AcquisitionTarget; winner: Selected }> = [];
@@ -322,6 +373,7 @@ export function createAcquisitionFallback({
         mediaTargetOf(episodeTarget)!,
         policy,
         null,
+        identity,
         signal,
       );
       if (episodeResult.winner) {
@@ -481,6 +533,12 @@ export function createAcquisitionFallback({
     const started: MissingSearchResult["started"] = [];
     const nothing: MissingSearchResult["nothing"] = [];
     const covered: MissingSearchResult["covered"] = [];
+    // One identity for the whole series: every episode is posted under it.
+    const identity = await identityOf({
+      kind: "tv",
+      ...series,
+      itemId: missingPlan.seriesItemId,
+    });
 
     if (missingPlan.complete && missingPlan.seasons.length > 1) {
       const seriesTarget: AcquisitionTarget = {
@@ -503,6 +561,7 @@ export function createAcquisitionFallback({
         },
         policy,
         null,
+        identity,
         signal,
       );
       if (whole.winner) {
@@ -548,6 +607,7 @@ export function createAcquisitionFallback({
           mediaTargetOf(seasonTarget)!,
           policy,
           null,
+          identity,
           signal,
         );
         if (pack.winner) {
@@ -571,7 +631,14 @@ export function createAcquisitionFallback({
         picks,
         missing,
         covered: coming,
-      } = await chooseEpisodes(series, season, episodes, policy, signal);
+      } = await chooseEpisodes(
+        series,
+        season,
+        episodes,
+        policy,
+        identity,
+        signal,
+      );
       for (const pick of picks) {
         const made = await plan(
           pick.target,
@@ -602,6 +669,39 @@ export function createAcquisitionFallback({
 }
 
 export type AcquisitionFallback = ReturnType<typeof createAcquisitionFallback>;
+
+/**
+ * What TMDB says a catalogue title is.
+ *
+ * The item's own TMDB id where the catalogue holds one — the series' for an
+ * episode, whose own id is an episode's — so the answer is the title that was
+ * linked, not the nearest match to its Turkish name. Without an id the title
+ * is resolved by its words, as the release search page does.
+ */
+export function createCatalogueTitleIdentifier(
+  pool: DatabasePool,
+  tmdb: TmdbClient,
+): NonNullable<AcquisitionFallbackOptions["identify"]> {
+  return async (query) => {
+    const tmdbId = query.itemId
+      ? (
+          await pool.query<{ tmdb: string | null }>(
+            `SELECT COALESCE(series.provider_ids->>'tmdb', item.provider_ids->>'tmdb') AS tmdb
+               FROM items item LEFT JOIN items series ON series.id = item.series_id
+              WHERE item.id::text = $1`,
+            [query.itemId],
+          )
+        ).rows[0]?.tmdb
+      : null;
+    const { identity } = await resolveTitleIdentity(tmdb, {
+      kind: query.kind,
+      title: query.title,
+      ...(query.year === undefined ? {} : { year: query.year }),
+      ...(tmdbId ? { tmdbId } : {}),
+    });
+    return identity;
+  };
+}
 
 /**
  * A season's episodes from the catalogue, in order.

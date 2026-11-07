@@ -151,8 +151,10 @@ releases carry original or English names: NZBgeek finds nothing for
 "The Dark Knight" and "Joker Folie a Deux". So the typed title is looked up on
 TMDB in Turkish and in English at once (`titleIdentity.ts`), or taken from an
 optional `tmdbId` when the linking page already knows it. A film is then
-searched by its IMDb id; failing that, or for a series, by its English, then
-original, then typed name, folded to plain letters with punctuation removed.
+searched by its IMDb id; failing that, or for a series, by its original, then
+English name, folded to plain letters with punctuation removed. The Turkish
+name is never searched once TMDB has identified the title; the typed words are
+searched only when it has not.
 Every name the title goes by is accepted when a release is matched to it. The
 response says what happened — `resolved` (or `null`, searched as typed),
 `alternatives` (other titles the same words could mean, offered rather than
