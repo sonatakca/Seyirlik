@@ -106,7 +106,34 @@ describe("candidate filtering", () => {
     expect(selectCandidates(candidates, "logo", "all")).toEqual([]);
   });
 
-  it("shows the best rated first and reveals the rest a page at a time", () => {
+  it("shows the sharpest images first, whatever their vote", () => {
+    const mixed = [
+      candidate({ filePath: "/small.jpg", width: 500, height: 750 }),
+      candidate({ filePath: "/unknown.jpg", width: null, height: null }),
+      candidate({ filePath: "/large.jpg", width: 2000, height: 3000 }),
+      candidate({ filePath: "/medium.jpg", width: 1000, height: 1500 }),
+    ];
+    expect(
+      selectCandidates(mixed, "poster", "all").map((entry) => entry.filePath),
+    ).toEqual(["/large.jpg", "/medium.jpg", "/small.jpg", "/unknown.jpg"]);
+  });
+
+  it("keeps the next page's images smaller than the first page's", () => {
+    // Sorting after the page limit would hide a 4K backdrop behind "load more".
+    const many = Array.from({ length: 30 }, (_, index) =>
+      candidate({
+        filePath: `/b${index}.jpg`,
+        kind: "backdrop",
+        width: index === 29 ? 3840 : 1280,
+        height: index === 29 ? 2160 : 720,
+      }),
+    );
+    expect(selectCandidates(many, "backdrop", "all")[0]?.filePath).toBe(
+      "/b29.jpg",
+    );
+  });
+
+  it("among images of one size, shows the best rated first and reveals the rest a page at a time", () => {
     // Dune has 453 posters on TMDB, so drawing them all at once is megabytes of
     // thumbnails nobody asked for — but the rest must stay reachable.
     const many = Array.from({ length: 40 }, (_, index) =>

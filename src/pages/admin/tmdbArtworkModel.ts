@@ -87,9 +87,9 @@ export function matchesLanguageFilter(
  * How many candidates a set shows at first, and how many each "load more" adds.
  *
  * A popular film can have several hundred posters, and drawing them all at once
- * is megabytes of thumbnails nobody asked for. The server ranks by provider
- * vote, so the first page is the part worth seeing; the rest arrives a page at
- * a time rather than all at once or not at all.
+ * is megabytes of thumbnails nobody asked for. The sharpest images come first
+ * (see `selectCandidates`), so the first page is the part worth seeing; the
+ * rest arrives a page at a time rather than all at once or not at all.
  */
 export const ARTWORK_PAGE_SIZE = 24;
 
@@ -102,6 +102,22 @@ export function nextVisibleCount(current: number, total: number): number {
   return Math.min(current + ARTWORK_PAGE_SIZE, total);
 }
 
+/** Pixels in an image, or 0 when the provider gave no size. */
+function pixelCount(candidate: ArtworkCandidate): number {
+  return candidate.width && candidate.height
+    ? candidate.width * candidate.height
+    : 0;
+}
+
+/**
+ * One section's images, the sharpest first.
+ *
+ * Sorted by pixel count rather than by quality tier, so a 3000 px poster
+ * still comes before a 2400 px one. The sort is stable, so images of the same
+ * size keep the server's order, which is the provider's vote; images with no
+ * known size come last. Sorting happens before the page limit, so "load more"
+ * always reveals smaller images, never sharper ones that were held back.
+ */
 export function selectCandidates(
   candidates: ArtworkCandidate[],
   kind: ArtworkKind,
@@ -113,6 +129,7 @@ export function selectCandidates(
       (candidate) =>
         candidate.kind === kind && matchesLanguageFilter(candidate, filter),
     )
+    .sort((a, b) => pixelCount(b) - pixelCount(a))
     .slice(0, limit);
 }
 
