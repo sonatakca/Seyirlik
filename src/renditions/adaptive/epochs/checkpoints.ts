@@ -142,6 +142,12 @@ export interface AuxiliaryStageManifest {
    * the video end is known.
    */
   endSeconds?: number;
+  /**
+   * The length every encoded track was padded with silence to reach, if it
+   * was. Part of the identity: a stage built before padding holds tracks that
+   * stop where the source's sound stopped, short of the picture.
+   */
+  paddedToSeconds?: number;
   totalBytes: number;
   completedAt: string;
 }

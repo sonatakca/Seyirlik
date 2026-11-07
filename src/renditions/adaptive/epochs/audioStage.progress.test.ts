@@ -202,6 +202,8 @@ describe("audio progress comes from the encoder, not from a clock", () => {
       adaptiveProfileVersion: PROFILE,
       stage: "audio",
       streamIndexes: [1],
+      // As the stage writes it now: its encoded track padded to the picture.
+      paddedToSeconds: DURATION,
       totalBytes: 4_096,
       completedAt: new Date().toISOString(),
     });

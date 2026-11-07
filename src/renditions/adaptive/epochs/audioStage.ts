@@ -188,6 +188,16 @@ export async function ensureAudioStage({
       : undefined;
   const coverSeconds = end ?? sourceDurationSeconds;
   const salvaging = damagedIntervals.length > 0;
+  /*
+   * A source whose sound stops before its picture does — a restoration whose
+   * last half minute of credits is silent, say — would give tracks that end
+   * short of every video rendition, and the package would fail its coverage
+   * check after the whole encode had run. Each encoded track is padded with
+   * silence to the end of the picture instead; `apad` with a whole duration
+   * adds nothing to a track that already reaches it. A copied track cannot be
+   * filtered and is left as it is.
+   */
+  const padding = salvaging ? null : padToPicture(audioOutputs, coverSeconds);
   const existing = await readAuxiliaryStage(stageDirectory);
   if (
     existing &&
@@ -198,6 +208,7 @@ export async function ensureAudioStage({
     sameStreams(existing, wanted) &&
     sameDamagedIntervals(existing.damagedIntervals, damagedIntervals) &&
     existing.endSeconds === end &&
+    existing.paddedToSeconds === padding?.toSeconds &&
     (await audioFilesPresent(stageDirectory, audioOutputs))
   ) {
     /*
@@ -263,13 +274,19 @@ export async function ensureAudioStage({
     inputPath: sourcePath,
     outputRoot: stageDirectory.split(path.sep).join("/"),
     videoOutputs: [],
-    audioOutputs: salvagePlan ? [...salvagePlan.outputs] : [...audioOutputs],
+    audioOutputs: salvagePlan
+      ? [...salvagePlan.outputs]
+      : padding
+        ? [...padding.outputs]
+        : [...audioOutputs],
     ...(salvagePlan
       ? {
           inputs: salvagePlan.inputs,
           audioFilterComplex: salvagePlan.filterComplex,
         }
-      : {}),
+      : padding
+        ? { audioFilterComplex: padding.filterComplex }
+        : {}),
     ...(end === undefined ? {} : { durationSeconds: end }),
     statsPeriodSeconds: 1,
   });
@@ -481,6 +498,7 @@ export async function ensureAudioStage({
         }
       : {}),
     ...(end === undefined ? {} : { endSeconds: end }),
+    ...(padding ? { paddedToSeconds: padding.toSeconds } : {}),
     totalBytes,
     completedAt: new Date().toISOString(),
   };
@@ -512,6 +530,36 @@ export async function ensureAudioStage({
     bytes: totalBytes,
     manifest,
   };
+}
+
+/**
+ * Pads every encoded track with silence to the end of the picture.
+ *
+ * Null when there is nothing to encode: copied tracks cannot pass through a
+ * filter, and padding none of them is no padding at all.
+ */
+export function padToPicture(
+  audioOutputs: readonly AdaptiveAudioOutput[],
+  coverSeconds: number,
+): {
+  outputs: AdaptiveAudioOutput[];
+  filterComplex: string;
+  toSeconds: number;
+} | null {
+  if (!(coverSeconds > 0)) return null;
+  const toSeconds = Number(coverSeconds.toFixed(6));
+  const chains: string[] = [];
+  const outputs = audioOutputs.map((output, ordinal) => {
+    if (output.action === "copy" || output.mapLabel) return output;
+    const label = `[apad${ordinal}]`;
+    chains.push(
+      `[0:${output.mapStreamIndex ?? output.sourceStreamIndex}]apad=whole_dur=${toSeconds.toFixed(6)}${label}`,
+    );
+    return { ...output, mapLabel: label };
+  });
+  return chains.length > 0
+    ? { outputs, filterComplex: chains.join(";"), toSeconds }
+    : null;
 }
 
 async function audioFilesPresent(
