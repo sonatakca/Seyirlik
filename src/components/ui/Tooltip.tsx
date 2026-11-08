@@ -521,15 +521,15 @@ export function Tooltip({
               }
             >
               <div className="flex max-w-full items-center gap-2">
-                <span className="min-w-0 max-w-full whitespace-normal break-words">
-                  {content}
-                </span>
-
                 {shortcut ? (
                   <span className="rounded-md border border-white/30 bg-white/10 px-1.5 py-0.5 text-xs font-semibold leading-none text-white/95 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)]">
                     {shortcut}
                   </span>
                 ) : null}
+
+                <span className="min-w-0 max-w-full whitespace-normal break-words">
+                  {content}
+                </span>
               </div>
             </div>,
             portalRoot,
