@@ -47,9 +47,15 @@ export interface MetadataRepository {
   getTarget(itemId: string): Promise<MetadataTarget | null>;
   listSeasonsForSeries(seriesId: string): Promise<MetadataTarget[]>;
   listEpisodesForSeries(seriesId: string): Promise<MetadataTarget[]>;
+  /**
+   * Writes what is given, field by field, skipping every field an
+   * administrator has locked. `overrideLocks` is for the administrator's own
+   * edit: a locked field is theirs, so their next edit of it must land.
+   */
   applyTitleMetadata(
     itemId: string,
     update: TitleMetadataUpdate,
+    options?: { overrideLocks?: boolean },
   ): Promise<void>;
   replaceGenres(itemId: string, genres: string[]): Promise<void>;
   replacePeople(itemId: string, people: TmdbPerson[]): Promise<void>;
@@ -191,28 +197,30 @@ export function createMetadataRepository(
       return result.rows.map(toTarget);
     },
 
-    applyTitleMetadata: async (itemId, update) => {
+    applyTitleMetadata: async (itemId, update, options = {}) => {
       // Each field is guarded by its own lock inside the statement, so an admin
       // edit made while a refresh is in flight is never clobbered by a
-      // read-modify-write race.
+      // read-modify-write race. The administrator's own edit ($17) passes
+      // through the locks: without that, the first save locked the title and
+      // every later one was silently dropped.
       await pool.query(
         `UPDATE items SET
-           title = CASE WHEN $2::text IS NOT NULL AND NOT ('title' = ANY(locked_fields))
+           title = CASE WHEN $2::text IS NOT NULL AND ($17::boolean OR NOT ('title' = ANY(locked_fields)))
                         THEN $2 ELSE title END,
-           sort_title = CASE WHEN $3::text IS NOT NULL AND NOT ('title' = ANY(locked_fields))
+           sort_title = CASE WHEN $3::text IS NOT NULL AND ($17::boolean OR NOT ('title' = ANY(locked_fields)))
                         THEN $3 ELSE sort_title END,
-           original_title = CASE WHEN NOT ('originalTitle' = ANY(locked_fields))
+           original_title = CASE WHEN ($17::boolean OR NOT ('originalTitle' = ANY(locked_fields)))
                         THEN COALESCE($4, original_title) ELSE original_title END,
-           overview = CASE WHEN NOT ('overview' = ANY(locked_fields))
+           overview = CASE WHEN ($17::boolean OR NOT ('overview' = ANY(locked_fields)))
                         THEN COALESCE($5, overview) ELSE overview END,
-           tagline = CASE WHEN NOT ('tagline' = ANY(locked_fields))
+           tagline = CASE WHEN ($17::boolean OR NOT ('tagline' = ANY(locked_fields)))
                         THEN COALESCE($6, tagline) ELSE tagline END,
-           premiere_date = CASE WHEN NOT ('premiereDate' = ANY(locked_fields))
+           premiere_date = CASE WHEN ($17::boolean OR NOT ('premiereDate' = ANY(locked_fields)))
                         THEN COALESCE($7::timestamptz, premiere_date) ELSE premiere_date END,
            end_date = COALESCE($8::timestamptz, end_date),
-           production_year = CASE WHEN NOT ('productionYear' = ANY(locked_fields))
+           production_year = CASE WHEN ($17::boolean OR NOT ('productionYear' = ANY(locked_fields)))
                         THEN COALESCE($9::int, production_year) ELSE production_year END,
-           official_rating = CASE WHEN NOT ('officialRating' = ANY(locked_fields))
+           official_rating = CASE WHEN ($17::boolean OR NOT ('officialRating' = ANY(locked_fields)))
                         THEN COALESCE($10, official_rating) ELSE official_rating END,
            community_rating = COALESCE($11::real, community_rating),
            -- Runtime measured from the file always wins over the provider's.
@@ -250,6 +258,7 @@ export function createMetadataRepository(
           update.localizedTitles
             ? JSON.stringify(update.localizedTitles)
             : null,
+          options.overrideLocks === true,
         ],
       );
     },

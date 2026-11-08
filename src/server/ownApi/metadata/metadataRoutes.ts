@@ -235,10 +235,13 @@ export function createMetadataRoutes({
           ...new Set([...(lockFields ?? []), ...impliedLocks]),
         ];
 
-        // Order matters: `applyTitleMetadata` refuses to write a locked field,
-        // so the operator's value must land before the lock is placed over it.
+        // The operator's value passes through any lock already on the field:
+        // a field is locked because they edited it before, and a second edit
+        // of their own must land rather than be refused by their first.
         if (Object.keys(update).length > 0) {
-          await metadata.applyTitleMetadata(itemId, update);
+          await metadata.applyTitleMetadata(itemId, update, {
+            overrideLocks: true,
+          });
         }
         if (fieldsToLock.length > 0) {
           await metadata.lockFields(itemId, fieldsToLock);

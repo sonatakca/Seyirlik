@@ -86,6 +86,45 @@ integration("titles waiting for metadata, in PostgreSQL", () => {
     expect(await originalLanguageFor(episode)).toBe("en");
   });
 
+  it("lets an administrator edit a title they locked, and nothing else", async () => {
+    // The editor locks the title on its first save. Its second save must land
+    // anyway; a provider refresh must still not.
+    const film = await item("series", "matched");
+    await pool.query(
+      `UPDATE items SET title = 'Asfaltın Kralları', sort_title = 'asfaltin krallari',
+         locked_fields = ARRAY['title', 'overview'] WHERE id = $1`,
+      [film],
+    );
+    await repository.applyTitleMetadata(film, {
+      title: "Provider Wording",
+      overview: "Provider overview.",
+    });
+    let row = (
+      await pool.query(`SELECT title, overview FROM items WHERE id = $1`, [
+        film,
+      ])
+    ).rows[0];
+    expect(row.title).toBe("Asfaltın Kralları");
+    expect(row.overview).toBeNull();
+
+    await repository.applyTitleMetadata(
+      film,
+      { title: "Ford v Ferrari", overview: "My own words." },
+      { overrideLocks: true },
+    );
+    row = (
+      await pool.query(
+        `SELECT title, sort_title, overview FROM items WHERE id = $1`,
+        [film],
+      )
+    ).rows[0];
+    expect(row).toEqual({
+      title: "Ford v Ferrari",
+      sort_title: "ford v ferrari",
+      overview: "My own words.",
+    });
+  });
+
   it("keeps the provider's names beside a title an administrator renamed", async () => {
     const film = await item("series", "matched");
     await pool.query(
