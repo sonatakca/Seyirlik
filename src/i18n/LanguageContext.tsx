@@ -14,6 +14,7 @@ import {
   type Language,
   type TranslationKey,
 } from "./translations";
+import { morphLanguage } from "../lib/languageMorph";
 
 interface LanguageContextValue {
   language: Language;
@@ -39,8 +40,9 @@ export function LanguageProvider({ children }: LanguageProviderProps) {
   const [language, setLanguageState] = useState<Language>(readStoredLanguage);
 
   const setLanguage = useCallback((nextLanguage: Language) => {
-    setLanguageState(nextLanguage);
     localStorage.setItem(LANGUAGE_STORAGE_KEY, nextLanguage);
+    // Every word on screen changes; the switch is played on all of them.
+    morphLanguage(() => setLanguageState(nextLanguage));
   }, []);
 
   const toggleLanguage = useCallback(() => {

@@ -492,3 +492,19 @@ img {
 .search-caption-in {
   animation: search-caption-in 160ms ease-out;
 }
+
+/* A language switch in flight (src/lib/languageMorph.ts): the real words wait,
+   hidden, under the ghosts that play them; the element's other children keep
+   their own colour. */
+[data-language-morph-hidden] {
+  -webkit-text-fill-color: transparent !important;
+  text-shadow: none !important;
+}
+:where(
+  [data-language-morph-hidden]
+    > :not([data-language-morph-hidden], [data-language-morph-ghost])
+) {
+  /* Zero specificity: a child that sets its own fill or shadow keeps it. */
+  -webkit-text-fill-color: currentcolor;
+  text-shadow: var(--language-morph-text-shadow, none);
+}

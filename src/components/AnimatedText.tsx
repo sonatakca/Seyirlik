@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { MORPH_EASE, MORPH_MS, catchUp, track } from "../lib/labelMorph";
+import { isLanguageMorphCommitting } from "../lib/languageMorph";
 
 type AnimatedTextProps = {
   value: string;
@@ -45,9 +46,15 @@ export function AnimatedText({ value, className = "" }: AnimatedTextProps) {
     // that AnimatedWidth measures. The newest layer always has the highest id.
     // With nothing to play the change with, the new words simply stand.
     const next = { id: current.id + 1, text: value };
-    setLayers(
-      prefersReducedMotion || !canAnimate() ? [next] : [...layers, next],
-    );
+    if (isLanguageMorphCommitting()) {
+      // The language switch plays every word itself: the words change in
+      // place, in the same element, so it can find them.
+      setLayers([{ id: current.id, text: value }]);
+    } else {
+      setLayers(
+        prefersReducedMotion || !canAnimate() ? [next] : [...layers, next],
+      );
+    }
   }
 
   useLayoutEffect(() => {

@@ -1,5 +1,6 @@
 import { Component, createRef, type ReactNode } from "react";
 import { captureMorph, playMorph, type MorphSnapshot } from "../lib/labelMorph";
+import { isLanguageMorphCommitting } from "../lib/languageMorph";
 
 type AnimatedWidthProps = {
   children: ReactNode;
@@ -20,7 +21,11 @@ export class AnimatedWidth extends Component<AnimatedWidthProps> {
   private frame = createRef<HTMLSpanElement>();
 
   getSnapshotBeforeUpdate(previous: AnimatedWidthProps): MorphSnapshot | null {
-    if (previous.value === this.props.value || !this.frame.current) {
+    if (
+      previous.value === this.props.value ||
+      !this.frame.current ||
+      isLanguageMorphCommitting()
+    ) {
       return null;
     }
     return captureMorph(this.frame.current);
