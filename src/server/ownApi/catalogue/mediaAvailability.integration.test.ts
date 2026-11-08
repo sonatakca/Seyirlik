@@ -131,6 +131,39 @@ const databaseUrl = process.env.SEYIRLIK_TEST_DATABASE_URL;
         expect.arrayContaining(["Para Avcısı", "The Wolf of Wall Street"]),
       );
     });
+    it("reads an episode's names in both languages, written over by a locked edit", async () => {
+      await metadata.applyTitleMetadata(episode, {
+        localizedTitles: {
+          en: "The Heirs of the Dragon",
+          tr: "Ejderha'nın Varisleri",
+        },
+        localizedOverviews: { en: "A tournament.", tr: "Bir turnuva." },
+      });
+      const [read] = await catalogue.getItemsByIds(user, [episode]);
+      expect(read).toMatchObject({
+        localizedTitles: {
+          en: "The Heirs of the Dragon",
+          tr: "Ejderha'nın Varisleri",
+        },
+        localizedOverviews: { en: "A tournament.", tr: "Bir turnuva." },
+      });
+
+      // An administrator's own title shows in every language; the overview,
+      // not locked, still follows the language.
+      await pool.query(
+        "UPDATE items SET locked_fields = ARRAY['title'] WHERE id=$1",
+        [episode],
+      );
+      const [locked] = await catalogue.getItemsByIds(user, [episode]);
+      expect(locked?.localizedTitles).toEqual({});
+      expect(locked?.localizedOverviews).toEqual({
+        en: "A tournament.",
+        tr: "Bir turnuva.",
+      });
+      await pool.query("UPDATE items SET locked_fields = '{}' WHERE id=$1", [
+        episode,
+      ]);
+    });
     it("finds a title by a name an administrator added", async () => {
       const pirates = await item("Karayip Korsanları: Salazar'ın İntikamı");
       await file(pirates);

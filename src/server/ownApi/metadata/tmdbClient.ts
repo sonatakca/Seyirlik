@@ -77,6 +77,13 @@ export const SEARCH_TITLE_LANGUAGES = ["tr", "en"] as const;
 /** The country whose wording wins when TMDB has several for one language. */
 const PREFERRED_REGION: Record<string, string> = { tr: "TR", en: "US" };
 
+/** The request language TMDB is asked in for each interface language. */
+export function tmdbRequestLanguage(
+  language: (typeof SEARCH_TITLE_LANGUAGES)[number],
+): string {
+  return `${language}-${PREFERRED_REGION[language]}`;
+}
+
 /**
  * A title's name per search language, from TMDB's `translations` block.
  *
@@ -215,9 +222,11 @@ export interface TmdbClient {
     kind: "movie" | "tv",
     providerId: string,
   ): Promise<TmdbArtworkCandidate[]>;
+  /** `language` names the episodes come back in; the client's own by default. */
   getSeasonEpisodes(
     providerId: string,
     seasonNumber: number,
+    language?: string,
   ): Promise<TmdbEpisodeDetails[]>;
   getCollection?(providerId: string): Promise<TmdbCollectionDetails>;
   /** A person's headshot path, or null when TMDB has none. */
@@ -789,7 +798,7 @@ export function createTmdbClient({
         : null;
     },
 
-    getSeasonEpisodes: async (providerId, seasonNumber) => {
+    getSeasonEpisodes: async (providerId, seasonNumber, languageOverride) => {
       const season = await request<{
         episodes?: Array<{
           season_number?: number;
@@ -801,7 +810,11 @@ export function createTmdbClient({
           vote_average?: number;
           still_path?: string;
         }>;
-      }>(`/tv/${encodeURIComponent(providerId)}/season/${seasonNumber}`);
+      }>(
+        `/tv/${encodeURIComponent(providerId)}/season/${seasonNumber}`,
+        {},
+        languageOverride,
+      );
 
       return (season.episodes ?? [])
         .filter(

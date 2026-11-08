@@ -905,11 +905,11 @@ export function createJobHandlers({
   };
 
   /**
-   * Records every matched title's age rating, every matched film's box set
-   * and every title's names in other languages: the back-fill for a library
-   * matched before these were read. One
-   * provider request per title, which is why it is a button and not part of
-   * every scan.
+   * Records every matched title's age rating, every matched film's box set,
+   * every title's names in other languages and every episode's name and
+   * overview in English and Turkish: the back-fill for a library matched
+   * before these were read. One provider request per title and two per
+   * season, which is why it is a button and not part of every scan.
    */
   const catalogueEnrich: JobHandler = async ({
     reportProgress,

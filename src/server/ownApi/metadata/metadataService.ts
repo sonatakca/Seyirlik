@@ -5,7 +5,9 @@ import { selectBestMatch, type MatchCandidate } from "./matcher";
 import type { MetadataRepository, MetadataTarget } from "./metadataRepository";
 import { PROVIDER_ARTWORK_SIZES } from "./providerArtworkSizes";
 import {
+  SEARCH_TITLE_LANGUAGES,
   TmdbError,
+  tmdbRequestLanguage,
   type TmdbClient,
   type TmdbTitleDetails,
 } from "./tmdbClient";
@@ -39,6 +41,59 @@ const POSTER_SIZE = PROVIDER_ARTWORK_SIZES.poster;
 const BACKDROP_SIZE = PROVIDER_ARTWORK_SIZES.backdrop;
 const LOGO_SIZE = PROVIDER_ARTWORK_SIZES.logo;
 const STILL_SIZE = PROVIDER_ARTWORK_SIZES.still;
+
+/**
+ * The name TMDB gives an episode nobody has named in that language: "Episode
+ * 5", "Bölüm 5", "5. Bölüm". It is no name at all, so the language falls back
+ * to the episode's own title rather than hiding a real English one.
+ */
+const PLACEHOLDER_EPISODE_NAME =
+  /^(?:(?:episode|bölüm)\s*#?\d+|\d+\.\s*bölüm)$/iu;
+
+export interface EpisodeTranslations {
+  titles: Record<string, string>;
+  overviews: Record<string, string>;
+}
+
+/**
+ * Every episode of one season in each interface language, keyed by episode
+ * number. Null when a language could not be read, so a failed request leaves
+ * the stored translations as they were instead of erasing them.
+ */
+export async function readSeasonTranslations(
+  tmdb: Pick<TmdbClient, "getSeasonEpisodes">,
+  providerId: string,
+  seasonNumber: number,
+): Promise<Map<number, EpisodeTranslations> | null> {
+  const byEpisode = new Map<number, EpisodeTranslations>();
+  for (const language of SEARCH_TITLE_LANGUAGES) {
+    let episodes;
+    try {
+      episodes = await tmdb.getSeasonEpisodes(
+        providerId,
+        seasonNumber,
+        tmdbRequestLanguage(language),
+      );
+    } catch {
+      return null;
+    }
+    for (const episode of episodes) {
+      if (episode.seasonNumber !== seasonNumber) continue;
+      const entry = byEpisode.get(episode.episodeNumber) ?? {
+        titles: {},
+        overviews: {},
+      };
+      const title = episode.title?.trim();
+      const overview = episode.overview?.trim();
+      if (title && !PLACEHOLDER_EPISODE_NAME.test(title)) {
+        entry.titles[language] = title;
+      }
+      if (overview) entry.overviews[language] = overview;
+      byEpisode.set(episode.episodeNumber, entry);
+    }
+  }
+  return byEpisode;
+}
 
 /**
  * Identification and metadata application.
@@ -250,6 +305,11 @@ export function createMetadataService({
         if (error instanceof TmdbError && error.kind === "not-found") continue;
         throw error;
       }
+      const translations = await readSeasonTranslations(
+        tmdb,
+        providerId,
+        seasonNumber,
+      );
 
       for (const providerEpisode of providerEpisodes) {
         const local = episodes.find(
@@ -260,8 +320,20 @@ export function createMetadataService({
         if (!local) continue;
         described.add(local.id);
 
+        const translated = translations
+          ? (translations.get(providerEpisode.episodeNumber) ?? {
+              titles: {},
+              overviews: {},
+            })
+          : null;
         await metadata.applyTitleMetadata(local.id, {
           ...(providerEpisode.title ? { title: providerEpisode.title } : {}),
+          ...(translated
+            ? {
+                localizedTitles: translated.titles,
+                localizedOverviews: translated.overviews,
+              }
+            : {}),
           ...(providerEpisode.overview
             ? { overview: providerEpisode.overview }
             : {}),
@@ -294,6 +366,46 @@ export function createMetadataService({
       if (episode.metadataState === "pending" && !described.has(episode.id)) {
         await metadata.applyTitleMetadata(episode.id, {
           metadataState: "unmatched",
+        });
+      }
+    }
+  }
+
+  /**
+   * Every episode's name and overview in each interface language, and nothing
+   * else: the back-fill for episodes described before both were kept.
+   */
+  async function applyEpisodeTranslations(
+    target: MetadataTarget,
+    providerId: string,
+  ): Promise<void> {
+    const episodes = await metadata.listEpisodesForSeries(target.id);
+    const seasonNumbers = [
+      ...new Set(
+        episodes
+          .map((episode) => episode.parentIndexNumber)
+          .filter((season): season is number => season !== null),
+      ),
+    ];
+    for (const seasonNumber of seasonNumbers) {
+      const translations = await readSeasonTranslations(
+        tmdb,
+        providerId,
+        seasonNumber,
+      );
+      if (!translations) continue;
+      for (const episode of episodes) {
+        if (
+          episode.parentIndexNumber !== seasonNumber ||
+          episode.indexNumber === null
+        ) {
+          continue;
+        }
+        const translated = translations.get(episode.indexNumber);
+        if (!translated) continue;
+        await metadata.applyTitleMetadata(episode.id, {
+          localizedTitles: translated.titles,
+          localizedOverviews: translated.overviews,
         });
       }
     }
@@ -451,6 +563,9 @@ export function createMetadataService({
         });
       }
       await syncFilmCollection(target, details);
+      if (target.kind === "series") {
+        await applyEpisodeTranslations(target, providerId);
+      }
       return {
         rated: Boolean(details.officialRating),
         inCollection: target.kind === "movie" && Boolean(details.collection),

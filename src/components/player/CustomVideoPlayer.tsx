@@ -1743,7 +1743,11 @@ export function CustomVideoPlayer({
 
   useMediaSessionControls({
     enabled: !partyWatch.isActive,
-    name: itemMetadata.title ?? item.Name,
+    // An episode by its name in the site's language, as the player shows it.
+    name:
+      (item.Type === "Episode"
+        ? getEpisodeDisplayMetadata(item, language).title
+        : itemMetadata.title) ?? item.Name,
     item,
     isPlaying: progress.isPlaying,
     currentTime: progress.currentTime,
@@ -4793,9 +4797,11 @@ export function CustomVideoPlayer({
       url: subtitleUrl,
       refresh: !activeSource.offline && subtitleStream.IsExternal === true,
       onText: (text) => setSubtitleCues(parseSubtitleCues(text)),
-      onError: (error) => console.warn(
-        "[Seyirlik Subtitles] Could not load subtitle stream", error,
-      ),
+      onError: (error) =>
+        console.warn(
+          "[Seyirlik Subtitles] Could not load subtitle stream",
+          error,
+        ),
     });
   }, [
     activeSource.itemId,
@@ -5123,7 +5129,6 @@ export function CustomVideoPlayer({
     [releaseControlsHover],
   );
 
-  const subtitle = getItemSubtitle(item, mediaFormatLabels);
   const isEpisodeItem = item.Type === "Episode";
   // In a half-hour that holds several stories, the one being watched.
   const playingPart =
@@ -5156,6 +5161,11 @@ export function CustomVideoPlayer({
   const episodeMetadata = isEpisodeItem
     ? getEpisodeDisplayMetadata(item, language)
     : null;
+  const subtitle = getItemSubtitle(
+    item,
+    mediaFormatLabels,
+    episodeMetadata?.title,
+  );
   const playerEpisodeName = isEpisodeItem
     ? playingPart?.Name.trim() ||
       episodeMetadata?.title?.trim() ||

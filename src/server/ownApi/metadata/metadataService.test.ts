@@ -713,3 +713,133 @@ describe("episodes that arrive after their series was identified", () => {
     expect(byItem("e1")).toEqual([]);
   });
 });
+
+describe("episode names in both interface languages", () => {
+  const seasonIn = (language: string | undefined) => {
+    const turkish = language === "tr-TR";
+    return [
+      {
+        seasonNumber: 1,
+        episodeNumber: 1,
+        title: turkish ? "Ejderha'nın Varisleri" : "The Heirs of the Dragon",
+        overview: turkish
+          ? "Viserys, ikinci çocuğunun doğumunu kutlamak için bir turnuva düzenler."
+          : "Viserys hosts a tournament to celebrate the birth of his second child.",
+      },
+      {
+        // Nobody has named or described it in Turkish yet.
+        seasonNumber: 1,
+        episodeNumber: 2,
+        title: turkish ? "Bölüm 2" : "The Rogue Prince",
+        ...(turkish ? {} : { overview: "Princess Rhaenyra dives deep." }),
+      },
+    ];
+  };
+
+  function setup(
+    getSeasonEpisodes: TmdbClient["getSeasonEpisodes"] = async (
+      _id,
+      _season,
+      language,
+    ) => seasonIn(language),
+  ) {
+    const series = target({
+      id: "series-1",
+      kind: "series",
+      title: "House of the Dragon",
+      providerIds: { tmdb: "94997" },
+      metadataState: "matched",
+    });
+    const metadata = fakeMetadata(series);
+    metadata.repository.listEpisodesForSeries = async () =>
+      [1, 2].map((number) =>
+        target({
+          id: `e${number}`,
+          kind: "episode",
+          title: `Episode ${number}`,
+          productionYear: null,
+          seriesId: "series-1",
+          parentIndexNumber: 1,
+          indexNumber: number,
+          metadataState: "pending",
+        }),
+      );
+    const service = createMetadataService({
+      metadata: metadata.repository,
+      images: fakeImages(),
+      imageStorage: fakeStorage(),
+      tmdb: fakeTmdb({
+        getSeries: async () =>
+          details({ providerId: "94997", title: "House of the Dragon" }),
+        getSeasonEpisodes,
+      }),
+    });
+    const byItem = (id: string) =>
+      metadata.updates
+        .filter((entry) => entry.itemId === id)
+        .map((entry) => entry.update);
+    return { series, service, byItem };
+  }
+
+  it("keeps each episode's English and Turkish name and overview on refresh", async () => {
+    const { series, service, byItem } = setup();
+
+    await service.identify(series);
+
+    expect(byItem("e1")).toContainEqual(
+      expect.objectContaining({
+        title: "The Heirs of the Dragon",
+        localizedTitles: {
+          en: "The Heirs of the Dragon",
+          tr: "Ejderha'nın Varisleri",
+        },
+        localizedOverviews: {
+          en: "Viserys hosts a tournament to celebrate the birth of his second child.",
+          tr: "Viserys, ikinci çocuğunun doğumunu kutlamak için bir turnuva düzenler.",
+        },
+      }),
+    );
+    // TMDB's "Bölüm 2" is no name: Turkish falls back to the episode's title.
+    expect(byItem("e2")).toContainEqual(
+      expect.objectContaining({
+        localizedTitles: { en: "The Rogue Prince" },
+        localizedOverviews: { en: "Princess Rhaenyra dives deep." },
+      }),
+    );
+  });
+
+  it("back-fills only the translations from the catalogue enrich", async () => {
+    const { service, byItem } = setup();
+
+    await service.enrich("series-1");
+
+    expect(byItem("e1")).toEqual([
+      {
+        localizedTitles: {
+          en: "The Heirs of the Dragon",
+          tr: "Ejderha'nın Varisleri",
+        },
+        localizedOverviews: {
+          en: "Viserys hosts a tournament to celebrate the birth of his second child.",
+          tr: "Viserys, ikinci çocuğunun doğumunu kutlamak için bir turnuva düzenler.",
+        },
+      },
+    ]);
+  });
+
+  it("leaves stored translations alone when a language cannot be read", async () => {
+    const { series, service, byItem } = setup(
+      async (_id, _season, language) => {
+        if (language === "tr-TR") throw new Error("network down");
+        return seasonIn(language);
+      },
+    );
+
+    await service.identify(series);
+
+    const applied = byItem("e1").find((update) => update.title);
+    expect(applied?.title).toBe("The Heirs of the Dragon");
+    expect(applied).not.toHaveProperty("localizedTitles");
+    expect(applied).not.toHaveProperty("localizedOverviews");
+  });
+});

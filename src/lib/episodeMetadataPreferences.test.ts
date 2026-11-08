@@ -119,3 +119,44 @@ describe("episode metadata preferences", () => {
     ).toBe("Sıraya göre eşleşti");
   });
 });
+
+describe("an episode's catalogue translations", () => {
+  const episode = createEpisode({
+    Name: "The Heirs of the Dragon",
+    Overview: "Viserys hosts a tournament.",
+    LocalizedTitles: {
+      en: "The Heirs of the Dragon",
+      tr: "Ejderha'nın Varisleri",
+    },
+    LocalizedOverviews: { tr: "Viserys bir turnuva düzenler." },
+  });
+
+  it("shows the name and overview in the site's language", () => {
+    expect(getEpisodeDisplayMetadata(episode, "tr")).toMatchObject({
+      title: "Ejderha'nın Varisleri",
+      overview: "Viserys bir turnuva düzenler.",
+    });
+    expect(getEpisodeDisplayMetadata(episode, "en")).toMatchObject({
+      title: "The Heirs of the Dragon",
+      overview: "Viserys hosts a tournament.",
+    });
+  });
+
+  it("falls back to the episode's own text when a language has none", () => {
+    const untranslated = createEpisode({
+      Name: "The Rogue Prince",
+      LocalizedTitles: { en: "The Rogue Prince" },
+    });
+    expect(getEpisodeDisplayMetadata(untranslated, "tr")).toMatchObject({
+      title: "The Rogue Prince",
+      overview: "Server overview",
+    });
+  });
+
+  it("lets a choice saved on this device win", () => {
+    saveEpisodeMetadataOverrides([
+      { episodeId: episode.Id, titles: { tr: "Kendi adım" } },
+    ]);
+    expect(getEpisodeDisplayMetadata(episode, "tr").title).toBe("Kendi adım");
+  });
+});

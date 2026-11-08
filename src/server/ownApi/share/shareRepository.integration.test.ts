@@ -121,6 +121,34 @@ const databaseUrl = process.env.SEYIRLIK_TEST_DATABASE_URL;
     expect((await repository.getItem(ids.season))?.cardItemId).toBe(ids.series);
   });
 
+  it("names and describes an episode in Turkish, unless an administrator wrote it", async () => {
+    await pool.query(
+      `UPDATE items SET
+         localized_titles = '{"en": "Pilot", "tr": "Başlangıç"}',
+         localized_overviews = '{"en": "Pilot overview", "tr": "Ezel geri döner."}'
+       WHERE id = $1`,
+      [ids.episode],
+    );
+    expect(await repository.getItem(ids.episode)).toMatchObject({
+      title: "Başlangıç",
+      overview: "Ezel geri döner.",
+    });
+
+    await pool.query(
+      `UPDATE items SET locked_fields = ARRAY['title'] WHERE id = $1`,
+      [ids.episode],
+    );
+    expect(await repository.getItem(ids.episode)).toMatchObject({
+      title: "Pilot",
+      overview: "Ezel geri döner.",
+    });
+    await pool.query(
+      `UPDATE items SET locked_fields = '{}', localized_titles = '{}', localized_overviews = '{}'
+       WHERE id = $1`,
+      [ids.episode],
+    );
+  });
+
   it("answers nothing for what is not a title", async () => {
     expect(await repository.getItem(ids.collection)).toBeNull();
     expect(await repository.getItem(randomUUID())).toBeNull();

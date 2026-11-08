@@ -129,7 +129,9 @@ export function TimedMediaGallery({
       activeItemMetadata?.title ??
       getDisplayTitle(activeItem))
     : "";
-  const activeSubtitle = activeItem ? getItemSubtitle(activeItem) : null;
+  const activeSubtitle = activeItem
+    ? getItemSubtitle(activeItem, undefined, activeEpisodeMetadata?.title)
+    : null;
   const activeOverview =
     activeEpisodeMetadata?.overview ??
     activeItemMetadata?.overview ??

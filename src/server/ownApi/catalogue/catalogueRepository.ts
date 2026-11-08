@@ -22,8 +22,14 @@ export interface CatalogueItemRow {
   title: string;
   sortTitle: string;
   originalTitle: string | null;
-  /** The provider's name per language (`{"tr": …, "en": …}`), for search. */
+  /**
+   * The provider's name per language (`{"tr": …, "en": …}`): for search, and
+   * an episode's shown name in each language. Empty for an episode whose
+   * title an administrator wrote, so their wording shows in every language.
+   */
   localizedTitles?: Record<string, string>;
+  /** An episode's overview per language; empty when its overview is locked. */
+  localizedOverviews?: Record<string, string>;
   /** Names an administrator added so search finds the title by them too. */
   searchAliases?: string[];
   overview: string | null;
@@ -61,7 +67,10 @@ const ITEM_COLUMNS = `
   item.title,
   item.sort_title,
   item.original_title,
-  item.localized_titles,
+  CASE WHEN item.kind = 'episode' AND 'title' = ANY(item.locked_fields)
+    THEN '{}'::jsonb ELSE item.localized_titles END AS localized_titles,
+  CASE WHEN 'overview' = ANY(item.locked_fields)
+    THEN '{}'::jsonb ELSE item.localized_overviews END AS localized_overviews,
   item.search_aliases,
   item.overview,
   item.tagline,
@@ -114,6 +123,7 @@ interface RawItemRow extends Record<string, unknown> {
   sort_title: string;
   original_title: string | null;
   localized_titles?: Record<string, string> | null;
+  localized_overviews?: Record<string, string> | null;
   search_aliases?: string[] | null;
   overview: string | null;
   tagline: string | null;
@@ -170,6 +180,7 @@ function toItemRow(row: RawItemRow): CatalogueItemRow {
     sortTitle: row.sort_title,
     originalTitle: row.original_title,
     localizedTitles: row.localized_titles ?? {},
+    localizedOverviews: row.localized_overviews ?? {},
     searchAliases: row.search_aliases ?? [],
     overview: row.overview,
     tagline: row.tagline,

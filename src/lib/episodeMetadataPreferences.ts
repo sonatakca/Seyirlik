@@ -80,6 +80,10 @@ function normalizeText(value: string | null | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function nonEmpty(value: string | undefined): string | undefined {
+  return value?.trim() ? value : undefined;
+}
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
@@ -376,9 +380,19 @@ export function getEpisodeDisplayMetadata(
 
   const storedEpisode = getStoredEpisode(item);
 
+  // A choice made on this device first, then the catalogue's translation for
+  // the language, then the episode's own title and overview.
   return {
-    title: storedEpisode?.titles[language] ?? item.Name ?? null,
-    overview: storedEpisode?.overviews[language] ?? item.Overview ?? null,
+    title:
+      storedEpisode?.titles[language] ??
+      nonEmpty(item.LocalizedTitles?.[language]) ??
+      item.Name ??
+      null,
+    overview:
+      storedEpisode?.overviews[language] ??
+      nonEmpty(item.LocalizedOverviews?.[language]) ??
+      item.Overview ??
+      null,
     thumbnailUrl: storedEpisode?.thumbnail?.url ?? null,
   };
 }

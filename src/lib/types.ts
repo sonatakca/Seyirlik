@@ -172,10 +172,13 @@ export interface MediaItem {
   SortName?: string;
   OriginalTitle?: string;
   /**
-   * The provider's name per language, keyed by ISO 639-1. Never shown as the
-   * title; it is what search also matches after the title was renamed.
+   * The provider's name per language, keyed by ISO 639-1. A film or series is
+   * never shown by it; search also matches it after the title was renamed. An
+   * episode is shown by the one in the interface language, `Name` otherwise.
    */
   LocalizedTitles?: Record<string, string>;
+  /** An episode's overview per language, `Overview` otherwise. */
+  LocalizedOverviews?: Record<string, string>;
   /**
    * Names an administrator added so search finds the title by them too, such
    * as a release title the provider does not list. Never shown as the title.

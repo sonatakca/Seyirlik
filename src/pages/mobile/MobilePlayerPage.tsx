@@ -14,6 +14,7 @@ import { usePlaybackQueue } from "../../hooks/usePlaybackQueue";
 import { usePlaybackSource } from "../../hooks/usePlaybackSource";
 import { usePartyWatch } from "../../features/partyWatch/usePartyWatch";
 import { useLanguage } from "../../i18n/LanguageContext";
+import { getEpisodeDisplayMetadata } from "../../lib/episodeMetadataPreferences";
 import { getItem } from "../../lib/mediaApi";
 import { loadPlayerItem } from "../../lib/offline/offlineLibrary";
 import {
@@ -41,7 +42,7 @@ export function MobilePlayerPage() {
   const [searchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const { t } = useLanguage();
+  const { language, t } = useLanguage();
   const [item, setItem] = useState<MediaItem | null>(() =>
     itemId ? readPreloadedPlaybackItem(itemId) : null,
   );
@@ -93,10 +94,14 @@ export function MobilePlayerPage() {
     const isPageLoading = !item || playback.isLoading;
 
     if (isPageLoading) {
+      // An episode by its name in the site's language.
+      const name = item
+        ? (getEpisodeDisplayMetadata(item, language).title ?? item.Name)
+        : undefined;
       const loadingTitle =
         item?.SeriesName && item?.IndexNumber
-          ? `${item.SeriesName} - ${item.Name}`
-          : item?.Name;
+          ? `${item.SeriesName} - ${name}`
+          : name;
 
       setSeoMetadata({
         title: loadingTitle ?? t("player.preparing"),
@@ -107,10 +112,11 @@ export function MobilePlayerPage() {
       return;
     }
 
+    const name = getEpisodeDisplayMetadata(item, language).title ?? item.Name;
     const title =
       item.SeriesName && item.IndexNumber
-        ? `${item.SeriesName} - ${item.Name}`
-        : item.Name;
+        ? `${item.SeriesName} - ${name}`
+        : name;
 
     setPageTitle(title, {
       canonicalPath: `/watch/${item.Id}`,
@@ -120,7 +126,7 @@ export function MobilePlayerPage() {
     return () => {
       setDefaultPageTitle(false);
     };
-  }, [item, itemId, playback.isLoading, t]);
+  }, [item, itemId, language, playback.isLoading, t]);
 
   const {
     handlePlaybackBeforeUnload,

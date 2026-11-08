@@ -76,6 +76,25 @@ function imageColumn(alias: string, type: "cover" | "logo"): string {
 }
 
 /**
+ * The language a shared link speaks: `shareText` writes "1. Sezon, 2. Bölüm",
+ * and the preview page is `lang="tr"`.
+ */
+export const SHARE_LANGUAGE = "tr";
+
+/**
+ * An episode's name or overview in the share language, unless an
+ * administrator wrote the field themselves; null otherwise, so the stored one
+ * stands. Films and series are shared under their one shown title.
+ */
+function shareLanguageColumn(
+  field: "title" | "overview",
+  column: "localized_titles" | "localized_overviews",
+): string {
+  return `CASE WHEN item.kind = 'episode' AND NOT ('${field}' = ANY(item.locked_fields))
+             THEN NULLIF(btrim(item.${column} ->> '${SHARE_LANGUAGE}'), '') END`;
+}
+
+/**
  * What a shared link may say about a title, read without a viewer.
  *
  * This is the only catalogue read that answers an anonymous caller, so it
@@ -92,8 +111,8 @@ export function createShareRepository(pool: DatabasePool): ShareRepository {
         `SELECT
            item.id,
            item.kind,
-           item.title,
-           item.overview,
+           COALESCE(${shareLanguageColumn("title", "localized_titles")}, item.title) AS title,
+           COALESCE(${shareLanguageColumn("overview", "localized_overviews")}, item.overview) AS overview,
            item.production_year,
            item.index_number,
            item.parent_index_number,

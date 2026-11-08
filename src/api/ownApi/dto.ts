@@ -56,8 +56,13 @@ export interface ItemDto {
   title: string;
   sortTitle: string;
   originalTitle?: string;
-  /** The provider's name per language (`{"tr": …, "en": …}`), for search. */
+  /**
+   * The provider's name per language (`{"tr": …, "en": …}`): for search, and
+   * the name an episode is shown by in each language.
+   */
   localizedTitles?: Record<string, string>;
+  /** An episode's overview per language. */
+  localizedOverviews?: Record<string, string>;
   /** Names an administrator added so search finds the title by them too. */
   searchAliases?: string[];
   overview?: string;

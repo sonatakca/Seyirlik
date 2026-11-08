@@ -27,6 +27,12 @@ export interface TitleMetadataUpdate {
    * stored set whole when given; never lock-guarded, since nothing displays it.
    */
   localizedTitles?: Record<string, string>;
+  /**
+   * The provider's overview per language. Episodes are shown by it and by
+   * `localizedTitles`; read-side, a locked title or overview outranks both.
+   * Replaces the stored set whole when given.
+   */
+  localizedOverviews?: Record<string, string>;
   overview?: string;
   tagline?: string;
   premiereDate?: string;
@@ -73,7 +79,10 @@ export interface MetadataRepository {
    * Replaces the names an administrator added for search. Returns false for an
    * unknown id.
    */
-  setSearchAliases(itemId: string, aliases: readonly string[]): Promise<boolean>;
+  setSearchAliases(
+    itemId: string,
+    aliases: readonly string[],
+  ): Promise<boolean>;
 }
 
 const TARGET_COLUMNS = `
@@ -234,6 +243,7 @@ export function createMetadataRepository(
            metadata_state = COALESCE($14, metadata_state),
            original_language = COALESCE($15, original_language),
            localized_titles = COALESCE($16::jsonb, localized_titles),
+           localized_overviews = COALESCE($18::jsonb, localized_overviews),
            metadata_refreshed_at = now(),
            updated_at = now()
          WHERE id = $1`,
@@ -264,6 +274,9 @@ export function createMetadataRepository(
             ? JSON.stringify(update.localizedTitles)
             : null,
           options.overrideLocks === true,
+          update.localizedOverviews
+            ? JSON.stringify(update.localizedOverviews)
+            : null,
         ],
       );
     },

@@ -589,7 +589,9 @@ export function HeroSection({
     itemMetadata?.overview ??
     item?.Overview ??
     null;
-  const subtitle = item ? getItemSubtitle(item, mediaFormatLabels) : null;
+  const subtitle = item
+    ? getItemSubtitle(item, mediaFormatLabels, episodeMetadata?.title)
+    : null;
   const effectiveSmartContinueItems =
     smartContinueItems ?? fallbackSmartContinueItems;
   const heroSeriesId =

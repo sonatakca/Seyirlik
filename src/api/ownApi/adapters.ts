@@ -145,6 +145,9 @@ export function toMediaItem(item: ItemDto): MediaItem {
       : {}),
     ...(item.originalTitle ? { OriginalTitle: item.originalTitle } : {}),
     ...(item.localizedTitles ? { LocalizedTitles: item.localizedTitles } : {}),
+    ...(item.localizedOverviews
+      ? { LocalizedOverviews: item.localizedOverviews }
+      : {}),
     ...(item.searchAliases ? { SearchAliases: item.searchAliases } : {}),
     ...(item.overview ? { Overview: item.overview } : {}),
     ...(item.tagline ? { Taglines: [item.tagline] } : {}),

@@ -60,9 +60,11 @@ export function getDisplayTitle(
   return item.Name;
 }
 
+/** `episodeName` is an episode's name in the site's language, when known. */
 export function getItemSubtitle(
   item: MediaItem,
   labels: MediaFormatLabels = DEFAULT_MEDIA_FORMAT_LABELS,
+  episodeName?: string | null,
 ): string | null {
   if (item.Type === "Season") {
     const parts = [item.SeriesName, item.ProductionYear?.toString()].filter(
@@ -73,7 +75,7 @@ export function getItemSubtitle(
 
   const parts = [
     item.ProductionYear?.toString(),
-    item.Type === "Episode" ? item.Name : undefined,
+    item.Type === "Episode" ? (episodeName ?? item.Name) : undefined,
     formatRuntime(item.RunTimeTicks, labels) ?? undefined,
   ].filter(Boolean);
 

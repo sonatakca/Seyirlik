@@ -64,11 +64,14 @@ export interface ItemDto {
   sortTitle: string;
   originalTitle?: string;
   /**
-   * The provider's name for the title per language, keyed by ISO 639-1. Shown
-   * nowhere to viewers: it is what a title can also be searched by after an
-   * administrator renamed it.
+   * The provider's name for the title per language, keyed by ISO 639-1. A film
+   * or series is shown by `title` alone and is also searched by these after an
+   * administrator renamed it; an episode is shown by the one in the viewer's
+   * language, falling back to `title`.
    */
   localizedTitles?: Record<string, string>;
+  /** An episode's overview per language, falling back to `overview`. */
+  localizedOverviews?: Record<string, string>;
   /**
    * Names an administrator added so search finds the title by them too, such
    * as a release title the provider does not list. Shown nowhere to viewers.
@@ -258,6 +261,9 @@ export function toItemDto(
     ...(row.originalTitle ? { originalTitle: row.originalTitle } : {}),
     ...(row.localizedTitles && Object.keys(row.localizedTitles).length > 0
       ? { localizedTitles: row.localizedTitles }
+      : {}),
+    ...(row.localizedOverviews && Object.keys(row.localizedOverviews).length > 0
+      ? { localizedOverviews: row.localizedOverviews }
       : {}),
     ...(row.searchAliases && row.searchAliases.length > 0
       ? { searchAliases: row.searchAliases }
