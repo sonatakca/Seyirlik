@@ -187,6 +187,36 @@ function ShelfCaption({
   );
 }
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), Math.max(min, max));
+}
+
+/**
+ * The scroll offset that brings a result, plus its look-ahead margin on each
+ * side, into a scroller's view along one axis; unchanged when it already is.
+ */
+function scrollAhead(
+  current: number,
+  view: DOMRect,
+  target: DOMRect,
+  before: number,
+  after: number,
+  axis: "x" | "y",
+): number {
+  const [viewStart, viewEnd, start, end] =
+    axis === "x"
+      ? [view.left, view.right, target.left, target.right]
+      : [view.top, view.bottom, target.top, target.bottom];
+  if (start - before < viewStart) return current + (start - before - viewStart);
+  if (end + after > viewEnd) return current + (end + after - viewEnd);
+  return current;
+}
+
+/** Guarded because scrollTo is absent on elements in non-browser DOMs. */
+function scrollTo(element: HTMLElement, options: ScrollToOptions) {
+  if (typeof element.scrollTo === "function") element.scrollTo(options);
+}
+
 /** Words beside a lifted still step aside with it; resting ones recede. */
 function focusTextStyle(active: boolean, shift: number): CSSProperties {
   return {
@@ -443,6 +473,10 @@ export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {
   const browsingRef = useRef(false);
   // Only keyboard moves scroll the list; a pointer is already where it looks.
   const pointerFocusRef = useRef(false);
+  // Where the pointer last really was. When the list scrolls under a still
+  // cursor, Safari and Chrome send pointermove with the same coordinates;
+  // that is the content moving, not the person, and must not steal focus.
+  const pointerAtRef = useRef<{ x: number; y: number } | null>(null);
 
   /** Where a shelf stands: its remembered title if still on it, else its first. */
   const shelfPlace = (shelf: SearchGroup): MediaItem | undefined => {
@@ -472,6 +506,7 @@ export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {
     }
 
     setQuery("");
+    pointerAtRef.current = null;
     setResults([]);
     setStatus("idle");
     setActiveIndex(0);
@@ -647,17 +682,41 @@ export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {
       '[data-search-active="true"]',
     );
 
-    // Guarded because scrollIntoView is absent in non-browser DOMs.
-    if (typeof activeElement?.scrollIntoView === "function") {
-      // Each result carries a scroll margin as deep as its neighbour, so the
-      // list moves while there is still one more result in view past focus:
-      // what comes next is always visible before it is reached.
-      activeElement.scrollIntoView({
-        block: "nearest",
-        inline: "nearest",
-        behavior: shouldReduceMotion ? "auto" : "smooth",
-      });
+    const list = listRef.current;
+    if (!activeElement || !list) return;
+    const behavior = shouldReduceMotion ? "auto" : "smooth";
+    // Each result carries a scroll margin as deep as its neighbour, so the
+    // list moves while there is still one more result in view past focus:
+    // what comes next is always visible before it is reached.
+    const margin = getComputedStyle(activeElement);
+    const box = activeElement.getBoundingClientRect();
+    // Only the shelf moves sideways and only the list moves up and down.
+    // scrollIntoView would move every scrollable ancestor, and at a shelf's
+    // last title, where the shelf cannot honour the margin, it slid the
+    // whole panel's contents sideways out of view.
+    const shelf = activeElement.closest<HTMLElement>("[data-search-track]");
+    if (shelf) {
+      const left = scrollAhead(
+        shelf.scrollLeft,
+        shelf.getBoundingClientRect(),
+        box,
+        parseFloat(margin.scrollMarginLeft) || 0,
+        parseFloat(margin.scrollMarginRight) || 0,
+        "x",
+      );
+      const max = shelf.scrollWidth - shelf.clientWidth;
+      scrollTo(shelf, { left: clamp(left, 0, max), behavior });
     }
+    const top = scrollAhead(
+      list.scrollTop,
+      list.getBoundingClientRect(),
+      box,
+      parseFloat(margin.scrollMarginTop) || 0,
+      parseFloat(margin.scrollMarginBottom) || 0,
+      "y",
+    );
+    const max = list.scrollHeight - list.clientHeight;
+    scrollTo(list, { top: clamp(top, 0, max), behavior });
   }, [activeIndex, shouldReduceMotion]);
 
   if (typeof document === "undefined") {
@@ -795,10 +854,15 @@ export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {
                         </p>
 
                         <ul
+                          data-search-track={onShelf ? "true" : undefined}
                           className={
                             onShelf
-                              ? // Edge to edge, with room above for a lifted poster.
-                                "-mx-2 flex gap-4 overflow-x-auto overscroll-x-contain px-5 pb-3 pt-4 scrollbar-none"
+                              ? // Edge to edge, with room above for a lifted
+                                // poster. Positioned, so the posters' hidden
+                                // names stay inside it rather than widening
+                                // the whole list into something that scrolls
+                                // sideways.
+                                "relative -mx-2 flex gap-4 overflow-x-auto overscroll-x-contain px-5 pb-3 pt-4 scrollbar-none"
                               : "space-y-1"
                           }
                         >
@@ -810,7 +874,23 @@ export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {
                             // result is not still waiting after the first has
                             // been read.
                             const delay = Math.min(flatIndex * 0.024, 0.2);
-                            const takeFocus = () => {
+                            const takeFocus = (
+                              event: React.PointerEvent<HTMLButtonElement>,
+                            ) => {
+                              const last = pointerAtRef.current;
+                              pointerAtRef.current = {
+                                x: event.screenX,
+                                y: event.screenY,
+                              };
+                              // The first report is only where the pointer
+                              // rests; focus follows it once it moves.
+                              if (
+                                !last ||
+                                (last.x === event.screenX &&
+                                  last.y === event.screenY)
+                              ) {
+                                return;
+                              }
                               browsingRef.current = true;
                               if (isActive) return;
                               pointerFocusRef.current = true;

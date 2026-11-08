@@ -252,6 +252,42 @@ describe("SearchOverlay", () => {
     expect(document.querySelector("[data-search-shelf] .truncate")).toBeNull();
   });
 
+  it("keeps focus where the keyboard put it when results scroll under a still pointer", async () => {
+    mockedSearchItems.mockResolvedValue([
+      item("episode-1", "Pilot", "Episode"),
+      item("episode-2", "Second", "Episode"),
+      item("episode-3", "Third", "Episode"),
+    ]);
+
+    renderOverlay();
+    const input = screen.getByRole("searchbox");
+    fireEvent.change(input, { target: { value: "aaa" } });
+    await vi.advanceTimersByTimeAsync(400);
+    await waitFor(() => {
+      expect(screen.getByText("Third")).toBeInTheDocument();
+    });
+
+    const pilot = screen.getByText("Pilot").closest("button")!;
+    const third = screen.getByText("Third").closest("button")!;
+    fireEvent.pointerMove(pilot, { screenX: 300, screenY: 400 });
+    fireEvent.pointerMove(pilot, { screenX: 300, screenY: 404 });
+    expect(pilot).toHaveAttribute("data-search-active", "true");
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(third).toHaveAttribute("data-search-active", "true");
+
+    // The list scrolled; the browser reports the pointer over another row at
+    // the very same place. That is not the person moving.
+    const second = screen.getByText("Second").closest("button")!;
+    fireEvent.pointerMove(second, { screenX: 300, screenY: 404 });
+    expect(third).toHaveAttribute("data-search-active", "true");
+
+    // A real movement takes focus again.
+    fireEvent.pointerMove(second, { screenX: 301, screenY: 404 });
+    expect(second).toHaveAttribute("data-search-active", "true");
+  });
+
   it("lets the pointer take focus", async () => {
     mockedSearchItems.mockResolvedValue([
       item("movie-1", "Arrival", "Movie"),
@@ -268,7 +304,10 @@ describe("SearchOverlay", () => {
     });
 
     const pilot = screen.getByText("Pilot").closest("button")!;
-    fireEvent.pointerMove(pilot);
+    // The first report only says where the pointer rests.
+    fireEvent.pointerMove(pilot, { screenX: 300, screenY: 400 });
+    expect(pilot).not.toHaveAttribute("data-search-active");
+    fireEvent.pointerMove(pilot, { screenX: 304, screenY: 402 });
     expect(pilot).toHaveAttribute("data-search-active", "true");
     fireEvent.keyDown(screen.getByRole("searchbox"), { key: "Enter" });
     expect(navigate).toHaveBeenCalledTimes(1);
