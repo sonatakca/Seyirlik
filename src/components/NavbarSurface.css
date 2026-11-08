@@ -23,8 +23,6 @@
    picture under them is quiet and nothing below them is ever smeared. */
 .navbar-surface > .navbar-surface__veil {
   bottom: var(--reach);
-  -webkit-backdrop-filter: blur(14px);
-  backdrop-filter: blur(14px);
   -webkit-mask-image: linear-gradient(
     to bottom,
     #000 0%,
@@ -32,6 +30,15 @@
     transparent 92%
   );
   mask-image: linear-gradient(to bottom, #000 0%, #000 45%, transparent 92%);
+}
+
+/* The blur exists only while the veil is open or fading. Safari drops the
+   whole fixed header for as long as the page is pulled past its top (the
+   rubber band and pull-to-refresh) while any backdrop-filter sits in it, even
+   one at opacity 0. The bar is always closed up there, so the blur is gone. */
+.navbar-surface > .navbar-surface__veil[data-blur] {
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
 }
 
 /* The page's own black, thinning on an eased curve: a straight ramp shows a

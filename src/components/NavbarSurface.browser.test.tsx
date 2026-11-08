@@ -92,3 +92,29 @@ it("shows the surface immediately on pages that always need it", () => {
     expect(Number(getComputedStyle(layer).opacity)).toBe(1);
   }
 });
+
+// Safari drops the whole fixed header while the page is pulled past its top
+// if a backdrop-filter is anywhere in it, so the closed bar carries none.
+it("blurs only while the veil is open or still closing", async () => {
+  const { container, rerender } = render(
+    <NavbarSurface shown={false} variant="desktop" />,
+  );
+  const veil = container.querySelector<HTMLElement>(".navbar-surface__veil")!;
+  const backdrop = () => {
+    const style = getComputedStyle(veil);
+    return (
+      style.backdropFilter || style.getPropertyValue("-webkit-backdrop-filter")
+    );
+  };
+  expect(backdrop()).toBe("none");
+
+  await act(async () => rerender(<NavbarSurface shown variant="desktop" />));
+  expect(backdrop()).toBe("blur(14px)");
+
+  await act(async () =>
+    rerender(<NavbarSurface shown={false} variant="desktop" />),
+  );
+  expect(backdrop()).toBe("blur(14px)");
+  await waitFor(() => expect(backdrop()).toBe("none"));
+  expect(Number(getComputedStyle(veil).opacity)).toBe(0);
+});

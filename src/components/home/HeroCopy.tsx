@@ -258,10 +258,17 @@ export function HeroCopyBlock({
 /** Between the dock and the bar over it. */
 export const DOCK_ASIDE_GAP_PX = 10;
 
+/** `aria-keyshortcuts` spells keys by name, not by the glyph a hint shows. */
+const KEY_NAMES: Record<string, string> = {
+  "←": "ArrowLeft",
+  "→": "ArrowRight",
+};
+
 export function HeroControlButton({
   label,
   onClick,
   disabled,
+  shortcut,
   touch = false,
   className = "",
   children,
@@ -269,16 +276,19 @@ export function HeroControlButton({
   label: string;
   onClick: () => void;
   disabled?: boolean;
+  /** The key that does the same, shown in the tooltip. */
+  shortcut?: string;
   /** A phone's control: a full 44px touch target. */
   touch?: boolean;
   className?: string;
   children: ReactNode;
 }) {
   return (
-    <Tooltip content={label} placement="top">
+    <Tooltip content={label} shortcut={shortcut} placement="top">
       <button
         type="button"
         aria-label={label}
+        aria-keyshortcuts={shortcut ? KEY_NAMES[shortcut] : undefined}
         onClick={onClick}
         disabled={disabled}
         className={`${touch ? "h-11 w-11" : "h-9 w-9"} ${className} flex items-center justify-center rounded-full text-white/85 transition hover:bg-white/[0.12] hover:text-white active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] disabled:opacity-40`}

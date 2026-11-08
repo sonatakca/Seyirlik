@@ -22,6 +22,7 @@ import {
 import { useLanguage } from "../../i18n/LanguageContext";
 import { DWELL_STROKE, DwellClock } from "../../lib/dwellClock";
 import { useMotionLabEnabled } from "../../lib/heroMotionLab";
+import { useCarouselArrowKeys } from "../../lib/keyboardShortcuts";
 import { useBake } from "../../lib/timeline/bake";
 import { Curve, derive, type TweenControls } from "../../lib/timeline/curve";
 import { getItemDisplayMetadata } from "../../lib/itemMetadataPreferences";
@@ -873,6 +874,14 @@ export function HomeHero({
     setHoveredId((current) => (active ? id : current === id ? null : current));
   };
 
+  // ← and → move the queue from anywhere on the page while the hero is on
+  // screen, unless a row under the pointer or the focus claims them.
+  useCarouselArrowKeys(
+    sectionRef,
+    (direction) => void travel(direction === "next" ? "forward" : "backward"),
+    { isDefault: true },
+  );
+
   if (total === 0) {
     return (
       <section
@@ -888,10 +897,6 @@ export function HomeHero({
       className={`seyirlik-home-hero seyirlik-hero-stage relative mx-4 mt-2 mb-4 w-[calc(100%-2rem)] rounded-2xl touch-pan-y overflow-hidden bg-[#050607] ${HERO_HEIGHT_CLASS[fit]}`}
       aria-roledescription="carousel"
       aria-label={t("hero.featured")}
-      onKeyDown={(event) => {
-        if (event.key === "ArrowRight") void travel("forward");
-        if (event.key === "ArrowLeft") void travel("backward");
-      }}
       onPointerDown={(event) => {
         if (event.pointerType === "mouse" || !hasOpened || busyRef.current)
           return;
@@ -1178,6 +1183,7 @@ export function HomeHero({
               label={t("hero.previous")}
               onClick={() => void travel("backward")}
               disabled={isTravelling}
+              shortcut="←"
               touch={isCompact}
               className={isCompact ? "sr-only focus-visible:not-sr-only" : ""}
             >
@@ -1198,6 +1204,7 @@ export function HomeHero({
               label={t("hero.next")}
               onClick={() => void travel("forward")}
               disabled={isTravelling}
+              shortcut="→"
               touch={isCompact}
               className={isCompact ? "sr-only focus-visible:not-sr-only" : ""}
             >

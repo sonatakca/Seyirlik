@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import "./NavbarSurface.css";
 
@@ -20,6 +21,10 @@ interface NavbarSurfaceProps {
 export function NavbarSurface({ shown, variant }: NavbarSurfaceProps) {
   const reduced = useReducedMotion();
   const opacity = shown ? 1 : 0;
+  // The veil's blur is on from the moment it starts to open until it has
+  // finished closing (see NavbarSurface.css for why it may not stay on).
+  const [blurred, setBlurred] = useState(shown);
+  if (shown && !blurred) setBlurred(true);
   const transition = {
     type: "tween" as const,
     duration: reduced ? 0.12 : 0.3,
@@ -30,9 +35,13 @@ export function NavbarSurface({ shown, variant }: NavbarSurfaceProps) {
     <div aria-hidden="true" className="navbar-surface" data-variant={variant}>
       <motion.span
         className="navbar-surface__veil"
+        data-blur={blurred ? "" : undefined}
         initial={false}
         animate={{ opacity }}
         transition={transition}
+        onAnimationComplete={(done: { opacity?: number }) => {
+          if (done.opacity === 0) setBlurred(false);
+        }}
       />
       <motion.span
         className="navbar-surface__shade"

@@ -10,11 +10,13 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useLanguage } from "../i18n/LanguageContext";
 import { formatTemplate } from "../lib/format";
+import { useCarouselArrowKeys } from "../lib/keyboardShortcuts";
 import type { MediaItem } from "../lib/types";
 import { MediaCard } from "./MediaCard";
 import { AnimatedText } from "./AnimatedText";
 import { AnimatedWidth } from "./AnimatedWidth";
 import { MotionReveal } from "./MotionReveal";
+import { Tooltip } from "./ui/Tooltip";
 import { useFlipLayout } from "../hooks/useFlipLayout";
 import { move, REST } from "../lib/compositorMotion";
 
@@ -242,6 +244,11 @@ export function MediaRow({
     [rowGutter, shouldReduceMotion],
   );
 
+  // ← and → page the row under the pointer, or the row holding the focus.
+  useCarouselArrowKeys(viewportRef, (direction) =>
+    scrollByCards(direction === "next" ? "right" : "left"),
+  );
+
   // Below every hook on purpose. A row is empty until its data arrives, so
   // returning earlier than this changed the number of hooks between renders
   // the moment the items loaded.
@@ -348,34 +355,50 @@ export function MediaRow({
               canScrollRight ? "opacity-100" : "opacity-0"
             }`}
           />
-          <button
-            type="button"
-            onClick={() => scrollByCards("left")}
-            className={`absolute left-3 top-[calc(50%-0.75rem)] z-[90] hidden h-20 w-12 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-gray-700/90 text-white shadow-[0_0_70px_rgba(0,0,0,0.72),0_0_0_1px_rgba(255,255,255,0.06)] transition-[opacity,transform,background-color] duration-200 ease-out hover:bg-gray-500 focus:outline-none focus:ring-2 focus:ring-[var(--accent)] lg:flex ${
-              canScrollLeft
-                ? "pointer-events-auto opacity-0 group-hover/viewport:opacity-100 focus:opacity-100"
-                : "pointer-events-none opacity-0"
-            }`}
-            aria-label={formatTemplate(t("common.scrollLeft"), { title })}
-            aria-hidden={!canScrollLeft}
-            tabIndex={canScrollLeft ? 0 : -1}
+          <Tooltip
+            content={formatTemplate(t("common.scrollLeft"), { title })}
+            shortcut="←"
+            placement="top"
+            disabled={!canScrollLeft}
           >
-            <ChevronLeft size={30} />
-          </button>
-          <button
-            type="button"
-            onClick={() => scrollByCards("right")}
-            className={`absolute right-3 top-[calc(50%-0.75rem)] z-[90] hidden h-20 w-12 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-gray-700/90 text-white shadow-[0_18px_70px_rgba(0,0,0,0.72),0_0_0_1px_rgba(255,255,255,0.06)] transition-[opacity,transform,background-color] duration-200 ease-out hover:bg-gray-500 focus:outline-none focus:ring-2 focus:ring-[var(--accent)] lg:flex ${
-              canScrollRight
-                ? "pointer-events-auto opacity-0 group-hover/viewport:opacity-100 focus:opacity-100"
-                : "pointer-events-none opacity-0"
-            }`}
-            aria-label={formatTemplate(t("common.scrollRight"), { title })}
-            aria-hidden={!canScrollRight}
-            tabIndex={canScrollRight ? 0 : -1}
+            <button
+              type="button"
+              onClick={() => scrollByCards("left")}
+              className={`absolute left-3 top-[calc(50%-0.75rem)] z-[90] hidden h-20 w-12 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-gray-700/90 text-white shadow-[0_0_70px_rgba(0,0,0,0.72),0_0_0_1px_rgba(255,255,255,0.06)] transition-[opacity,transform,background-color] duration-200 ease-out hover:bg-gray-500 focus:outline-none focus:ring-2 focus:ring-[var(--accent)] lg:flex ${
+                canScrollLeft
+                  ? "pointer-events-auto opacity-0 group-hover/viewport:opacity-100 focus:opacity-100"
+                  : "pointer-events-none opacity-0"
+              }`}
+              aria-label={formatTemplate(t("common.scrollLeft"), { title })}
+              aria-keyshortcuts="ArrowLeft"
+              aria-hidden={!canScrollLeft}
+              tabIndex={canScrollLeft ? 0 : -1}
+            >
+              <ChevronLeft size={30} />
+            </button>
+          </Tooltip>
+          <Tooltip
+            content={formatTemplate(t("common.scrollRight"), { title })}
+            shortcut="→"
+            placement="top"
+            disabled={!canScrollRight}
           >
-            <ChevronRight size={30} />
-          </button>
+            <button
+              type="button"
+              onClick={() => scrollByCards("right")}
+              className={`absolute right-3 top-[calc(50%-0.75rem)] z-[90] hidden h-20 w-12 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-gray-700/90 text-white shadow-[0_18px_70px_rgba(0,0,0,0.72),0_0_0_1px_rgba(255,255,255,0.06)] transition-[opacity,transform,background-color] duration-200 ease-out hover:bg-gray-500 focus:outline-none focus:ring-2 focus:ring-[var(--accent)] lg:flex ${
+                canScrollRight
+                  ? "pointer-events-auto opacity-0 group-hover/viewport:opacity-100 focus:opacity-100"
+                  : "pointer-events-none opacity-0"
+              }`}
+              aria-label={formatTemplate(t("common.scrollRight"), { title })}
+              aria-keyshortcuts="ArrowRight"
+              aria-hidden={!canScrollRight}
+              tabIndex={canScrollRight ? 0 : -1}
+            >
+              <ChevronRight size={30} />
+            </button>
+          </Tooltip>
         </div>
       ) : (
         <p className="rounded-xl border border-white/10 bg-[var(--surface)] p-5 text-sm text-white/[0.62]">

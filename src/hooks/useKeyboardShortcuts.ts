@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { isTypingTarget } from "../lib/keyboardShortcuts";
 
 interface KeyboardShortcutOptions {
   enabled?: boolean;
@@ -6,20 +7,6 @@ interface KeyboardShortcutOptions {
   onSeekBy: (seconds: number) => void;
   onToggleMute: () => void;
   onToggleFullscreen: () => void;
-}
-
-function isTypingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-
-  const tagName = target.tagName.toLowerCase();
-  return (
-    tagName === "input" ||
-    tagName === "textarea" ||
-    tagName === "select" ||
-    target.isContentEditable
-  );
 }
 
 export function useKeyboardShortcuts({

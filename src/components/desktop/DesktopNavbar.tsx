@@ -1,5 +1,5 @@
 import { NotificationCenter } from "../notifications/NotificationCenter";
-import { useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { useReducedMotion } from "framer-motion";
 import { useNavbarScrolled } from "../../hooks/useNavbarScrolled";
 import { Search } from "lucide-react";
@@ -14,12 +14,11 @@ import { NavbarWordmark } from "../NavbarWordmark";
 import { openSearchOverlay } from "../../lib/searchModel";
 import { SlidingIndicator } from "../ui/SlidingIndicator";
 import { Tooltip } from "../ui/Tooltip";
-
-// Only affects which modifier the shortcut hint spells out, so a userAgent
-// sniff is enough and never blocks the shortcut itself.
-const isMacPlatform =
-  typeof navigator !== "undefined" &&
-  /Mac|iPhone|iPad/.test(navigator.platform);
+import {
+  altShortcut,
+  isMacPlatform,
+  isTypingTarget,
+} from "../../lib/keyboardShortcuts";
 
 export function DesktopNavbar() {
   const navigate = useNavigate();
@@ -63,6 +62,27 @@ export function DesktopNavbar() {
     { to: "/my-list", label: t("myList.title") },
     // Collections is off until further notice; /collections redirects home.
   ];
+
+  // Option/Alt + 1–5 opens the links in the bar's own order. `code`, not
+  // `key`: Option turns the digits into other characters on a Mac.
+  const navLinksForKeys = useRef(navLinks);
+  useEffect(() => {
+    navLinksForKeys.current = navLinks;
+  });
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey)
+        return;
+      if (event.defaultPrevented || isTypingTarget(event.target)) return;
+      const digit = /^Digit([1-9])$/.exec(event.code)?.[1];
+      const link = digit ? navLinksForKeys.current[Number(digit) - 1] : null;
+      if (!link) return;
+      event.preventDefault();
+      navigate(link.to);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [navigate]);
   const devClickCountRef = useRef(0);
   const devClickTimerRef = useRef<number | null>(null);
 
@@ -125,25 +145,32 @@ export function DesktopNavbar() {
               filter on the link, not a text-shadow, because the label's
               animation frames clip to their boxes and would cut the blur
               into a dark rectangle; a filter draws after that clip. */}
-          {navLinks.map((link) => (
-            <NavLink
+          {navLinks.map((link, index) => (
+            <Tooltip
               key={link.to}
-              to={link.to}
-              className={({ isActive }) =>
-                `text-sm font-semibold transition-colors duration-200 navbar-ink-shadow ${
-                  isActive ? "text-white" : "text-white/72 hover:text-white"
-                } ${"className" in link ? link.className : ""}`
-              }
+              content={link.label}
+              shortcut={altShortcut(String(index + 1))}
+              placement="bottom"
+              group="navbar-links"
             >
-              <AnimatedWidth value={link.label}>
-                {/* What the underline measures: the text itself. The
-                    AnimatedWidth frame around it is a few pixels wider on
-                    the right, so centring on the link was centring off it. */}
-                <span data-nav-label>
-                  <AnimatedText value={link.label} />
-                </span>
-              </AnimatedWidth>
-            </NavLink>
+              <NavLink
+                to={link.to}
+                className={({ isActive }) =>
+                  `text-sm font-semibold transition-colors duration-200 navbar-ink-shadow ${
+                    isActive ? "text-white" : "text-white/72 hover:text-white"
+                  } ${"className" in link ? link.className : ""}`
+                }
+              >
+                <AnimatedWidth value={link.label}>
+                  {/* What the underline measures: the text itself. The
+                      AnimatedWidth frame around it is a few pixels wider on
+                      the right, so centring on the link was centring off it. */}
+                  <span data-nav-label>
+                    <AnimatedText value={link.label} />
+                  </span>
+                </AnimatedWidth>
+              </NavLink>
+            </Tooltip>
           ))}
 
           {/* Travels between links so a route change reads as a move along
