@@ -9,6 +9,7 @@
 
 import type { PlaybackDiagnostics } from "./playback-planner/types";
 import type { MediaQualityManifest } from "../renditions/contracts";
+import type { ImageFocus } from "./imageFocus";
 
 export interface MediaUser {
   Id: string;
@@ -198,8 +199,11 @@ export interface MediaItem {
   Chapters?: MediaChapter[];
   ImageTags?: MediaImageTags;
   BackdropImageTags?: string[];
+  /** The point of the first backdrop a crop keeps in view, when one is set. */
+  BackdropFocus?: ImageFocus;
   ParentBackdropItemId?: string;
   ParentBackdropImageTags?: string[];
+  ParentBackdropFocus?: ImageFocus;
   SeriesName?: string;
   SeasonName?: string;
   IndexNumber?: number;

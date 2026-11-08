@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabasePool } from "../database/databasePool";
-import type { ImageRecord } from "../catalogue/itemDto";
+import type { ImageFocus, ImageRecord } from "../catalogue/itemDto";
 
 export interface StoredImage extends ImageRecord {
   contentType: string;
@@ -68,6 +68,16 @@ export interface ImageRepository {
     imageIndex: number,
   ): Promise<boolean>;
   listLockedTypes(itemId: string): Promise<string[]>;
+  /**
+   * Sets the point of an image that a crop keeps in view, or clears it with
+   * null. Returns false when there is no such image.
+   */
+  setFocus(
+    itemId: string,
+    imageType: string,
+    imageIndex: number,
+    focus: ImageFocus | null,
+  ): Promise<boolean>;
 }
 
 interface RawImageRow {
@@ -82,6 +92,8 @@ interface RawImageRow {
   size_bytes: string;
   storage_key: string;
   is_locked: boolean;
+  focus_x: number | null;
+  focus_y: number | null;
 }
 
 function toRecord(row: RawImageRow): ImageRecord {
@@ -93,6 +105,10 @@ function toRecord(row: RawImageRow): ImageRecord {
     contentHash: row.content_hash,
     width: row.width,
     height: row.height,
+    focus:
+      row.focus_x === null || row.focus_y === null
+        ? null
+        : { x: row.focus_x, y: row.focus_y },
   };
 }
 
@@ -112,8 +128,20 @@ const IMAGE_COLUMNS = `
   item_images.id, item_images.item_id, item_images.image_type,
   item_images.image_index, item_images.content_hash, item_images.content_type,
   item_images.width, item_images.height, item_images.size_bytes,
-  item_images.storage_key, item_images.is_locked
+  item_images.storage_key, item_images.is_locked,
+  item_images.focus_x, item_images.focus_y
 `;
+
+/*
+ * A focus belongs to one picture. When a write brings different bytes, the
+ * old point would land on whatever happens to be there in the new image, so
+ * it is cleared; the same bytes written again keep it.
+ */
+const KEEP_FOCUS_FOR_SAME_IMAGE = `
+           focus_x = CASE WHEN item_images.content_hash = EXCLUDED.content_hash
+                          THEN item_images.focus_x END,
+           focus_y = CASE WHEN item_images.content_hash = EXCLUDED.content_hash
+                          THEN item_images.focus_y END,`;
 
 export function createImageRepository(pool: DatabasePool): ImageRepository {
   return {
@@ -184,7 +212,7 @@ export function createImageRepository(pool: DatabasePool): ImageRepository {
            width, height, size_bytes, storage_key, source, source_url
          )
          VALUES ($12, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         ON CONFLICT (item_id, image_type, image_index) DO UPDATE SET
+         ON CONFLICT (item_id, image_type, image_index) DO UPDATE SET${KEEP_FOCUS_FOR_SAME_IMAGE}
            content_hash = EXCLUDED.content_hash,
            content_type = EXCLUDED.content_type,
            width = EXCLUDED.width,
@@ -234,7 +262,7 @@ export function createImageRepository(pool: DatabasePool): ImageRepository {
            width, height, size_bytes, storage_key, source, source_url, is_locked
          )
          VALUES ($12, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, true)
-         ON CONFLICT (item_id, image_type, image_index) DO UPDATE SET
+         ON CONFLICT (item_id, image_type, image_index) DO UPDATE SET${KEEP_FOCUS_FOR_SAME_IMAGE}
            content_hash = EXCLUDED.content_hash,
            content_type = EXCLUDED.content_type,
            width = EXCLUDED.width,
@@ -283,6 +311,15 @@ export function createImageRepository(pool: DatabasePool): ImageRepository {
         [itemId],
       );
       return result.rows.map((row) => row.image_type);
+    },
+
+    setFocus: async (itemId, imageType, imageIndex, focus) => {
+      const result = await pool.query(
+        `UPDATE item_images SET focus_x = $4, focus_y = $5
+         WHERE item_id = $1 AND image_type = $2 AND image_index = $3`,
+        [itemId, imageType, imageIndex, focus?.x ?? null, focus?.y ?? null],
+      );
+      return (result.rowCount ?? 0) > 0;
     },
 
     deleteForItem: async (itemId, imageType) => {

@@ -23,6 +23,8 @@ export interface ImageRefDto {
   tag: string;
   width?: number;
   height?: number;
+  /** The point a crop keeps in view; absent means the picture's centre. */
+  focus?: { x: number; y: number };
 }
 
 export interface ItemImagesDto {

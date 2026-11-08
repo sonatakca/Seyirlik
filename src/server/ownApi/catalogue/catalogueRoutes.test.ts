@@ -174,6 +174,7 @@ function fakeImages(): ImageRepository {
     clear: async () => true,
     listLockedTypes: async () => [],
     deleteForItem: async () => undefined,
+    setFocus: async () => true,
   };
 }
 

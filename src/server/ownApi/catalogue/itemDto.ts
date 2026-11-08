@@ -12,6 +12,15 @@ import type { CatalogueItemRow, ItemKind } from "./catalogueRepository";
 
 export type ItemImageType = "cover" | "backdrop" | "logo" | "thumb" | "banner";
 
+/**
+ * A point in an image, as fractions of its width and height from its top-left
+ * corner: the part a crop should keep in view.
+ */
+export interface ImageFocus {
+  x: number;
+  y: number;
+}
+
 export interface ImageRefDto {
   /** Opaque id for `/images/:imageId`. */
   id: string;
@@ -19,6 +28,8 @@ export interface ImageRefDto {
   tag: string;
   width?: number;
   height?: number;
+  /** Absent means the picture's own centre. */
+  focus?: ImageFocus;
 }
 
 export interface ItemImagesDto {
@@ -97,6 +108,8 @@ export interface ImageRecord {
   contentHash: string;
   width: number | null;
   height: number | null;
+  /** Optional so records built without one (tests, fixtures) mean centred. */
+  focus?: ImageFocus | null;
 }
 
 export interface UserStateRecord {
@@ -116,6 +129,7 @@ function toImageRef(record: ImageRecord): ImageRefDto {
     tag: record.contentHash,
     ...(record.width === null ? {} : { width: record.width }),
     ...(record.height === null ? {} : { height: record.height }),
+    ...(record.focus ? { focus: record.focus } : {}),
   };
 }
 
@@ -269,9 +283,7 @@ export function toItemDto(
     dateCreated: row.dateCreated.toISOString(),
     isMissing: row.missingSince !== null,
     logoLayout: row.logoLayout,
-    ...(row.seriesLogoLayout
-      ? { seriesLogoLayout: row.seriesLogoLayout }
-      : {}),
+    ...(row.seriesLogoLayout ? { seriesLogoLayout: row.seriesLogoLayout } : {}),
     images: buildImages(images, inheritedImages),
     ...(userState === undefined
       ? {}

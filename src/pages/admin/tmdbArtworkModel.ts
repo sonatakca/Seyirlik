@@ -165,6 +165,16 @@ export function hasStoredArtwork(
   );
 }
 
+/** The stored image a kind is drawn from, when there is one. */
+export function findStoredArtwork<
+  T extends { imageType: string; imageIndex: number },
+>(current: ReadonlyArray<T>, kind: ArtworkKind): T | undefined {
+  return current.find(
+    (image) =>
+      image.imageType === STORED_TYPE_BY_KIND[kind] && image.imageIndex === 0,
+  );
+}
+
 export function getStoredArtworkTag(
   current: ReadonlyArray<{
     imageType: string;

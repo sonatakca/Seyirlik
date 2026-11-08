@@ -1,5 +1,6 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { readIsMobileView } from "../hooks/useIsMobileView";
+import { coverRect, type ImageFocus } from "./imageFocus";
 import { relativeLuminance } from "./logoShadow";
 
 /**
@@ -13,8 +14,8 @@ export interface NavbarBackdrop {
   url: string;
   /** The box the artwork covers at rest, in viewport px. */
   getBox: () => DOMRect;
-  /** Its `object-position`, as shares of the overflow on each axis. */
-  position: { x: number; y: number };
+  /** The point of the artwork its cover crop keeps in view (see imageFocus). */
+  focus: ImageFocus;
 }
 
 const owners: { key: symbol; backdrop: NavbarBackdrop }[] = [];
@@ -131,8 +132,8 @@ export function measureBackdropUnder(
     veil,
     Math.round(box.width),
     Math.round(box.height),
-    backdrop.position.x,
-    backdrop.position.y,
+    backdrop.focus.x,
+    backdrop.focus.y,
     rel.left,
     rel.top,
     rel.width,
@@ -146,7 +147,7 @@ export function measureBackdropUnder(
 }
 
 async function readCover(
-  { url, position }: NavbarBackdrop,
+  { url, focus }: NavbarBackdrop,
   box: DOMRect,
   rel: ViewportRect,
   veil: number,
@@ -155,13 +156,11 @@ async function readCover(
   if (!response.ok) return null;
   const bitmap = await createImageBitmap(await response.blob());
   try {
-    // Where the box's px fall on the image under object-fit: cover.
-    const scale = Math.max(
-      box.width / bitmap.width,
-      box.height / bitmap.height,
-    );
-    const offsetX = (box.width - bitmap.width * scale) * position.x;
-    const offsetY = (box.height - bitmap.height * scale) * position.y;
+    // Where the box's px fall on the image under the hero's cover crop.
+    const cover = coverRect(bitmap, box, focus);
+    const scale = cover.width / bitmap.width;
+    const offsetX = cover.left;
+    const offsetY = cover.top;
     const sx = (rel.left - offsetX) / scale;
     const sy = (rel.top - offsetY) / scale;
     const sw = rel.width / scale;

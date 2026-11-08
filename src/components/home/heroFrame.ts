@@ -1,3 +1,5 @@
+import { coverRect, type ImageFocus } from "../../lib/imageFocus";
+
 /**
  * The geometry of a hero frame drawn on the compositor (see HeroComposition):
  * its rounded corners as four clipping boxes, and its artwork's cover crop.
@@ -61,19 +63,23 @@ export function frameAt(
  *
  * Drawn by hand because cover only paints inside the image element's own box:
  * moved or scaled, that element would cut the picture off at its edges.
+ *
+ * `focus` is the point of the picture each crop keeps nearest its middle
+ * (see `imageFocus.ts`), so a frame that grows or shrinks re-centres on it
+ * rather than on the picture's centre.
  */
 export function coverFit(
   natural: { width: number; height: number },
   box: { width: number; height: number },
   height: number,
-  positionY: number,
+  focus: ImageFocus,
 ) {
   const fit = (h: number) => {
-    const scale = Math.max(box.width / natural.width, h / natural.height);
+    const rect = coverRect(natural, { width: box.width, height: h }, focus);
     return {
-      scale,
-      x: (box.width - natural.width * scale) * 0.5,
-      y: (h - natural.height * scale) * positionY,
+      scale: rect.width / natural.width,
+      x: rect.left,
+      y: rect.top,
     };
   };
   const full = fit(box.height);

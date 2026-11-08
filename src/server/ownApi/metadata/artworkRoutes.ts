@@ -3,6 +3,7 @@ import { sendData } from "../api/envelope";
 import type { RouteDefinition } from "../api/router";
 import { asObjectBody, requireUuid } from "../api/validation";
 import { headerValue, readBinaryBody } from "../api/http";
+import type { ImageFocus } from "../catalogue/itemDto";
 import type { ImageRepository } from "../images/imageRepository";
 import type { ImageStorage } from "../images/imageStorage";
 import type { JobQueue } from "../tasks/jobQueue";
@@ -229,6 +230,36 @@ function parseLogoLayout(value: unknown): LogoLayout | null {
     y: requireFraction(layout.y, "layout.y", 0),
     width: requireFraction(layout.width, "layout.width", MIN_LOGO_WIDTH),
     shadow: requireFraction(layout.shadow, "layout.shadow", 0, MAX_LOGO_SHADOW),
+  };
+}
+
+/**
+ * The point of a backdrop a crop keeps in view, or null to return to the
+ * picture's centre. As with a logo layout, null is a value and not an
+ * omission.
+ */
+function parseFocus(value: unknown): ImageFocus | null {
+  if (value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new OwnApiError(
+      "VALIDATION_FAILED",
+      "focus must be an object or null.",
+      422,
+    );
+  }
+  const focus = value as Record<string, unknown>;
+  for (const key of Object.keys(focus)) {
+    if (key !== "x" && key !== "y") {
+      throw new OwnApiError(
+        "VALIDATION_FAILED",
+        `focus has an unknown field: ${key}.`,
+        422,
+      );
+    }
+  }
+  return {
+    x: requireFraction(focus.x, "focus.x", 0),
+    y: requireFraction(focus.y, "focus.y", 0),
   };
 }
 
@@ -578,6 +609,37 @@ export function createArtworkRoutes({
         onLogoLayoutChanged?.(itemId);
 
         sendData(context.response, context.requestId, { layout });
+      },
+    },
+
+    {
+      /**
+       * Which part of this title's backdrop the heroes keep in view when they
+       * crop it to their own shape.
+       *
+       * Stored on the backdrop itself, so it applies to the picture it was
+       * chosen on and is cleared when the backdrop is replaced. Like the logo
+       * layout it is not a provider choice and needs no TMDB match.
+       */
+      method: "PUT",
+      path: "/admin/items/:itemId/backdrop-focus",
+      access: "admin",
+      handle: async (context) => {
+        const itemId = requireUuid(context.params.itemId, "itemId");
+
+        const body = asObjectBody(await context.readJson(1_024), ["focus"]);
+        const focus = parseFocus(body.focus ?? null);
+
+        await requireTarget(itemId);
+        if (!(await images.setFocus(itemId, "backdrop", 0, focus))) {
+          throw new OwnApiError(
+            "NOT_FOUND",
+            "This title has no backdrop to adjust.",
+            404,
+          );
+        }
+
+        sendData(context.response, context.requestId, { focus });
       },
     },
 

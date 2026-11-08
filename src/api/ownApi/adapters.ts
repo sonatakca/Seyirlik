@@ -186,6 +186,9 @@ export function toMediaItem(item: ItemDto): MediaItem {
       ...(images.banner ? { Banner: images.banner.tag } : {}),
     },
     BackdropImageTags: images.backdrops.map((backdrop) => backdrop.tag),
+    ...(images.backdrops[0]?.focus
+      ? { BackdropFocus: images.backdrops[0].focus }
+      : {}),
     // Inherited artwork lets an episode card fall back to its series poster
     // without the component knowing where it came from.
     ...(images.parentCover
@@ -205,6 +208,9 @@ export function toMediaItem(item: ItemDto): MediaItem {
           ParentBackdropImageTags: images.parentBackdrops.map(
             (backdrop) => backdrop.tag,
           ),
+          ...(images.parentBackdrops[0]?.focus
+            ? { ParentBackdropFocus: images.parentBackdrops[0].focus }
+            : {}),
         }
       : {}),
     ...(item.userState ? { UserData: toUserData(item.userState) } : {}),

@@ -36,6 +36,8 @@ export interface StoredArtwork {
   contentHash: string;
   width: number | null;
   height: number | null;
+  /** The point a crop keeps in view; null or absent means the centre. */
+  focus?: { x: number; y: number } | null;
 }
 
 export interface ArtworkOverview {
@@ -143,6 +145,20 @@ export async function setLogoLayout(
   await ownApiClient.request<{ layout: unknown }>(
     `/admin/items/${encodeURIComponent(itemId)}/logo-layout`,
     { method: "PUT", body: { layout } },
+  );
+}
+
+/**
+ * Which part of the title's backdrop the heroes keep in view, or null for the
+ * picture's centre.
+ */
+export async function setBackdropFocus(
+  itemId: string,
+  focus: { x: number; y: number } | null,
+): Promise<void> {
+  await ownApiClient.request<{ focus: unknown }>(
+    `/admin/items/${encodeURIComponent(itemId)}/backdrop-focus`,
+    { method: "PUT", body: { focus } },
   );
 }
 

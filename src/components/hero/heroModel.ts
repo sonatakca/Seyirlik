@@ -1,5 +1,6 @@
 import { MAX_ARTWORK_WIDTH } from "../../lib/artworkSizes";
 import { getBackdropImageUrl, getPrimaryImageUrl } from "../../lib/mediaApi";
+import type { ImageFocus } from "../../lib/imageFocus";
 import type { MediaItem } from "../../lib/types";
 
 export const HERO_TRAILERS_ENABLED_STORAGE_KEY =
@@ -10,6 +11,8 @@ export type HeroImageType = "backdrop" | "primary" | "poster";
 export interface HeroImageCandidate {
   type: HeroImageType;
   url: string;
+  /** For a backdrop: the point a crop keeps in view, when one was chosen. */
+  focus?: ImageFocus;
 }
 
 export function readHeroTrailersEnabledPreference(): boolean {
@@ -59,6 +62,7 @@ export function getHeroImageCandidates(item?: MediaItem): HeroImageCandidate[] {
         item.BackdropImageTags[0],
         MAX_ARTWORK_WIDTH,
       ),
+      ...(item.BackdropFocus ? { focus: item.BackdropFocus } : {}),
     });
   }
 
@@ -70,6 +74,7 @@ export function getHeroImageCandidates(item?: MediaItem): HeroImageCandidate[] {
         item.ParentBackdropImageTags[0],
         MAX_ARTWORK_WIDTH,
       ),
+      ...(item.ParentBackdropFocus ? { focus: item.ParentBackdropFocus } : {}),
     });
   }
 

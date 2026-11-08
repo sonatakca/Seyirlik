@@ -23,6 +23,7 @@ import {
   identifyItem,
   saveItemDisplayMetadata,
   searchMetadataCandidates,
+  setBackdropFocus,
   setLogoLayout,
   uploadCustomArtwork,
   type ArtworkCandidate,
@@ -48,6 +49,7 @@ import {
   type LogoLayout,
 } from "../lib/logoLayout";
 import { LogoLayoutEditor } from "./admin/LogoLayoutEditor";
+import { BackdropFocusSection } from "./admin/tmdbArtwork/BackdropFocusSection";
 import { notify } from "../lib/notifications/notificationStore";
 import { useLanguage } from "../i18n/LanguageContext";
 import type { TranslationKey } from "../i18n/translations";
@@ -59,6 +61,7 @@ import {
   getArtworkErrorKey,
   getKindLabelKey,
   getStatusClasses,
+  findStoredArtwork,
   getStoredArtworkTag,
   isArtworkEligible,
   languageName,
@@ -326,6 +329,39 @@ export default function TmdbArtworkPage({ itemId }: { itemId?: string } = {}) {
   const logoTag = artwork
     ? (getStoredArtworkTag(artwork.current, "logo") ?? null)
     : (selectedTitle?.ImageTags?.Logo ?? null);
+  // The backdrop the focus is chosen on; until the overview loads, the one
+  // the title list knows about.
+  const backdrop = artwork
+    ? (findStoredArtwork(artwork.current, "backdrop") ?? null)
+    : selectedTitle?.BackdropImageTags?.[0]
+      ? {
+          contentHash: selectedTitle.BackdropImageTags[0],
+          focus: selectedTitle.BackdropFocus ?? null,
+        }
+      : null;
+
+  /**
+   * Saves the focus and keeps the page's copy of the stored backdrop in step,
+   * so leaving and coming back to the section shows what was saved.
+   */
+  async function handleSaveFocus(next: { x: number; y: number } | null) {
+    if (!selectedId) return;
+    const id = selectedId;
+    await setBackdropFocus(id, next);
+    setArtwork((current) =>
+      current && current.item.id === id
+        ? {
+            ...current,
+            current: current.current.map((image) =>
+              image.imageType === "backdrop" && image.imageIndex === 0
+                ? { ...image, focus: next }
+                : image,
+            ),
+          }
+        : current,
+    );
+    await refreshTitle(id);
+  }
 
   async function handleTmdbSearch(event: FormEvent) {
     event.preventDefault();
@@ -534,6 +570,7 @@ export default function TmdbArtworkPage({ itemId }: { itemId?: string } = {}) {
       label: t(getKindLabelKey(kind)),
     })),
     { id: "artwork-placement", label: t("logoLayout.title") },
+    { id: "artwork-focus", label: t("backdropFocus.title") },
     { id: "artwork-names", label: t("tmdbArtwork.itemMetadata") },
   ];
 
@@ -864,6 +901,15 @@ export default function TmdbArtworkPage({ itemId }: { itemId?: string } = {}) {
           </div>
         )}
       </section>
+
+      <BackdropFocusSection
+        key={`${selectedTitle.Id}:${backdrop?.contentHash ?? ""}`}
+        itemId={selectedTitle.Id}
+        backdropTag={backdrop?.contentHash ?? null}
+        savedFocus={backdrop?.focus ?? null}
+        onSave={handleSaveFocus}
+        className={sectionCard}
+      />
 
       <section
         id="artwork-names"

@@ -90,6 +90,7 @@ function fakeImages(overrides: Partial<ImageRepository> = {}): ImageRepository {
     clear: async () => true,
     listLockedTypes: async () => [],
     deleteForItem: async () => undefined,
+    setFocus: async () => true,
     ...overrides,
   };
 }
@@ -751,5 +752,84 @@ describe("artwork routes", () => {
       `/ownAPI/v1/admin/items/${MOVIE}/metadata/preview?language=tr-TR%2Cen`,
     );
     expect((result.error as OwnApiError).statusCode).toBe(422);
+  });
+});
+
+describe("backdrop focus", () => {
+  it("stores the point on the title's backdrop", async () => {
+    const setFocus = vi.fn(async () => true);
+    const router = buildRouter({ images: fakeImages({ setFocus }) });
+
+    const result = await call(
+      router,
+      "PUT",
+      `/ownAPI/v1/admin/items/${MOVIE}/backdrop-focus`,
+      { focus: { x: 0.8, y: 0.3 } },
+    );
+
+    expect(setFocus).toHaveBeenCalledWith(MOVIE, "backdrop", 0, {
+      x: 0.8,
+      y: 0.3,
+    });
+    expect(result.json?.data).toMatchObject({ focus: { x: 0.8, y: 0.3 } });
+  });
+
+  it("returns the backdrop to its centre with an explicit null", async () => {
+    const setFocus = vi.fn(async () => true);
+    const router = buildRouter({ images: fakeImages({ setFocus }) });
+
+    await call(
+      router,
+      "PUT",
+      `/ownAPI/v1/admin/items/${MOVIE}/backdrop-focus`,
+      { focus: null },
+    );
+
+    expect(setFocus).toHaveBeenCalledWith(MOVIE, "backdrop", 0, null);
+  });
+
+  it("rejects a point outside the picture", async () => {
+    const setFocus = vi.fn(async () => true);
+    const router = buildRouter({ images: fakeImages({ setFocus }) });
+
+    for (const focus of [
+      { x: -0.1, y: 0.5 },
+      { x: 0.5, y: 1.2 },
+      { x: "0.5", y: 0.5 },
+      { x: 0.5 },
+      { x: 0.5, y: 0.5, zoom: 2 },
+      [0.5, 0.5],
+    ]) {
+      const result = await call(
+        router,
+        "PUT",
+        `/ownAPI/v1/admin/items/${MOVIE}/backdrop-focus`,
+        { focus },
+      );
+      expect((result.error as OwnApiError).statusCode).toBe(422);
+    }
+    expect(setFocus).not.toHaveBeenCalled();
+  });
+
+  it("says when there is no backdrop to adjust", async () => {
+    const router = buildRouter({
+      images: fakeImages({ setFocus: async () => false }),
+    });
+
+    const missingBackdrop = await call(
+      router,
+      "PUT",
+      `/ownAPI/v1/admin/items/${MOVIE}/backdrop-focus`,
+      { focus: { x: 0.5, y: 0.5 } },
+    );
+    expect((missingBackdrop.error as OwnApiError).statusCode).toBe(404);
+
+    const unknownItem = await call(
+      router,
+      "PUT",
+      `/ownAPI/v1/admin/items/dddddddd-9999-4999-8999-999999999999/backdrop-focus`,
+      { focus: { x: 0.5, y: 0.5 } },
+    );
+    expect((unknownItem.error as OwnApiError).statusCode).toBe(404);
   });
 });

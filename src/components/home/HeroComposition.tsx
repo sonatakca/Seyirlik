@@ -21,6 +21,7 @@ import type { SampleRegion } from "../../lib/logoShadow";
 import { getStageImageCandidates } from "../hero/heroModel";
 import { sampleUrl, useLogoShadow } from "./logoShadowStyle";
 import { useRegisterNavbarBackdrop } from "../../lib/navbarBackdrop";
+import { CENTRE_FOCUS, POSTER_FOCUS } from "../../lib/imageFocus";
 import { useBakedLogoShadows } from "./useBakedLogoShadows";
 import {
   measureWords,
@@ -200,6 +201,9 @@ export function HeroComposition({
    * printed title away and the logo comes up in its place.
    */
   const isPoster = artwork?.type === "poster";
+  // The point of the picture each crop keeps in view: a poster's top, or the
+  // backdrop's chosen focus, or its centre.
+  const focus = isPoster ? POSTER_FOCUS : (artwork?.focus ?? CENTRE_FOCUS);
   // On stage the artwork is what the navbar stands on. Its box is the stage
   // itself, where the frame comes to rest, so a lift still under way does
   // not skew where the navbar's wordmark falls on it.
@@ -216,10 +220,10 @@ export function HeroComposition({
               (
                 frameRef.current?.parentElement ?? document.body
               ).getBoundingClientRect(),
-            position: { x: 0.5, y: isPoster ? 0 : 0.5 },
+            focus,
           }
         : null,
-    [isStage, artworkUrl, isPoster],
+    [isStage, artworkUrl, focus],
   );
   useRegisterNavbarBackdrop(navbarBackdrop);
   const fallbackLogoUrl = item.ImageTags?.Logo
@@ -300,7 +304,6 @@ export function HeroComposition({
   // Big enough that, scaled down to the smallest radius, a clipping box still
   // reaches past the whole stage from its corner.
   const big = Math.ceil(3 * Math.max(stage.width, stage.height));
-  const objectY = isPoster ? 0 : 0.5;
 
   const sources = useMemo(
     () => [m.x, m.y, m.scale, m.dim, m.titleScale, m.titleY, m.trailer],
@@ -364,7 +367,7 @@ export function HeroComposition({
           artworkRef.current,
           {
             transform: natural
-              ? coverFit(natural, stage, height, objectY).transform
+              ? coverFit(natural, stage, height, focus).transform
               : "none",
           },
         ],
@@ -372,7 +375,7 @@ export function HeroComposition({
           miniatureRef.current,
           {
             transform: natural
-              ? coverFit(natural, stage, height, objectY).transform
+              ? coverFit(natural, stage, height, focus).transform
               : "none",
             opacity: miniatureCover(scale, slotScale),
           },
@@ -413,7 +416,7 @@ export function HeroComposition({
       queueMove,
       big,
       natural,
-      objectY,
+      focus,
       isPoster,
       stageShadow.strength,
       Boolean(trailerUrl),
@@ -477,7 +480,7 @@ export function HeroComposition({
           // the faces are, and loses its foot, where the lettering is.
           style={
             natural
-              ? coverFit(natural, stage, stage.height, objectY).rect
+              ? coverFit(natural, stage, stage.height, focus).rect
               : isPoster
                 ? { objectPosition: "50% 0%" }
                 : undefined
@@ -518,7 +521,7 @@ export function HeroComposition({
             } ${artwork.type === "primary" ? "blur-2xl" : ""}`}
             style={
               natural
-                ? coverFit(natural, stage, stage.height, objectY).rect
+                ? coverFit(natural, stage, stage.height, focus).rect
                 : isPoster
                   ? { objectPosition: "50% 0%" }
                   : undefined
