@@ -69,6 +69,11 @@ export interface MetadataRepository {
     itemId: string,
     layout: { x: number; y: number; width: number; shadow: number } | null,
   ): Promise<boolean>;
+  /**
+   * Replaces the names an administrator added for search. Returns false for an
+   * unknown id.
+   */
+  setSearchAliases(itemId: string, aliases: readonly string[]): Promise<boolean>;
 }
 
 const TARGET_COLUMNS = `
@@ -386,6 +391,15 @@ export function createMetadataRepository(
           layout?.width ?? null,
           layout?.shadow ?? null,
         ],
+      );
+      return (result.rowCount ?? 0) > 0;
+    },
+
+    setSearchAliases: async (itemId, aliases) => {
+      const result = await pool.query(
+        `UPDATE items SET search_aliases = $2::text[], updated_at = now()
+         WHERE id = $1`,
+        [itemId, aliases],
       );
       return (result.rowCount ?? 0) > 0;
     },

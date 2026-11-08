@@ -35,10 +35,19 @@ function itemAndHostsSql(itemAlias: string): string {
  * Aliases here are code-owned SQL identifiers, never request input.
  */
 export function mediaAvailableSql(alias = "item"): string {
-  return `EXISTS (SELECT 1 FROM items available_item
-    WHERE (available_item.id = ${alias}.id OR available_item.series_id = ${alias}.id OR available_item.parent_id = ${alias}.id
-      OR available_item.id IN (SELECT member.item_id FROM collection_members member WHERE member.collection_id = ${alias}.id))
-      AND ${itemHeldSql("available_item")})`;
+  // One branch per way an item can be available, each on its own index: the
+  // item itself, its episodes (series_id), its children (parent_id), and a
+  // collection's members. Written as one EXISTS whose WHERE joined these with
+  // OR, no index applied and every row checked scanned all of items — over
+  // three seconds to list a few thousand titles for search.
+  return `(${itemHeldSql(alias)}
+    OR EXISTS (SELECT 1 FROM items available_item
+      WHERE available_item.series_id = ${alias}.id AND ${itemHeldSql("available_item")})
+    OR EXISTS (SELECT 1 FROM items available_item
+      WHERE available_item.parent_id = ${alias}.id AND ${itemHeldSql("available_item")})
+    OR EXISTS (SELECT 1 FROM collection_members member
+      JOIN items available_item ON available_item.id = member.item_id
+      WHERE member.collection_id = ${alias}.id AND ${itemHeldSql("available_item")}))`;
 }
 
 /** An episode held inside another item's file is processed under that item. */

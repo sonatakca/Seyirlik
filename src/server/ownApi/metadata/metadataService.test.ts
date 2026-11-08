@@ -63,6 +63,7 @@ function fakeMetadata(initial: MetadataTarget) {
     },
     lockFields: async () => undefined,
     setLogoLayout: async () => true,
+    setSearchAliases: async () => true,
   };
 
   return {

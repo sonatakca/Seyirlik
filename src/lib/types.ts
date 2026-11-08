@@ -176,6 +176,11 @@ export interface MediaItem {
    * title; it is what search also matches after the title was renamed.
    */
   LocalizedTitles?: Record<string, string>;
+  /**
+   * Names an administrator added so search finds the title by them too, such
+   * as a release title the provider does not list. Never shown as the title.
+   */
+  SearchAliases?: string[];
   Type?: string;
   MediaType?: string;
   ExtraType?: string;

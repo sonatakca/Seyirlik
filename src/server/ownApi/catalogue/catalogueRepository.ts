@@ -24,6 +24,8 @@ export interface CatalogueItemRow {
   originalTitle: string | null;
   /** The provider's name per language (`{"tr": …, "en": …}`), for search. */
   localizedTitles?: Record<string, string>;
+  /** Names an administrator added so search finds the title by them too. */
+  searchAliases?: string[];
   overview: string | null;
   tagline: string | null;
   productionYear: number | null;
@@ -60,6 +62,7 @@ const ITEM_COLUMNS = `
   item.sort_title,
   item.original_title,
   item.localized_titles,
+  item.search_aliases,
   item.overview,
   item.tagline,
   item.production_year,
@@ -111,6 +114,7 @@ interface RawItemRow extends Record<string, unknown> {
   sort_title: string;
   original_title: string | null;
   localized_titles?: Record<string, string> | null;
+  search_aliases?: string[] | null;
   overview: string | null;
   tagline: string | null;
   production_year: number | null;
@@ -166,6 +170,7 @@ function toItemRow(row: RawItemRow): CatalogueItemRow {
     sortTitle: row.sort_title,
     originalTitle: row.original_title,
     localizedTitles: row.localized_titles ?? {},
+    searchAliases: row.search_aliases ?? [],
     overview: row.overview,
     tagline: row.tagline,
     productionYear: row.production_year,
@@ -753,7 +758,8 @@ export function createCatalogueRepository(
 
     // Besides the shown and original titles, the provider's names in other
     // languages (localized_titles), so a title an administrator renamed is
-    // still found by the names people know it by.
+    // still found by the names people know it by, and the names an
+    // administrator added (search_aliases).
     searchItems: async (userId, searchQuery, limit) => {
       const pattern = `%${searchQuery.toLowerCase().replace(/[%_\\]/g, "\\$&")}%`;
       return selectItems(
@@ -763,7 +769,10 @@ export function createCatalogueRepository(
               OR lower(COALESCE(item.original_title, '')) LIKE $2 ESCAPE '\\'
               OR EXISTS (
                 SELECT 1 FROM jsonb_each_text(item.localized_titles) AS named(language, value)
-                WHERE lower(named.value) LIKE $2 ESCAPE '\\'))
+                WHERE lower(named.value) LIKE $2 ESCAPE '\\')
+              OR EXISTS (
+                SELECT 1 FROM unnest(item.search_aliases) AS alias(value)
+                WHERE lower(alias.value) LIKE $2 ESCAPE '\\'))
          AND ${LIBRARY_VISIBILITY_PREDICATE}`,
         [userId, pattern],
         // Prefix matches first, then alphabetical.
@@ -779,10 +788,12 @@ export function createCatalogueRepository(
         title: string;
         original_title: string | null;
         localized_titles: Record<string, string> | null;
+        search_aliases: string[] | null;
         series_title: string | null;
       }>(
         `SELECT item.id, item.kind, item.title, item.original_title,
-                item.localized_titles, series.title AS series_title
+                item.localized_titles, item.search_aliases,
+                series.title AS series_title
          FROM items item
          LEFT JOIN items series ON series.id = item.series_id
          WHERE item.kind IN ('movie', 'series', 'episode', 'book')
@@ -798,9 +809,10 @@ export function createCatalogueRepository(
         kind: row.kind,
         title: row.title,
         originalTitle: row.original_title,
-        alternateTitles: Object.values(row.localized_titles ?? {}).filter(
-          (value): value is string => typeof value === "string",
-        ),
+        alternateTitles: [
+          ...Object.values(row.localized_titles ?? {}),
+          ...(row.search_aliases ?? []),
+        ].filter((value): value is string => typeof value === "string"),
         seriesTitle: row.series_title,
       }));
     },

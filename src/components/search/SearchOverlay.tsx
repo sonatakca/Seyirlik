@@ -70,13 +70,81 @@ function getResultSubtitle(item: MediaItem): string {
   return item.ProductionYear ? String(item.ProductionYear) : "";
 }
 
+/** The artwork tile's frame: 16:9 for an episode still, 2:3 for a poster. */
+function tileSize(isStill: boolean): string {
+  return isStill ? "aspect-video w-28 sm:w-36" : "aspect-[2/3] w-14 sm:w-16";
+}
+
+/** An image that arrives fades in over its placeholder rather than popping. */
+function fadeIn(done: boolean): string {
+  return `transition-opacity duration-300 motion-reduce:transition-none ${
+    done ? "opacity-100" : "opacity-0"
+  }`;
+}
+
+/**
+ * Whether an image has arrived. React listens for `load` before it sets
+ * `src`, so an image the browser already holds reports in too.
+ */
+function useImageLoaded() {
+  const [done, setDone] = useState(false);
+  const [failed, setFailed] = useState(false);
+  return {
+    done,
+    failed,
+    onLoad: () => setDone(true),
+    onError: () => setFailed(true),
+  };
+}
+
+/**
+ * Rows standing where results will be, while the first ones are on their way:
+ * the panel keeps its shape instead of sitting empty under a spinner.
+ */
+function ResultsSkeleton({ label }: { label: string }) {
+  return (
+    <div role="status" aria-label={label} className="px-1">
+      <span
+        aria-hidden="true"
+        className="shimmer mx-2 mb-3 mt-2 block h-2.5 w-16 rounded-full"
+      />
+      <ul aria-hidden="true" className="space-y-1">
+        {[0.62, 0.48, 0.7, 0.54].map((width, index) => (
+          <li key={index} className="flex items-center gap-3 px-3 py-2">
+            <span
+              className={`shimmer block shrink-0 rounded-lg ${tileSize(false)}`}
+            />
+            <span className="flex min-w-0 flex-1 flex-col gap-2">
+              <span
+                className="shimmer block h-3.5 rounded-full"
+                style={{ width: `${width * 100}%` }}
+              />
+              <span className="shimmer block h-2.5 w-12 rounded-full" />
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /**
  * The logo laid over a poster, honouring the placement stored by the artwork
  * editor. The layout is expressed in fractions of the artwork, so the same
  * numbers that position it on a full-size card also position it here.
  */
-function ResultLogo({ item, logoUrl }: { item: MediaItem; logoUrl: string }) {
+function ResultLogo({
+  item,
+  logoUrl,
+  posterShown,
+}: {
+  item: MediaItem;
+  logoUrl: string;
+  /** A logo over a tile still shimmering would float on nothing. */
+  posterShown: boolean;
+}) {
   const logoLayout = getLogoLayout(item);
+  const loaded = useImageLoaded();
   const logoShadowFrame = getLogoShadowFrameStyle(
     logoLayout?.shadow ?? DEFAULT_LOGO_SHADOW,
   );
@@ -94,7 +162,8 @@ function ResultLogo({ item, logoUrl }: { item: MediaItem; logoUrl: string }) {
           alt=""
           aria-hidden="true"
           loading="lazy"
-          className="mb-1.5 h-auto max-h-[42%] w-auto max-w-[82%] object-contain"
+          onLoad={loaded.onLoad}
+          className={`mb-1.5 h-auto max-h-[42%] w-auto max-w-[82%] object-contain ${fadeIn(loaded.done && posterShown)}`}
         />
       </span>
     );
@@ -130,7 +199,8 @@ function ResultLogo({ item, logoUrl }: { item: MediaItem; logoUrl: string }) {
             alt=""
             aria-hidden="true"
             loading="lazy"
-            className="block h-auto w-full object-contain"
+            onLoad={loaded.onLoad}
+            className={`block h-auto w-full object-contain ${fadeIn(loaded.done && posterShown)}`}
           />
         </span>
       </span>
@@ -158,27 +228,34 @@ function ResultArtwork({
     logoWidth: 320,
   });
   const isStill = shape === "still";
+  const image = useImageLoaded();
+  const waiting = Boolean(imageUrl) && !image.done && !image.failed;
 
   return (
     <span
-      className={`relative block shrink-0 overflow-hidden rounded-lg bg-white/[0.06] ${
-        isStill ? "aspect-video w-28 sm:w-36" : "aspect-[2/3] w-14 sm:w-16"
-      }`}
+      className={`relative block shrink-0 overflow-hidden rounded-lg bg-white/[0.06] ${tileSize(
+        isStill,
+      )}`}
     >
-      {imageUrl ? (
+      {waiting ? (
+        <span aria-hidden="true" className="shimmer absolute inset-0" />
+      ) : null}
+      {imageUrl && !image.failed ? (
         <img
           src={imageUrl}
           alt=""
           loading="lazy"
           decoding="async"
-          className="absolute inset-0 h-full w-full object-cover"
+          onLoad={image.onLoad}
+          onError={image.onError}
+          className={`absolute inset-0 h-full w-full object-cover ${fadeIn(image.done)}`}
         />
       ) : (
         <span className="absolute inset-0 bg-[linear-gradient(145deg,#27272a,#09090b)]" />
       )}
 
       {logoUrl && !isStill ? (
-        <ResultLogo item={item} logoUrl={logoUrl} />
+        <ResultLogo item={item} logoUrl={logoUrl} posterShown={!waiting} />
       ) : null}
     </span>
   );
@@ -197,6 +274,8 @@ export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {
   const [status, setStatus] = useState<SearchStatus>("idle");
   const [results, setResults] = useState<MediaItem[]>([]);
   const [suggestions, setSuggestions] = useState<MediaItem[]>([]);
+  // Settled once the first read of suggestions answers, either way.
+  const [suggestionsSettled, setSuggestionsSettled] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
 
   const hasQuery = isSearchableQuery(query);
@@ -247,7 +326,10 @@ export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {
       // Suggestions are a convenience. Losing them leaves an empty box, which
       // is exactly what the overlay looked like before, so there is nothing to
       // report to the user.
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        if (isMounted) setSuggestionsSettled(true);
+      });
 
     return () => {
       isMounted = false;
@@ -472,7 +554,10 @@ export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {
               ref={listRef}
               className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2"
             >
-              {!hasQuery && flatResults.length === 0 ? (
+              {flatResults.length === 0 &&
+              (hasQuery ? status === "loading" : !suggestionsSettled) ? (
+                <ResultsSkeleton label={t("search.searching")} />
+              ) : !hasQuery && flatResults.length === 0 ? (
                 <p className="px-3 py-8 text-center text-sm font-semibold text-white/45">
                   {t("search.hint")}
                 </p>

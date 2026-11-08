@@ -131,14 +131,16 @@ export function foldTitleText(value: string): string {
 
 /**
  * Every name a title can be found by: the one it is shown under, its original
- * title, and the provider's names in other languages. An administrator may
- * rename a title, and it must still be found by the names people know.
+ * title, the provider's names in other languages, and the names an
+ * administrator added. An administrator may rename a title, and it must still
+ * be found by the names people know.
  */
 export function titleSearchNames(item: MediaItem): string[] {
   return [
     item.Name,
     item.OriginalTitle,
     ...Object.values(item.LocalizedTitles ?? {}),
+    ...(item.SearchAliases ?? []),
   ].filter((value): value is string => Boolean(value));
 }
 

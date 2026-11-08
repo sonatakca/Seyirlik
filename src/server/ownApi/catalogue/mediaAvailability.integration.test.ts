@@ -5,6 +5,7 @@ import { createDatabasePool } from "../database/databasePool";
 import { runMigrations } from "../database/migrationRunner";
 import { createCatalogueRepository } from "./catalogueRepository";
 import { createHomeRepository } from "./homeRepository";
+import { createMetadataRepository } from "../metadata/metadataRepository";
 import { createWantedRoutes } from "./wantedRoutes";
 import type { TmdbClient } from "../metadata/tmdbClient";
 import type { RouteContext, RouteDefinition } from "../api/router";
@@ -26,6 +27,7 @@ const databaseUrl = process.env.SEYIRLIK_TEST_DATABASE_URL;
       wanted: string;
     const catalogue = createCatalogueRepository(pool);
     const home = createHomeRepository(pool);
+    const metadata = createMetadataRepository(pool);
     async function item(title: string, kind = "movie", seriesId?: string) {
       const id = randomUUID();
       await pool.query(
@@ -128,6 +130,23 @@ const databaseUrl = process.env.SEYIRLIK_TEST_DATABASE_URL;
       expect(candidate?.alternateTitles).toEqual(
         expect.arrayContaining(["Para Avcısı", "The Wolf of Wall Street"]),
       );
+    });
+    it("finds a title by a name an administrator added", async () => {
+      const pirates = await item("Karayip Korsanları: Salazar'ın İntikamı");
+      await file(pirates);
+      await metadata.setSearchAliases(pirates, ["Salazar's Revenge"]);
+      expect(
+        (await catalogue.searchItems(user, "salazar's rev", 10)).map(
+          (row) => row.id,
+        ),
+      ).toContain(pirates);
+      const candidate = (await catalogue.listSearchCandidates(user, 100)).find(
+        (entry) => entry.id === pirates,
+      );
+      expect(candidate?.alternateTitles).toContain("Salazar's Revenge");
+      expect(
+        (await catalogue.getItemsByIds(user, [pirates]))[0]?.searchAliases,
+      ).toEqual(["Salazar's Revenge"]);
     });
     it("does not let a succeeded processing job stand in for files that are gone", async () => {
       const fileId = (

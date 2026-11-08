@@ -107,6 +107,29 @@ export function titleSearchNameChoices(item: MediaItem): TitleSearchName[] {
   });
 }
 
+/** What adding a typed name to a title's own search names comes to. */
+export type SearchAliasAddition =
+  | { readonly kind: "added"; readonly names: string[] }
+  | { readonly kind: "empty" }
+  | { readonly kind: "known" };
+
+/**
+ * The title's own search names with one more, unless the typed name is blank
+ * or search already finds the title by it, Turkish letters and case aside.
+ */
+export function addSearchAlias(
+  item: MediaItem,
+  typed: string,
+): SearchAliasAddition {
+  const name = typed.replace(/\s+/g, " ").trim();
+  if (!name) return { kind: "empty" };
+  const key = foldTitleText(name);
+  if (titleSearchNames(item).some((known) => foldTitleText(known) === key)) {
+    return { kind: "known" };
+  }
+  return { kind: "added", names: [...(item.SearchAliases ?? []), name] };
+}
+
 export function matchesLanguageFilter(
   candidate: ArtworkCandidate,
   filter: ImageLanguageFilter,

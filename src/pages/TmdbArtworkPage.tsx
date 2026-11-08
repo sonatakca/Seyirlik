@@ -11,9 +11,11 @@ import {
   ChevronDown,
   Languages,
   Move,
+  Plus,
   RotateCcw,
   Save,
   Search,
+  X,
 } from "lucide-react";
 import {
   applyItemArtwork,
@@ -25,6 +27,7 @@ import {
   searchMetadataCandidates,
   setBackdropFocus,
   setLogoLayout,
+  setSearchNames,
   uploadCustomArtwork,
   type ArtworkCandidate,
   type ArtworkKind,
@@ -69,6 +72,7 @@ import {
   supportsTmdbArtwork,
   type ActionStatus,
   type ImageLanguageFilter,
+  addSearchAlias,
   titleSearchNameChoices,
 } from "./admin/tmdbArtworkModel";
 import { ArtworkTitleList } from "./admin/tmdbArtwork/ArtworkTitleList";
@@ -256,6 +260,9 @@ export default function TmdbArtworkPage({ itemId }: { itemId?: string } = {}) {
                 ImageTags: fresh.ImageTags,
                 LogoLayout: fresh.LogoLayout ?? null,
                 Name: fresh.Name ?? entry.Name,
+                OriginalTitle: fresh.OriginalTitle,
+                LocalizedTitles: fresh.LocalizedTitles,
+                SearchAliases: fresh.SearchAliases,
               }
             : entry,
         ),
@@ -527,6 +534,18 @@ export default function TmdbArtworkPage({ itemId }: { itemId?: string } = {}) {
         message: messageOf(error, t, t("logoLayout.couldNotSave")),
       });
     }
+  }
+
+  /** Saves the title's own search names and keeps the list the server kept. */
+  async function handleSaveSearchNames(names: string[]) {
+    if (!selectedId) return;
+    const id = selectedId;
+    const kept = await setSearchNames(id, names);
+    setTitles((current) =>
+      current.map((entry) =>
+        entry.Id === id ? { ...entry, SearchAliases: kept } : entry,
+      ),
+    );
   }
 
   async function handleSaveDisplay(event: FormEvent) {
@@ -960,13 +979,16 @@ export default function TmdbArtworkPage({ itemId }: { itemId?: string } = {}) {
               className={`${field} mt-1`}
             />
           </label>
-          {selectedTitle && selectedSupportsTmdb ? (
+          {selectedTitle ? (
             <TitleSearchNames
+              key={selectedTitle.Id}
               item={selectedTitle}
+              providerNames={selectedSupportsTmdb}
               current={display.title}
               onUse={(name) =>
                 setDisplay((value) => ({ ...value, title: name }))
               }
+              onSave={handleSaveSearchNames}
             />
           ) : null}
           <label className="block text-xs font-bold text-white/50">
@@ -1036,31 +1058,89 @@ export default function TmdbArtworkPage({ itemId }: { itemId?: string } = {}) {
  * Typing a title of one's own replaces the shown one and nothing else: search
  * keeps the original and TMDB's Turkish and English names. Listing them here
  * says so, and each one is a shortcut to showing it instead.
+ *
+ * TMDB lists one name per language, so a film released under another title
+ * elsewhere ("Salazar's Revenge" for "Dead Men Tell No Tales") is added here
+ * by hand. Those names are saved as soon as they are added or removed, apart
+ * from the title form below, and no TMDB refresh touches them.
  */
 function TitleSearchNames({
   item,
+  providerNames,
   current,
   onUse,
+  onSave,
 }: {
   item: MediaItem;
+  /** Whether the title has TMDB names to list: films and series do. */
+  providerNames: boolean;
   current: string;
   onUse: (name: string) => void;
+  onSave: (names: string[]) => Promise<void>;
 }) {
   const { t, language: uiLanguage } = useLanguage();
-  const names = titleSearchNameChoices(item);
+  const names = providerNames ? titleSearchNameChoices(item) : [];
+  const added = item.SearchAliases ?? [];
   const read = Object.keys(item.LocalizedTitles ?? {}).length > 0;
+  const [draft, setDraft] = useState("");
+  const [status, setStatus] = useState<ActionStatus>({
+    tone: "idle",
+    message: "",
+  });
+  const saving = status.tone === "busy";
+
+  async function save(next: string[]): Promise<boolean> {
+    setStatus({ tone: "busy", message: t("tmdbArtwork.savingSearchNames") });
+    try {
+      await onSave(next);
+      setStatus({ tone: "success", message: t("tmdbArtwork.searchNamesSaved") });
+      return true;
+    } catch (error) {
+      setStatus({
+        tone: "error",
+        message: messageOf(error, t, t("tmdbArtwork.couldNotSaveSearchNames")),
+      });
+      return false;
+    }
+  }
+
+  function add() {
+    const addition = addSearchAlias(item, draft);
+    if (addition.kind === "empty") return;
+    if (addition.kind === "known") {
+      setStatus({ tone: "error", message: t("tmdbArtwork.searchNameKnown") });
+      return;
+    }
+    void save(addition.names).then((saved) => {
+      if (saved) setDraft("");
+    });
+  }
+
+  const chip = (chosen: boolean) =>
+    `inline-flex max-w-full items-stretch rounded-xl border text-xs font-semibold transition ${
+      chosen
+        ? "border-emerald-300/40 bg-emerald-400/10 text-emerald-100"
+        : "border-white/10 bg-black/30 text-white/80 hover:border-white/25 hover:text-white"
+    }`;
+  const useButton =
+    "inline-flex min-w-0 items-baseline gap-1.5 rounded-xl px-2.5 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]";
+  const sourceLabel =
+    "shrink-0 text-[0.62rem] font-black uppercase tracking-[0.08em] text-white/40";
 
   return (
     <div className="-mt-1">
       <p className="text-xs font-bold text-white/50">
         {t("tmdbArtwork.searchNames")}
       </p>
-      {names.length > 0 ? (
+      {names.length > 0 || added.length > 0 ? (
         <ul className="mt-1.5 flex flex-wrap gap-1.5">
           {names.map((name) => {
             const chosen = current.trim() === name.value;
             return (
-              <li key={`${name.source}:${name.value}`} className="min-w-0">
+              <li
+                key={`${name.source}:${name.value}`}
+                className={`min-w-0 ${chip(chosen)}`}
+              >
                 <button
                   type="button"
                   onClick={() => onUse(name.value)}
@@ -1068,13 +1148,9 @@ function TitleSearchNames({
                   aria-label={formatTemplate(t("tmdbArtwork.useAsTitle"), {
                     name: name.value,
                   })}
-                  className={`inline-flex max-w-full items-baseline gap-1.5 rounded-xl border px-2.5 py-1 text-left text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
-                    chosen
-                      ? "border-emerald-300/40 bg-emerald-400/10 text-emerald-100"
-                      : "border-white/10 bg-black/30 text-white/80 hover:border-white/25 hover:text-white"
-                  }`}
+                  className={useButton}
                 >
-                  <span className="shrink-0 text-[0.62rem] font-black uppercase tracking-[0.08em] text-white/40">
+                  <span className={sourceLabel}>
                     {name.source === "original"
                       ? t("tmdbArtwork.searchNameOriginal")
                       : languageName(name.source, uiLanguage)}
@@ -1084,14 +1160,88 @@ function TitleSearchNames({
               </li>
             );
           })}
+          {added.map((name) => {
+            const chosen = current.trim() === name;
+            return (
+              <li key={`added:${name}`} className={`min-w-0 ${chip(chosen)}`}>
+                <button
+                  type="button"
+                  onClick={() => onUse(name)}
+                  aria-pressed={chosen}
+                  aria-label={formatTemplate(t("tmdbArtwork.useAsTitle"), {
+                    name,
+                  })}
+                  className={useButton}
+                >
+                  <span className={sourceLabel}>
+                    {t("tmdbArtwork.searchNameAdded")}
+                  </span>
+                  <span className="min-w-0 break-words">{name}</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() =>
+                    void save(added.filter((entry) => entry !== name))
+                  }
+                  aria-label={formatTemplate(
+                    t("tmdbArtwork.removeSearchName"),
+                    { name },
+                  )}
+                  className="grid shrink-0 place-items-center rounded-xl px-1.5 text-white/40 transition hover:text-rose-200 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                >
+                  <X className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
+      <div className="mt-2 flex gap-2">
+        <label className="sr-only" htmlFor="search-name-draft">
+          {t("tmdbArtwork.addSearchName")}
+        </label>
+        <input
+          id="search-name-draft"
+          value={draft}
+          maxLength={200}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            // The field sits inside the title form; Enter adds the name rather
+            // than saving the title.
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            if (!saving) add();
+          }}
+          placeholder={t("tmdbArtwork.addSearchName")}
+          className={`${field} flex-1 py-1.5 text-xs`}
+        />
+        <button
+          type="button"
+          disabled={saving || !draft.trim()}
+          onClick={add}
+          className="inline-flex items-center gap-1.5 rounded-2xl border border-white/15 px-3 py-1.5 text-xs font-black text-white/70 transition hover:border-white/30 hover:text-white disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+        >
+          <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+          {t("tmdbArtwork.addSearchNameButton")}
+        </button>
+      </div>
+      {status.message ? (
+        <p
+          role={status.tone === "error" ? "alert" : "status"}
+          className={`mt-1.5 text-xs font-bold ${getStatusClasses(status.tone)}`}
+        >
+          {status.message}
+        </p>
+      ) : null}
       <p className="mt-1.5 text-[0.7rem] font-semibold leading-5 text-white/35">
-        {t(
-          read
-            ? "tmdbArtwork.searchNamesHint"
-            : "tmdbArtwork.searchNamesMissing",
-        )}
+        {providerNames
+          ? `${t(
+              read
+                ? "tmdbArtwork.searchNamesHint"
+                : "tmdbArtwork.searchNamesMissing",
+            )} ${t("tmdbArtwork.searchNamesAddedHint")}`
+          : t("tmdbArtwork.searchNamesAddedHint")}
       </p>
     </div>
   );

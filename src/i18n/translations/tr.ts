@@ -1944,6 +1944,16 @@ export const tr = {
   "tmdbArtwork.searchNamesMissing":
     'Bu yapımın TMDB adları henüz okunmadı. Kütüphane Bakımı\'nda "Yaş sınırlarını, koleksiyonları ve adları getir" işlemini çalıştırın.',
   "tmdbArtwork.searchNameOriginal": "Orijinal",
+  "tmdbArtwork.searchNameAdded": "Eklenen",
+  "tmdbArtwork.addSearchName": "Aramada bulunacak bir ad ekleyin, örneğin başka bir gösterim adı",
+  "tmdbArtwork.addSearchNameButton": "Ekle",
+  "tmdbArtwork.removeSearchName": "Aramadan kaldır: {name}",
+  "tmdbArtwork.searchNameKnown": "Arama bu yapımı zaten bu adla buluyor.",
+  "tmdbArtwork.savingSearchNames": "Adlar kaydediliyor...",
+  "tmdbArtwork.searchNamesSaved": "Kaydedildi. Arama bu yapımı yukarıdaki adlarla buluyor.",
+  "tmdbArtwork.couldNotSaveSearchNames": "Adlar kaydedilemedi.",
+  "tmdbArtwork.searchNamesAddedHint":
+    "Eklediğiniz adlar TMDB yenilemelerinde korunur ve hiçbir zaman başlık olarak gösterilmez.",
   "tmdbArtwork.useAsTitle": "Başlık olarak kullan: {name}",
   "tmdbArtwork.fieldOverview": "Açıklama",
   "tmdbArtwork.title": "TMDB Görselleri",

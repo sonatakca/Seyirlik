@@ -38,6 +38,7 @@ vi.mock("../../i18n/LanguageContext", () => ({
         "search.groupShows": "Shows",
         "search.groupEpisodes": "Episodes",
         "search.suggestions": "Suggestions",
+        "search.searching": "Searching…",
       })[key] ?? key,
   }),
 }));
@@ -105,6 +106,43 @@ describe("SearchOverlay", () => {
       .getAllByText(/^(Movies|Shows|Episodes)$/)
       .map((node) => node.textContent);
     expect(headings).toEqual(["Movies", "Shows", "Episodes"]);
+  });
+
+  it("holds the panel's shape with skeleton rows until results arrive", async () => {
+    let answer: (items: MediaItem[]) => void = () => undefined;
+    mockedSearchItems.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+
+    renderOverlay();
+    fireEvent.change(screen.getByRole("searchbox"), {
+      target: { value: "pirat" },
+    });
+
+    expect(
+      await screen.findByRole("status", { name: "Searching…" }),
+    ).toBeInTheDocument();
+
+    await vi.advanceTimersByTimeAsync(400);
+    answer([
+      {
+        ...item("movie-1", "Salazar's Revenge", "Movie"),
+        ImageTags: { Primary: "poster-tag" },
+      },
+    ]);
+
+    expect(await screen.findByText("Salazar's Revenge")).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Searching…" })).toBeNull();
+    // The poster shimmers where it will be until it has loaded, then fades in.
+    const row = screen.getByText("Salazar's Revenge").closest("button")!;
+    const poster = row.querySelector("img")!;
+    expect(row.querySelector(".shimmer")).not.toBeNull();
+    expect(poster.className).toContain("opacity-0");
+    fireEvent.load(poster);
+    expect(row.querySelector(".shimmer")).toBeNull();
+    expect(poster.className).toContain("opacity-100");
   });
 
   it("opens the highlighted result on Enter", async () => {

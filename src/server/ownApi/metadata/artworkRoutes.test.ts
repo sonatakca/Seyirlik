@@ -75,6 +75,7 @@ function fakeMetadata(): MetadataRepository {
     markFailed: async () => undefined,
     lockFields: async () => undefined,
     setLogoLayout: async () => true,
+    setSearchAliases: async () => true,
   };
 }
 
@@ -752,6 +753,81 @@ describe("artwork routes", () => {
       `/ownAPI/v1/admin/items/${MOVIE}/metadata/preview?language=tr-TR%2Cen`,
     );
     expect((result.error as OwnApiError).statusCode).toBe(422);
+  });
+});
+
+describe("search names", () => {
+  it("saves a title's names tidied, without needing a TMDB match", async () => {
+    // A release title the provider does not list is exactly what this is for,
+    // so it cannot depend on the provider; a book can carry names too.
+    const setSearchAliases = vi.fn(async () => true);
+    const router = buildRouterWith({ setSearchAliases });
+
+    const result = await call(
+      router,
+      "PUT",
+      `/ownAPI/v1/admin/items/${BOOK}/search-names`,
+      {
+        names: [
+          "  Pirates of the Caribbean:   Salazar's Revenge ",
+          "",
+          "PIRATES OF THE CARIBBEAN: SALAZAR'S REVENGE",
+          "Karayip Korsanları 5",
+        ],
+      },
+    );
+
+    const names = [
+      "Pirates of the Caribbean: Salazar's Revenge",
+      "Karayip Korsanları 5",
+    ];
+    expect(setSearchAliases).toHaveBeenCalledWith(BOOK, names);
+    expect(result.json?.data).toEqual({ names });
+  });
+
+  it("clears every name with an empty list", async () => {
+    const setSearchAliases = vi.fn(async () => true);
+    const router = buildRouterWith({ setSearchAliases });
+
+    await call(router, "PUT", `/ownAPI/v1/admin/items/${MOVIE}/search-names`, {
+      names: [],
+    });
+
+    expect(setSearchAliases).toHaveBeenCalledWith(MOVIE, []);
+  });
+
+  it("rejects names that are not a list of short strings", async () => {
+    const router = buildRouter();
+
+    for (const body of [
+      { names: "Salazar's Revenge" },
+      { names: [42] },
+      { names: ["x".repeat(201)] },
+      { names: Array.from({ length: 21 }, (_, index) => `Name ${index}`) },
+      { names: [], extra: true },
+      {},
+    ]) {
+      const result = await call(
+        router,
+        "PUT",
+        `/ownAPI/v1/admin/items/${MOVIE}/search-names`,
+        body,
+      );
+      expect((result.error as OwnApiError).statusCode).toBe(422);
+    }
+  });
+
+  it("reports an unknown item rather than silently saving nothing", async () => {
+    const router = buildRouterWith({ setSearchAliases: async () => false });
+
+    const result = await call(
+      router,
+      "PUT",
+      `/ownAPI/v1/admin/items/${MOVIE}/search-names`,
+      { names: ["Salazar's Revenge"] },
+    );
+
+    expect((result.error as OwnApiError).code).toBe("ITEM_NOT_FOUND");
   });
 });
 

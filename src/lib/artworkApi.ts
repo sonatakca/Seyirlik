@@ -149,6 +149,21 @@ export async function setLogoLayout(
 }
 
 /**
+ * Replaces the names, besides the provider's, that search finds this title
+ * by. The server tidies them and answers with the list it kept.
+ */
+export async function setSearchNames(
+  itemId: string,
+  names: readonly string[],
+): Promise<string[]> {
+  const result = await ownApiClient.request<{ names: string[] }>(
+    `/admin/items/${encodeURIComponent(itemId)}/search-names`,
+    { method: "PUT", body: { names } },
+  );
+  return result.names;
+}
+
+/**
  * Which part of the title's backdrop the heroes keep in view, or null for the
  * picture's centre.
  */

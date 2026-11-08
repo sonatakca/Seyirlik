@@ -1942,6 +1942,16 @@ export const en = {
   "tmdbArtwork.searchNamesMissing":
     'TMDB\'s names for this title have not been read yet. Run "Fetch ratings, collections and names" in Library Maintenance.',
   "tmdbArtwork.searchNameOriginal": "Original",
+  "tmdbArtwork.searchNameAdded": "Added",
+  "tmdbArtwork.addSearchName": "Add a name search should find, e.g. another release title",
+  "tmdbArtwork.addSearchNameButton": "Add",
+  "tmdbArtwork.removeSearchName": "Remove from search: {name}",
+  "tmdbArtwork.searchNameKnown": "Search already finds this title by that name.",
+  "tmdbArtwork.savingSearchNames": "Saving names...",
+  "tmdbArtwork.searchNamesSaved": "Saved. Search finds this title by the names above.",
+  "tmdbArtwork.couldNotSaveSearchNames": "The names could not be saved.",
+  "tmdbArtwork.searchNamesAddedHint":
+    "Names you add stay through TMDB refreshes and are never shown as the title.",
   "tmdbArtwork.useAsTitle": "Use as title: {name}",
   "tmdbArtwork.fieldOverview": "Overview",
   "tmdbArtwork.title": "TMDB Artwork",

@@ -233,6 +233,64 @@ function parseLogoLayout(value: unknown): LogoLayout | null {
   };
 }
 
+/** How many names a title can carry for search, and how long each may be. */
+export const MAX_SEARCH_ALIASES = 20;
+export const MAX_SEARCH_ALIAS_LENGTH = 200;
+
+/**
+ * The names an administrator wants a title found by, tidied: spaces
+ * collapsed, blanks dropped, and a name repeated in another case kept once in
+ * the spelling it was first given.
+ */
+export function parseSearchAliases(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    throw new OwnApiError(
+      "VALIDATION_FAILED",
+      "names must be an array of strings.",
+      422,
+    );
+  }
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      throw new OwnApiError(
+        "VALIDATION_FAILED",
+        "names must be an array of strings.",
+        422,
+      );
+    }
+    const name = entry.normalize("NFC").replace(/\s+/g, " ").trim();
+    if (!name) continue;
+    if (name.length > MAX_SEARCH_ALIAS_LENGTH) {
+      throw new OwnApiError(
+        "VALIDATION_FAILED",
+        `A name may be at most ${MAX_SEARCH_ALIAS_LENGTH} characters.`,
+        422,
+      );
+    }
+    // Folded as search folds it: "PIRATES" and "pirates", "İntikamı" and
+    // "intikami" are one name. Turkish-locale lowercasing would turn "I" into
+    // a dotless "ı" and keep both.
+    const key = name
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/ı/g, "i");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+  }
+  if (names.length > MAX_SEARCH_ALIASES) {
+    throw new OwnApiError(
+      "VALIDATION_FAILED",
+      `A title may have at most ${MAX_SEARCH_ALIASES} names.`,
+      422,
+    );
+  }
+  return names;
+}
+
 /**
  * The point of a backdrop a crop keeps in view, or null to return to the
  * picture's centre. As with a logo layout, null is a value and not an
@@ -609,6 +667,31 @@ export function createArtworkRoutes({
         onLogoLayoutChanged?.(itemId);
 
         sendData(context.response, context.requestId, { layout });
+      },
+    },
+
+    {
+      /**
+       * The names, besides the provider's, that search finds this title by:
+       * the whole list, so removing one is saving the list without it.
+       *
+       * Like the logo layout this is not a provider choice and needs no TMDB
+       * match; a book can carry names as well as a film.
+       */
+      method: "PUT",
+      path: "/admin/items/:itemId/search-names",
+      access: "admin",
+      handle: async (context) => {
+        const itemId = requireUuid(context.params.itemId, "itemId");
+
+        const body = asObjectBody(await context.readJson(32_768), ["names"]);
+        const names = parseSearchAliases(body.names);
+
+        if (!(await metadata.setSearchAliases(itemId, names))) {
+          throw itemNotFound();
+        }
+
+        sendData(context.response, context.requestId, { names });
       },
     },
 

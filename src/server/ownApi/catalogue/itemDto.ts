@@ -69,6 +69,11 @@ export interface ItemDto {
    * administrator renamed it.
    */
   localizedTitles?: Record<string, string>;
+  /**
+   * Names an administrator added so search finds the title by them too, such
+   * as a release title the provider does not list. Shown nowhere to viewers.
+   */
+  searchAliases?: string[];
   overview?: string;
   tagline?: string;
   productionYear?: number;
@@ -253,6 +258,9 @@ export function toItemDto(
     ...(row.originalTitle ? { originalTitle: row.originalTitle } : {}),
     ...(row.localizedTitles && Object.keys(row.localizedTitles).length > 0
       ? { localizedTitles: row.localizedTitles }
+      : {}),
+    ...(row.searchAliases && row.searchAliases.length > 0
+      ? { searchAliases: row.searchAliases }
       : {}),
     ...(row.overview ? { overview: row.overview } : {}),
     ...(row.tagline ? { tagline: row.tagline } : {}),

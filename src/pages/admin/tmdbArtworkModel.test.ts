@@ -3,6 +3,7 @@ import type { ArtworkCandidate } from "../../lib/artworkApi";
 import type { MediaItem } from "../../lib/types";
 import {
   ARTWORK_PAGE_SIZE,
+  addSearchAlias,
   artworkQuality,
   countCandidates,
   filterTitles,
@@ -119,6 +120,48 @@ describe("title selection", () => {
       ),
     ).toEqual(["original"]);
     expect(titleSearchNameChoices(item({ Name: "Dune" }))).toEqual([]);
+  });
+
+  it("finds a title by a name an administrator added", () => {
+    // TMDB lists one name per language, so another country's release title
+    // is only searchable once someone adds it.
+    const pirates = item({
+      Id: "pirates",
+      Name: "Karayip Korsanları: Salazar'ın İntikamı",
+      OriginalTitle: "Pirates of the Caribbean: Dead Men Tell No Tales",
+      SearchAliases: ["Pirates of the Caribbean: Salazar's Revenge"],
+    });
+    expect(
+      filterTitles([pirates], "salazar's revenge").map((entry) => entry.Id),
+    ).toEqual(["pirates"]);
+    // Listed apart from the provider's names, which they are not.
+    expect(titleSearchNameChoices(pirates)).toEqual([
+      {
+        source: "original",
+        value: "Pirates of the Caribbean: Dead Men Tell No Tales",
+      },
+    ]);
+  });
+
+  it("adds a typed name unless it is blank or already searchable", () => {
+    const pirates = item({
+      Name: "Karayip Korsanları: Salazar'ın İntikamı",
+      OriginalTitle: "Pirates of the Caribbean: Dead Men Tell No Tales",
+      LocalizedTitles: { tr: "Karayip Korsanları: Salazar'ın İntikamı" },
+      SearchAliases: ["Salazar's Revenge"],
+    });
+    expect(addSearchAlias(pirates, "  Pirates   5 ")).toEqual({
+      kind: "added",
+      names: ["Salazar's Revenge", "Pirates 5"],
+    });
+    expect(addSearchAlias(pirates, "   ")).toEqual({ kind: "empty" });
+    for (const typed of [
+      "SALAZAR'S REVENGE",
+      "karayip korsanlari: salazar'in intikami",
+      "pirates of the caribbean: dead men tell no tales",
+    ]) {
+      expect(addSearchAlias(pirates, typed)).toEqual({ kind: "known" });
+    }
   });
 });
 

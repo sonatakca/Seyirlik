@@ -12,7 +12,10 @@ export interface SearchCandidate {
   kind: string;
   title: string;
   originalTitle: string | null;
-  /** The title's names in other languages, as the provider gives them. */
+  /**
+   * The title's other names: the provider's in other languages, and any an
+   * administrator added.
+   */
   alternateTitles?: readonly string[];
   seriesTitle: string | null;
 }

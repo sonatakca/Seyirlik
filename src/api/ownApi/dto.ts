@@ -58,6 +58,8 @@ export interface ItemDto {
   originalTitle?: string;
   /** The provider's name per language (`{"tr": …, "en": …}`), for search. */
   localizedTitles?: Record<string, string>;
+  /** Names an administrator added so search finds the title by them too. */
+  searchAliases?: string[];
   overview?: string;
   tagline?: string;
   productionYear?: number;
