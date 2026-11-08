@@ -67,6 +67,7 @@ import {
   assessSourceRead,
   createStderrTail,
   evidenceIndictsSource,
+  ffmpegOpenedInput,
   readSourceIoEvidence,
   type SourceIoEvidence,
   type SourceProbeOutcome,
@@ -782,15 +783,26 @@ export async function runEpochBuild({
          * resolving proves only that the process ended.
          */
         const stderr = createStderrTail();
+        /*
+         * Whether this attempt got past opening the source. A stall before
+         * that is a read that never came back, never a wedged encoder.
+         */
+        let inputOpened = false;
         try {
           await runEncoder(ffmpegPath, args, {
             ...(signal ? { signal } : {}),
             ...(pauseController ? { pauseController } : {}),
             logPath,
-            onStderr: (chunk) => stderr.append(chunk),
+            onStderr: (chunk) => {
+              stderr.append(chunk);
+              if (!inputOpened && ffmpegOpenedInput(stderr.value())) {
+                inputOpened = true;
+              }
+            },
             ...(onEvent
               ? {
                   onProgress: (progress) => {
+                    inputOpened = true;
                     meter.sample();
                     lastConfirmedMediaSeconds = Math.max(
                       lastConfirmedMediaSeconds,
@@ -889,6 +901,7 @@ export async function runEpochBuild({
               error.lastMediaSeconds,
             );
             stalledForMs = error.stalledForMs;
+            if (error.lastMediaSeconds > 0) inputOpened = true;
           }
           /*
            * A stalled encoder is a failed read by definition — it stopped
@@ -980,6 +993,7 @@ export async function runEpochBuild({
                 transientBudget: sourceIoMaxAttempts,
                 networkVolume: sourceOnNetworkVolume,
                 networkStallBudget: networkStallBackoffMs.length + 1,
+                inputOpened,
               });
               sourceVerdict = assessment.verdict;
               ioRechecksExhausted =

@@ -15,6 +15,7 @@ import {
   assessSourceRead,
   createStderrTail,
   evidenceIndictsSource,
+  ffmpegOpenedInput,
   readSourceIoEvidence,
   sanitiseFfmpegLine,
   SOURCE_IO_EVIDENCE_LINES,
@@ -280,6 +281,51 @@ describe("assessSourceRead on a network volume", () => {
     expect(assessment.verdict).toBe("media-progress-timeout");
   });
 
+  /*
+   * 2026-11-08, Joker epoch 2: FFmpeg printed only its stats line, never the
+   * input description, for 125 s. The probe that followed read the stretch
+   * fine, and the job was failed for good as an encoder fault.
+   */
+  it("waits out a stall before FFmpeg had opened its input", () => {
+    const assessment = assessSourceRead({
+      evidence: clean,
+      watchdogAborted: true,
+      probe: { verdict: "readable" },
+      transientBudget: 4,
+      networkVolume: true,
+      networkStallBudget: 4,
+      inputOpened: false,
+    });
+    expect(assessment.verdict).toBe("network-stall");
+    expect(assessment.fullReadBudget).toBe(4);
+  });
+
+  it("still blames an encoder that wedged after opening its input", () => {
+    const assessment = assessSourceRead({
+      evidence: clean,
+      watchdogAborted: true,
+      probe: { verdict: "readable" },
+      transientBudget: 4,
+      networkVolume: true,
+      networkStallBudget: 4,
+      inputOpened: true,
+    });
+    expect(assessment.verdict).toBe("media-progress-timeout");
+  });
+
+  it("does not excuse an unopened input that also failed to read", () => {
+    const assessment = assessSourceRead({
+      evidence: clean,
+      watchdogAborted: true,
+      probe: { verdict: "unreadable" },
+      transientBudget: 4,
+      networkVolume: true,
+      networkStallBudget: 4,
+      inputOpened: false,
+    });
+    expect(assessment.verdict).toBe("source-damage");
+  });
+
   it("changes nothing for a local disk", () => {
     const assessment = assessSourceRead({
       evidence: clean,
@@ -289,5 +335,45 @@ describe("assessSourceRead on a network volume", () => {
     });
     expect(assessment.verdict).toBe("source-damage");
     expect(assessment.fullReadBudget).toBe(1);
+
+    const unopened = assessSourceRead({
+      evidence: clean,
+      watchdogAborted: true,
+      probe: { verdict: "readable" },
+      transientBudget: 4,
+      inputOpened: false,
+    });
+    expect(unopened.verdict).toBe("media-progress-timeout");
+  });
+});
+
+describe("ffmpegOpenedInput", () => {
+  it("is false while FFmpeg has printed only its preamble", () => {
+    expect(
+      ffmpegOpenedInput("ffmpeg stats and -progress period set to 0.25.\n"),
+    ).toBe(false);
+    expect(
+      ffmpegOpenedInput(
+        "[in#0/matroska,webm @ 000001fd564a4080] Could not find codec parameters for stream 6\n" +
+          "Consider increasing the value for the 'analyzeduration' (0) and 'probesize' (5000000) options\n",
+      ),
+    ).toBe(false);
+  });
+
+  it("is true once the input description is out", () => {
+    expect(
+      ffmpegOpenedInput(
+        "ffmpeg stats and -progress period set to 0.25.\n" +
+          "Input #0, matroska,webm, from '\\\\seyirlik\\drive\\media\\Movies\\Joker.mkv':\n",
+      ),
+    ).toBe(true);
+    expect(
+      ffmpegOpenedInput(
+        "...tail\nStream mapping:\n  Stream #0:0 (hevc) -> setparams\n",
+      ),
+    ).toBe(true);
+    expect(
+      ffmpegOpenedInput("Output #0, hls, to 'C:/x/%v/playlist.m3u8':\n"),
+    ).toBe(true);
   });
 });

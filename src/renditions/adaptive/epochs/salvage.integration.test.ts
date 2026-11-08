@@ -110,7 +110,11 @@ const FAST_STALLS = {
 const HANGING_ENCODER = `
 const mode = process.env.SEYIRLIK_TEST_STDERR ?? "source-eio";
 let seconds = 0;
-for (let index = 0; index < 3; index += 1) {
+if (mode === "before-open") {
+  // Still opening the source: the preamble, then nothing at all.
+  process.stderr.write("ffmpeg stats and -progress period set to 0.25.\\n");
+}
+for (let index = 0; mode !== "before-open" && index < 3; index += 1) {
   seconds += 1;
   const clock = new Date(seconds * 1000).toISOString().slice(11, 23);
   process.stdout.write("out_time=" + clock + "\\n");
@@ -241,7 +245,8 @@ function failingSourceReads(
       | "output-write"
       | "hang"
       | "hang-silently"
-      | "hang-writing";
+      | "hang-writing"
+      | "hang-opening";
     /** How many times to fail before letting the read succeed. */
     times?: number;
   },
@@ -287,9 +292,11 @@ function failingSourceReads(
       process.env.SEYIRLIK_TEST_STDERR =
         mode === "hang-silently"
           ? "none"
-          : mode === "hang-writing"
-            ? "output-eio"
-            : "source-eio";
+          : mode === "hang-opening"
+            ? "before-open"
+            : mode === "hang-writing"
+              ? "output-eio"
+              : "source-eio";
       try {
         await runFfmpeg(process.execPath, [hangingEncoder], options);
       } finally {
@@ -1091,6 +1098,40 @@ describe("an encoder that hangs on a network volume", () => {
     expect(result.status).toBe("ready");
     expect(result.sourceDamage).toBeUndefined();
     expect(hardFaults).toEqual([]);
+    expect(verdicts).toEqual(["network-stall"]);
+    expect(failures()).toBe(1);
+  }, 900_000);
+
+  /*
+   * 2026-11-08, Joker epoch 2: FFmpeg never got past opening the Drive source,
+   * and the probe that followed read it fine. The job was failed as an encoder
+   * fault and never retried. An unopened input is a read still in flight.
+   */
+  it("waits out a stall while FFmpeg is still opening the source", async () => {
+    if (!fixture) return;
+    const harness = await createHarness();
+    const { runner, failures } = failingSourceReads(harness, {
+      window: [11, 13],
+      mode: "hang-opening",
+      times: 1,
+    });
+
+    const verdicts: string[] = [];
+    const result = await runPackage(harness, {
+      runEncoder: runner,
+      stalls: { ...FAST_STALLS, startupStallMs: 1_500 },
+      sourceOnNetworkVolume: true,
+      networkStallBackoffMs: [0, 0, 0],
+      verifySourceReadable: async () => ({ verdict: "readable" as const }),
+      onEvent: (event: { type: string; verdict?: string }) => {
+        if (event.type === "source-io-retry" && event.verdict) {
+          verdicts.push(event.verdict);
+        }
+      },
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe("ready");
     expect(verdicts).toEqual(["network-stall"]);
     expect(failures()).toBe(1);
   }, 900_000);

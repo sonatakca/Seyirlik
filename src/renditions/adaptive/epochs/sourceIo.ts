@@ -161,6 +161,17 @@ export function evidenceIndictsSource(evidence: SourceIoEvidence): boolean {
   return evidence.sourceRead && !evidence.outputWrite;
 }
 
+/**
+ * Whether FFmpeg's stderr shows it got past opening its input.
+ *
+ * FFmpeg prints `Input #0, <format>, from '<path>':` once the input is open,
+ * probed and seeked, before any output or encoder is set up. The output
+ * description and the stream mapping come later, so they prove it too.
+ */
+export function ffmpegOpenedInput(stderr: string): boolean {
+  return /^(?:Input|Output) #\d+, |^Stream mapping:/m.test(stderr);
+}
+
 /** Keeps a bounded tail of a child process's stderr without holding the lot. */
 export function createStderrTail(limit: number = SOURCE_IO_STDERR_TAIL_CHARS): {
   append(chunk: string): void;
@@ -221,9 +232,10 @@ export function probeSaysUnreadable(
  *    killed, but the source reads perfectly. That is an encoder or pipeline
  *    fault, and turning it into black picture would be replacing film to work
  *    around a bug.
- *  - `network-stall` — the encoder went quiet and the probe timed out too, but
- *    the source sits on a network volume. There, silence is a slow fetch rather
- *    than a platter's retry storm, so the read is waited for and tried again.
+ *  - `network-stall` — the encoder went quiet on a network volume, and either
+ *    the probe timed out too or FFmpeg never got past opening its input. There,
+ *    silence is a slow fetch rather than a platter's retry storm, so the read is
+ *    waited for and tried again.
  */
 export type SourceReadVerdict =
   | "transient"
@@ -255,6 +267,7 @@ export function assessSourceRead({
   transientBudget,
   networkVolume = false,
   networkStallBudget = transientBudget,
+  inputOpened = true,
 }: {
   evidence: SourceIoEvidence;
   /** True when the media-progress watchdog had to stop the encoder. */
@@ -267,6 +280,11 @@ export function assessSourceRead({
   networkVolume?: boolean;
   /** Reads a quiet network volume is allowed, from its own backoff policy. */
   networkStallBudget?: number;
+  /**
+   * False when FFmpeg never finished opening its input: no input description
+   * and no progress. Unknown counts as opened, which keeps the old verdicts.
+   */
+  inputOpened?: boolean;
 }): SourceReadAssessment {
   /*
    * The output side settles it before anything else. A destination volume
@@ -303,6 +321,29 @@ export function assessSourceRead({
       fullReadBudget: networkStallBudget,
       because:
         "the network volume stopped answering, and a bounded read of the same stretch timed out too",
+    };
+  }
+
+  /*
+   * An encoder that never opened its input cannot have wedged. FFmpeg goes
+   * quiet in open, probe and seek only while it waits for the source. Over a
+   * cloud mount that is a cold fetch, and by the time the probe asks, the
+   * fetch has often landed, so "readable" does not show that the encode was at
+   * fault. On 2026-11-08 a Joker epoch failed this way twice, and the same open
+   * and seek took 1.4 s afterwards.
+   */
+  if (
+    networkVolume &&
+    watchdogAborted &&
+    !indicted &&
+    !inputOpened &&
+    probe?.verdict === "readable"
+  ) {
+    return {
+      verdict: "network-stall",
+      fullReadBudget: networkStallBudget,
+      because:
+        "FFmpeg was still opening the source on the network volume when it went quiet",
     };
   }
 
