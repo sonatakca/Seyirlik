@@ -120,6 +120,17 @@ const HeroMotionLab = lazy(() => import("./HeroMotionLab"));
 const SWIPE_VELOCITY_PX_PER_MS = 0.45;
 const SWIPE_GIVE = 0.22;
 const SWIPE_GIVE_MAX_PX = 44;
+/**
+ * Presses that arrive while a travel is under way wait for it, in order, so
+ * none is lost and no two travels ever overlap. Only a couple wait: more
+ * would keep the hero moving long after the hand has stopped.
+ */
+const MAX_PENDING = 2;
+
+type HeroCommand =
+  | { kind: "next" }
+  | { kind: "previous" }
+  | { kind: "pick"; id: string };
 
 interface HomeHeroProps {
   items: MediaItem[];
@@ -189,6 +200,8 @@ export function HomeHero({
   const [layers, setLayers] = useState<Layer[]>([]);
   const motions = useRef(new Map<string, CompositionMotion>());
   const busyRef = useRef(false);
+  const pendingRef = useRef<HeroCommand[]>([]);
+  const isDrainingRef = useRef(false);
   const [copyItemId, setCopyItemId] = useState<string | null>(null);
   const [hasOpened, setHasOpened] = useState(false);
   // The loading skeleton stays over the hero until the first artwork is in,
@@ -674,6 +687,56 @@ export function HomeHero({
     [closeOverview, hasOpened, items, motionFor, clock, reduceMotion, total],
   );
 
+  // ------------------------------------------------------------ commands
+  const perform = useCallback(
+    async (command: HeroCommand) => {
+      if (command.kind === "next") return travel("forward");
+      if (command.kind === "previous") return travel("backward");
+      // A pick is by title, so one that waited still goes where it was
+      // aimed, now that the queue has moved; one no longer in it is dropped.
+      const size = stageRef.current;
+      if (!size) return;
+      const position = queueIndices(
+        stageIndexRef.current,
+        total,
+        queueCount(size),
+      ).findIndex((index) => items[index]?.Id === command.id);
+      if (position >= 0) await travel("forward", position);
+    },
+    [items, total, travel],
+  );
+
+  /**
+   * Runs a press now, or after the travel under way. A press that changes
+   * course, back after forward or a title picked, replaces whatever was
+   * waiting, so the hero follows the latest intent and not a backlog.
+   */
+  const request = useCallback(
+    (command: HeroCommand) => {
+      if (isDrainingRef.current) {
+        const pending = pendingRef.current;
+        const last = pending[pending.length - 1];
+        if (command.kind === "pick" || (last && last.kind !== command.kind)) {
+          pendingRef.current = [command];
+        } else if (pending.length < MAX_PENDING) {
+          pending.push(command);
+        }
+        return;
+      }
+      if (busyRef.current) return;
+      isDrainingRef.current = true;
+      void (async () => {
+        let next: HeroCommand | undefined = command;
+        while (next) {
+          await perform(next);
+          next = pendingRef.current.shift();
+        }
+        isDrainingRef.current = false;
+      })();
+    },
+    [perform],
+  );
+
   // The overview opening: one course drives the title's rise and growth, the
   // facts' rise and the text coming up under them, so none can disagree. Each
   // is linear in the overview, so tweening it on the same duration and curve
@@ -878,7 +941,7 @@ export function HomeHero({
   // screen, unless a row under the pointer or the focus claims them.
   useCarouselArrowKeys(
     sectionRef,
-    (direction) => void travel(direction === "next" ? "forward" : "backward"),
+    (direction) => request({ kind: direction }),
     { isDefault: true },
   );
 
@@ -1092,7 +1155,6 @@ export function HomeHero({
                   }}
                   aria-label={title}
                   tabIndex={isQueueAside ? -1 : undefined}
-                  disabled={isTravelling}
                   onMouseEnter={() => hover(id, true)}
                   onMouseLeave={() => hover(id, false)}
                   onFocus={() => hover(id, true)}
@@ -1101,7 +1163,7 @@ export function HomeHero({
                     hover(id, false);
                     // The card it was focused on is about to leave the queue.
                     event.currentTarget.blur();
-                    void travel("forward", position);
+                    request({ kind: "pick", id });
                   }}
                 />
               );
@@ -1181,8 +1243,7 @@ export function HomeHero({
               show themselves while they hold the focus. */}
             <HeroControlButton
               label={t("hero.previous")}
-              onClick={() => void travel("backward")}
-              disabled={isTravelling}
+              onClick={() => request({ kind: "previous" })}
               shortcut="←"
               touch={isCompact}
               className={isCompact ? "sr-only focus-visible:not-sr-only" : ""}
@@ -1191,7 +1252,10 @@ export function HomeHero({
             </HeroControlButton>
             <HeroControlButton
               label={isPaused ? t("hero.resume") : t("hero.pause")}
-              onClick={() => setIsPaused((current) => !current)}
+              onClick={() => {
+                pendingRef.current = [];
+                setIsPaused((current) => !current);
+              }}
               touch={isCompact}
             >
               {isPaused ? (
@@ -1202,8 +1266,7 @@ export function HomeHero({
             </HeroControlButton>
             <HeroControlButton
               label={t("hero.next")}
-              onClick={() => void travel("forward")}
-              disabled={isTravelling}
+              onClick={() => request({ kind: "next" })}
               shortcut="→"
               touch={isCompact}
               className={isCompact ? "sr-only focus-visible:not-sr-only" : ""}
