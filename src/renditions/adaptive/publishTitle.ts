@@ -1097,6 +1097,20 @@ async function swapPublishedDirectories(
   await rm(retired, { recursive: true, force: true }).catch(() => undefined);
 }
 
+/**
+ * What `link` answers on a volume with no hard links at all: `ENOTSUP` from the
+ * rclone Google Drive mount (WinFsp), `EISDIR` from exFAT, `EXDEV` across
+ * mounts. `EPERM` is left out because Windows also means a sharing violation
+ * by it.
+ */
+function hardLinksUnsupported(error: unknown): boolean {
+  const { code, syscall } = (error ?? {}) as NodeJS.ErrnoException;
+  return (
+    syscall === "link" &&
+    ["ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EISDIR", "EXDEV"].includes(code ?? "")
+  );
+}
+
 async function pathExists(candidate: string): Promise<boolean> {
   try {
     await stat(candidate);
@@ -1175,13 +1189,15 @@ export async function publishAdditionalRenditions({
   signal?: AbortSignal;
   destinationReserveBytes?: number;
   retainIncomingAfterPublish?: boolean;
-  fileSystem?: Pick<typeof import("node:fs/promises"), "rename">;
+  fileSystem?: Pick<typeof import("node:fs/promises"), "rename"> &
+    Partial<Pick<typeof import("node:fs/promises"), "link">>;
 }): Promise<{
   manifest: TitlePackageManifest;
   plan: TitleLayoutPlan;
   incomingDirectory: string;
   publishedRoot?: string;
 }> {
+  const linkFile = fileSystem.link ?? link;
   const publicationTitleRoot = titleRoot;
   titleRoot = await resolvePublishedTitleRoot(titleRoot);
   /*
@@ -1272,7 +1288,11 @@ export async function publishAdditionalRenditions({
   // Reuse immutable bytes on the same filesystem. All modifications below use
   // write-then-rename, so these links never permit a write into an old reader's
   // files. Unsupported links fail before the active pointer changes.
-  const clone = async (source: string, destination: string): Promise<void> => {
+  const clone = async (
+    source: string,
+    destination: string,
+    place: (from: string, to: string) => Promise<unknown>,
+  ): Promise<void> => {
     await mkdir(destination, { recursive: true });
     for (const entry of await readdir(source, { withFileTypes: true })) {
       if (
@@ -1282,28 +1302,85 @@ export async function publishAdditionalRenditions({
         continue;
       const from = path.join(source, entry.name);
       const to = path.join(destination, entry.name);
-      if (entry.isDirectory()) await clone(from, to);
-      else if (entry.isFile())
-        await link(from, to).catch((error: NodeJS.ErrnoException) => {
-          if (error.code !== "EEXIST") throw error;
-        });
+      if (entry.isDirectory()) await clone(from, to, place);
+      else if (entry.isFile()) await place(from, to);
       else
         throw new Error(
           "A published package contains an unsupported filesystem entry.",
         );
     }
   };
-  for (const directory of [
+  const packageDirectories = [
     TITLE_VIDEO_DIRECTORY,
     TITLE_AUDIO_DIRECTORY,
     TITLE_SUBTITLE_DIRECTORY,
     TITLE_PACKAGE_DIRECTORY,
-  ]) {
-    const source = path.join(titleRoot, directory);
-    if (await pathExists(source))
-      await clone(source, path.join(generationRoot, directory));
+  ];
+  const cloneGeneration = async (
+    place: (from: string, to: string) => Promise<unknown>,
+  ) => {
+    for (const directory of packageDirectories) {
+      const source = path.join(titleRoot, directory);
+      if (await pathExists(source))
+        await clone(source, path.join(generationRoot, directory), place);
+    }
+  };
+  /*
+   * The Google Drive mount (rclone/WinFsp) and exFAT have no hard links, so the
+   * generation cannot reuse the published bytes. Copying them would move the
+   * whole package (42 GB for a 4K film) to add one subtitle. When this run only
+   * adds renditions, it does not need a generation at all: every file the live
+   * master references stays exactly where it is, the new files land at paths
+   * nothing references yet, and the master is replaced last and atomically, so
+   * a reader holding either master finds every file it names. Only a run that
+   * replaces a published rendition must copy, because overwriting that file in
+   * place is what generations exist to prevent.
+   */
+  let inPlace = false;
+  try {
+    await cloneGeneration((from, to) =>
+      linkFile(from, to).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "EEXIST") throw error;
+      }),
+    );
+  } catch (error) {
+    if (!hardLinksUnsupported(error)) throw error;
+    const replacesPublished = [
+      ...existing.videoRenditions,
+      ...existing.audioRenditions,
+      ...(existing.subtitleRenditions ?? []),
+    ].some((rendition) => replaced.has(rendition.id));
+    if (!replacesPublished) {
+      inPlace = true;
+      // Never activated: the live root was checked above to be another folder.
+      await rm(generationRoot, { recursive: true, force: true });
+      await rmdir(path.dirname(generationRoot)).catch(() => undefined);
+    } else {
+      // A resumed copy has already placed some of these bytes.
+      let keptBytes = 0;
+      await cloneGeneration(async (from, to) => {
+        const [source, copied] = await Promise.all([
+          stat(from),
+          stat(to).catch(() => null),
+        ]);
+        keptBytes += Math.max(0, source.size - (copied?.size ?? 0));
+      });
+      if (
+        destinationFreeBytes - addedBytes - keptBytes <
+        destinationReserveBytes
+      ) {
+        const error = new Error(
+          "The final media volume has no hard links and not enough free space to copy the package for this replacement.",
+        ) as NodeJS.ErrnoException;
+        error.code = "ENOSPC";
+        throw error;
+      }
+      await cloneGeneration((from, to) =>
+        copyFileResumable(from, to, signal ? { signal } : {}),
+      );
+    }
   }
-  titleRoot = generationRoot;
+  if (!inPlace) titleRoot = generationRoot;
   const publishedById = new Map<string, { media: string; playlist: string }>();
   for (const group of [plan.video, plan.audio, plan.subtitle]) {
     for (const entry of group) {
@@ -1530,20 +1607,23 @@ export async function publishAdditionalRenditions({
   );
   progress.complete("master-playlist");
 
-  const pointer = path.join(publicationTitleRoot, PUBLICATION_POINTER);
-  const pendingPointer = path.join(staging, ".current.pending");
-  await writeFile(
-    pendingPointer,
-    `${JSON.stringify({ schemaVersion: 1, generation })}\n`,
-    "utf8",
-  );
-  const pointerFile = await open(pendingPointer, "r+");
-  try {
-    await pointerFile.sync();
-  } finally {
-    await pointerFile.close();
+  // In place, the master rename above was the commit and the pointer stays.
+  if (!inPlace) {
+    const pointer = path.join(publicationTitleRoot, PUBLICATION_POINTER);
+    const pendingPointer = path.join(staging, ".current.pending");
+    await writeFile(
+      pendingPointer,
+      `${JSON.stringify({ schemaVersion: 1, generation })}\n`,
+      "utf8",
+    );
+    const pointerFile = await open(pendingPointer, "r+");
+    try {
+      await pointerFile.sync();
+    } finally {
+      await pointerFile.close();
+    }
+    await fileSystem.rename(pendingPointer, pointer);
   }
-  await fileSystem.rename(pendingPointer, pointer);
 
   if (!retainIncomingAfterPublish) {
     await cleanupPublicationIncoming(

@@ -1,4 +1,11 @@
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import {
+  link,
+  mkdtemp,
+  mkdir,
+  readFile,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -292,7 +299,13 @@ async function publishedTitle(): Promise<string> {
 }
 
 /** A work directory holding just the newly encoded 1440p rendition. */
-async function workWithQhd(): Promise<{
+async function workWithQhd(
+  rendition = {
+    ...videoRendition(1440, 2560, 1072),
+    playlistPath: "video/1440p/playlist.m3u8",
+    mediaPath: "video/1440p/media.mp4",
+  },
+): Promise<{
   root: string;
   added: Pick<
     AdaptivePackageMetadata,
@@ -300,11 +313,6 @@ async function workWithQhd(): Promise<{
   >;
 }> {
   const root = await mkdtemp(path.join(tmpdir(), "seyirlik-work-"));
-  const rendition = {
-    ...videoRendition(1440, 2560, 1072),
-    playlistPath: "video/1440p/playlist.m3u8",
-    mediaPath: "video/1440p/media.mp4",
-  };
   for (const relative of [rendition.mediaPath, rendition.playlistPath]) {
     const target = path.join(root, ...relative.split("/"));
     await mkdir(path.dirname(target), { recursive: true });
@@ -472,5 +480,121 @@ describe("publishing one rendition into an existing package", () => {
     expect(
       await readFile(path.join(titleRoot, ".seyirlik", "master.m3u8"), "utf8"),
     ).toBe(before);
+  });
+});
+
+/** `link` as the rclone Google Drive mount answers it (WinFsp, 2026-11-08). */
+const noHardLinks = {
+  async link(): Promise<void> {
+    throw Object.assign(new Error("operation not supported on socket, link"), {
+      code: "ENOTSUP",
+      syscall: "link",
+    });
+  },
+};
+
+describe("publishing into a package on a volume with no hard links", () => {
+  /**
+   * At World's End: a Turkish sidecar added to a published 42 GB package on the
+   * Drive mount failed on its first link, and copying the package instead
+   * would have moved all of it to add 100 KB.
+   */
+  it("adds a rendition in place, leaving every file the old master names untouched", async () => {
+    const titleRoot = await publishedTitle();
+    const { root: workVersionRoot, added } = await workWithQhd();
+
+    const { manifest, publishedRoot } = await publishAdditionalRenditions({
+      workVersionRoot,
+      titleRoot,
+      existing: existingPackage(),
+      added,
+      fileSystem: {
+        rename: (await import("node:fs/promises")).rename,
+        ...noHardLinks,
+      },
+    });
+
+    expect(publishedRoot).toBe(titleRoot);
+    expect(await resolvePublishedTitleRoot(titleRoot)).toBe(titleRoot);
+    await expect(
+      stat(path.join(titleRoot, ".seyirlik-generations")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(manifest.video.map((rendition) => rendition.qualityHeight)).toEqual([
+      2160, 1440, 1080, 720,
+    ]);
+    for (const file of [
+      "video/2160p HDR.mp4",
+      "video/1080p HDR.mp4",
+      "video/720p HDR.mp4",
+      "audio/english.m4a",
+      "subtitle/turkish.vtt",
+    ]) {
+      expect(await readFile(path.join(titleRoot, file), "utf8")).toBe(
+        "existing-bytes",
+      );
+    }
+    const qhd = manifest.video.find((rendition) => rendition.id === "1440p")!;
+    expect(
+      await readFile(path.join(titleRoot, ...qhd.mediaPath.split("/")), "utf8"),
+    ).toBe("new-bytes");
+    expect(
+      await readFile(path.join(titleRoot, ".seyirlik", "master.m3u8"), "utf8"),
+    ).toContain("1440p");
+  });
+
+  it("copies the kept files into a new generation when it replaces a published rendition", async () => {
+    const titleRoot = await publishedTitle();
+    const { root: workVersionRoot, added } = await workWithQhd({
+      ...videoRendition(1080, 1920, 804),
+      playlistPath: "video/1080p/playlist.m3u8",
+      mediaPath: "video/1080p/media.mp4",
+    });
+
+    await publishAdditionalRenditions({
+      workVersionRoot,
+      titleRoot,
+      existing: existingPackage(),
+      added,
+      fileSystem: {
+        rename: (await import("node:fs/promises")).rename,
+        ...noHardLinks,
+      },
+    });
+
+    const live = await resolvePublishedTitleRoot(titleRoot);
+    expect(live).not.toBe(titleRoot);
+    // An old reader keeps the bytes it was reading.
+    expect(
+      await readFile(path.join(titleRoot, "video/1080p HDR.mp4"), "utf8"),
+    ).toBe("existing-bytes");
+    expect(await readFile(path.join(live, "video/1080p HDR.mp4"), "utf8")).toBe(
+      "new-bytes",
+    );
+    for (const file of ["video/2160p HDR.mp4", "audio/english.m4a"]) {
+      expect(await readFile(path.join(live, file), "utf8")).toBe(
+        "existing-bytes",
+      );
+    }
+  });
+
+  it("still links when the volume supports it", async () => {
+    const titleRoot = await publishedTitle();
+    const { root: workVersionRoot, added } = await workWithQhd();
+    let links = 0;
+    await publishAdditionalRenditions({
+      workVersionRoot,
+      titleRoot,
+      existing: existingPackage(),
+      added,
+      fileSystem: {
+        rename: (await import("node:fs/promises")).rename,
+        link: async (from, to) => {
+          links += 1;
+          return link(from, to);
+        },
+      },
+    });
+    expect(links).toBeGreaterThan(0);
+    expect(await resolvePublishedTitleRoot(titleRoot)).not.toBe(titleRoot);
   });
 });
