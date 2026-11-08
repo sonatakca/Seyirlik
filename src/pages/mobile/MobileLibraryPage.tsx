@@ -45,6 +45,7 @@ import { setPageTitle } from "../../lib/pageTitle";
 import { preloadMediaPlayback } from "../../lib/playbackPreload";
 import { getRouteForItem, getShelfNavKey } from "../../lib/routes";
 import type { MediaItem } from "../../lib/types";
+import { matchesTitleQuery } from "../../lib/searchModel";
 import { isItemCompleted } from "../../lib/watchStatus";
 import type { LibraryPageProps } from "../libraryPageTypes";
 import { preloadPlayerPage } from "../PlayerPage";
@@ -213,7 +214,9 @@ function MobileLibraryLoading({
         <div className="shimmer h-12 min-w-0 flex-1 rounded-full" />
         <div className="shimmer h-12 w-[7.4rem] shrink-0 rounded-full" />
       </div>
-      {withGroupTabs ? <LibraryGroupTabsSkeleton fill className="mb-5" /> : null}
+      {withGroupTabs ? (
+        <LibraryGroupTabsSkeleton fill className="mb-5" />
+      ) : null}
       <div className="grid grid-cols-2 gap-x-3 gap-y-4 px-[clamp(0.5rem,4vw,1.75rem)] min-[600px]:grid-cols-3">
         {Array.from({ length: 4 }, (_, index) => (
           <div key={index} className="shimmer aspect-[2/3] rounded-xl" />
@@ -365,9 +368,9 @@ export function MobileLibraryPage({
       return [];
     }
 
-    const query = searchTerm.trim().toLowerCase();
+    const query = searchTerm.trim();
     const items = query
-      ? data.items.filter((item) => item.Name.toLowerCase().includes(query))
+      ? data.items.filter((item) => matchesTitleQuery(item, query))
       : data.items;
 
     if (data.library?.Type === "BoxSet") {
@@ -421,7 +424,6 @@ export function MobileLibraryPage({
       { replace: true },
     );
   };
-
 
   // Sorting and filtering move cards rather than reshuffling them in place.
   const gridRef = useRef<HTMLDivElement | null>(null);

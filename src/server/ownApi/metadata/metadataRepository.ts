@@ -22,6 +22,11 @@ export interface TitleMetadataUpdate {
   title?: string;
   originalTitle?: string;
   originalLanguage?: string;
+  /**
+   * The provider's name for the title per language, for search. Replaces the
+   * stored set whole when given; never lock-guarded, since nothing displays it.
+   */
+  localizedTitles?: Record<string, string>;
   overview?: string;
   tagline?: string;
   premiereDate?: string;
@@ -215,6 +220,7 @@ export function createMetadataRepository(
            provider_ids = provider_ids || COALESCE($13::jsonb, '{}'::jsonb),
            metadata_state = COALESCE($14, metadata_state),
            original_language = COALESCE($15, original_language),
+           localized_titles = COALESCE($16::jsonb, localized_titles),
            metadata_refreshed_at = now(),
            updated_at = now()
          WHERE id = $1`,
@@ -241,6 +247,9 @@ export function createMetadataRepository(
           update.providerIds ? JSON.stringify(update.providerIds) : null,
           update.metadataState ?? null,
           update.originalLanguage ?? null,
+          update.localizedTitles
+            ? JSON.stringify(update.localizedTitles)
+            : null,
         ],
       );
     },

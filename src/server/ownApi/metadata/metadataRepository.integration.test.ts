@@ -85,4 +85,29 @@ integration("titles waiting for metadata, in PostgreSQL", () => {
     expect(await originalLanguageFor(series)).toBe("en");
     expect(await originalLanguageFor(episode)).toBe("en");
   });
+
+  it("keeps the provider's names beside a title an administrator renamed", async () => {
+    const film = await item("series", "matched");
+    await pool.query(
+      `UPDATE items SET title = 'My Own Name', locked_fields = ARRAY['title'] WHERE id = $1`,
+      [film],
+    );
+    await repository.applyTitleMetadata(film, {
+      title: "The Wolf of Wall Street",
+      localizedTitles: { tr: "Para Avcısı", en: "The Wolf of Wall Street" },
+    });
+    // A refresh that brings no names (the rating back-fill on its own) keeps
+    // the ones already read.
+    await repository.applyTitleMetadata(film, { officialRating: "18" });
+
+    const { rows } = await pool.query(
+      `SELECT title, localized_titles FROM items WHERE id = $1`,
+      [film],
+    );
+    expect(rows[0].title).toBe("My Own Name");
+    expect(rows[0].localized_titles).toEqual({
+      tr: "Para Avcısı",
+      en: "The Wolf of Wall Street",
+    });
+  });
 });

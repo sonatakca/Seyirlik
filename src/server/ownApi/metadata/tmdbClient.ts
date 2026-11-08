@@ -43,6 +43,12 @@ export interface TmdbTitleDetails {
   originalTitle?: string;
   /** ISO 639-1, as TMDB records it (`en`, `ja`). Absent when TMDB has none. */
   originalLanguage?: string;
+  /**
+   * The title's name in each of `SEARCH_TITLE_LANGUAGES`, keyed by ISO 639-1,
+   * for every one TMDB has a name in. Kept so search finds a title by any of
+   * its names after an administrator has chosen a wording of their own.
+   */
+  localizedTitles?: Record<string, string>;
   overview?: string;
   tagline?: string;
   releaseDate?: string;
@@ -60,6 +66,67 @@ export interface TmdbTitleDetails {
   seasons?: TmdbSeasonSummary[];
   /** The box set a film belongs to, when it belongs to one. */
   collection?: TmdbCollectionRef;
+}
+
+/**
+ * The languages a title's names are kept in for search: the interface's two.
+ * The original title is kept separately, whatever its language.
+ */
+export const SEARCH_TITLE_LANGUAGES = ["tr", "en"] as const;
+
+/** The country whose wording wins when TMDB has several for one language. */
+const PREFERRED_REGION: Record<string, string> = { tr: "TR", en: "US" };
+
+/**
+ * A title's name per search language, from TMDB's `translations` block.
+ *
+ * TMDB leaves a translation's title empty when it is the same as the original,
+ * so an English film has no English title of its own there; the original title
+ * stands in for its own language. The title the request was made in is TMDB's
+ * answer for that language, falling back to the original when it has none, so
+ * it is the last resort for that language rather than the first.
+ */
+export function readLocalizedTitles(
+  kind: "movie" | "tv",
+  details: Record<string, unknown>,
+  requestLanguage: string,
+): Record<string, string> {
+  const field = kind === "movie" ? "title" : "name";
+  const block = details.translations as { translations?: unknown } | undefined;
+  const entries = Array.isArray(block?.translations)
+    ? (block.translations as Array<Record<string, unknown>>)
+    : [];
+  const original =
+    kind === "movie" ? details.original_title : details.original_name;
+  const originalLanguage = details.original_language;
+  const requested = details[field];
+  const result: Record<string, string> = {};
+
+  for (const language of SEARCH_TITLE_LANGUAGES) {
+    const named = entries
+      .filter((entry) => entry.iso_639_1 === language)
+      .map((entry) => ({
+        region: entry.iso_3166_1,
+        value: (entry.data as Record<string, unknown> | undefined)?.[field],
+      }))
+      .filter(
+        (entry): entry is { region: unknown; value: string } =>
+          typeof entry.value === "string" && entry.value.trim() !== "",
+      );
+    const chosen =
+      named.find((entry) => entry.region === PREFERRED_REGION[language]) ??
+      named[0];
+    const fallback =
+      originalLanguage === language && typeof original === "string"
+        ? original
+        : requestLanguage.slice(0, 2) === language &&
+            typeof requested === "string"
+          ? requested
+          : undefined;
+    const value = (chosen?.value ?? fallback)?.trim();
+    if (value) result[language] = value;
+  }
+  return result;
 }
 
 export interface TmdbCollectionRef {
@@ -460,7 +527,7 @@ export function createTmdbClient({
          * recorded.
          */
         append_to_response:
-          "credits,images,release_dates,content_ratings,external_ids",
+          "credits,images,release_dates,content_ratings,external_ids,translations",
         // Language-neutral artwork is included so a logo exists even when the
         // localized set is empty.
         include_image_language: `${effectiveLanguage.slice(0, 2)},en,null`,
@@ -489,6 +556,7 @@ export function createTmdbClient({
       ...(typeof originalTitle === "string" && originalTitle !== title
         ? { originalTitle }
         : {}),
+      localizedTitles: readLocalizedTitles(kind, details, effectiveLanguage),
       // `xx` is TMDB's "no language", which says nothing about the audio.
       ...(typeof details.original_language === "string" &&
       details.original_language &&

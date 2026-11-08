@@ -21,6 +21,7 @@ import {
   languageName,
   languageOptions,
   titleArtworkOf,
+  titleSearchNameChoices,
 } from "./tmdbArtworkModel";
 
 function candidate(
@@ -81,6 +82,43 @@ describe("title selection", () => {
       "c-8bb2",
     ]);
     expect(filterTitles(titles, "   ")).toHaveLength(3);
+  });
+
+  it("finds a renamed title by TMDB's names, typed without Turkish letters", () => {
+    const titles = [
+      item({
+        Id: "wolf",
+        Name: "Kurt",
+        OriginalTitle: "The Wolf of Wall Street",
+        LocalizedTitles: { tr: "Para Avcısı", en: "The Wolf of Wall Street" },
+        ProductionYear: 2013,
+      }),
+      item({ Id: "dune", Name: "Dune" }),
+    ];
+    for (const typed of ["kurt", "para avcisi", "PARA AVCISI", "wolf of"]) {
+      expect(filterTitles(titles, typed).map((entry) => entry.Id)).toEqual([
+        "wolf",
+      ]);
+    }
+  });
+
+  it("lists the names search also finds, without repeating one", () => {
+    const wolf = item({
+      Name: "Kurt",
+      OriginalTitle: "The Wolf of Wall Street",
+      LocalizedTitles: { en: "The Wolf of Wall Street", tr: "Para Avcısı" },
+    });
+    expect(titleSearchNameChoices(wolf)).toEqual([
+      { source: "original", value: "The Wolf of Wall Street" },
+      { source: "tr", value: "Para Avcısı" },
+    ]);
+    // The shown title needs no reminder that it is searchable.
+    expect(
+      titleSearchNameChoices({ ...wolf, Name: "Para Avcısı" }).map(
+        (name) => name.source,
+      ),
+    ).toEqual(["original"]);
+    expect(titleSearchNameChoices(item({ Name: "Dune" }))).toEqual([]);
   });
 });
 

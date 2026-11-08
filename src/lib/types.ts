@@ -171,6 +171,11 @@ export interface MediaItem {
   Path?: string;
   SortName?: string;
   OriginalTitle?: string;
+  /**
+   * The provider's name per language, keyed by ISO 639-1. Never shown as the
+   * title; it is what search also matches after the title was renamed.
+   */
+  LocalizedTitles?: Record<string, string>;
   Type?: string;
   MediaType?: string;
   ExtraType?: string;

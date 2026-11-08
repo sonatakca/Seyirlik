@@ -6,6 +6,7 @@ import {
   isSearchShortcut,
   isSearchableQuery,
   isTypingTarget,
+  matchesTitleQuery,
 } from "./searchModel";
 import type { MediaItem } from "./types";
 
@@ -85,5 +86,35 @@ describe("searchModel", () => {
     expect(isTypingTarget(document.createElement("textarea"))).toBe(true);
     expect(isTypingTarget(document.createElement("div"))).toBe(false);
     expect(isTypingTarget(null)).toBe(false);
+  });
+});
+
+describe("matchesTitleQuery", () => {
+  const wolf: MediaItem = {
+    Id: "wolf",
+    Name: "Kurt",
+    OriginalTitle: "The Wolf of Wall Street",
+    LocalizedTitles: { tr: "Para Avcısı", en: "The Wolf of Wall Street" },
+  };
+
+  it("matches the shown, original and translated names", () => {
+    expect(matchesTitleQuery(wolf, "kurt")).toBe(true);
+    expect(matchesTitleQuery(wolf, "Wall Street")).toBe(true);
+    expect(matchesTitleQuery(wolf, "para avcısı")).toBe(true);
+  });
+
+  it("folds Turkish letters and accents both ways", () => {
+    expect(matchesTitleQuery(wolf, "AVCISI")).toBe(true);
+    expect(matchesTitleQuery({ Id: "a", Name: "Amélie" }, "amelie")).toBe(true);
+    expect(
+      matchesTitleQuery(
+        { Id: "i", Name: "İstanbul Hatırası" },
+        "istanbul hatirasi",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match a name the title does not have", () => {
+    expect(matchesTitleQuery(wolf, "dune")).toBe(false);
   });
 });

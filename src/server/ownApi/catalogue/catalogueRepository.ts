@@ -1,8 +1,5 @@
 import { mediaAvailableSql } from "./mediaAvailability";
-import {
-  PLAYABLE_FILE_ORDER,
-  playableFileCandidatesSql,
-} from "./fileEpisodes";
+import { PLAYABLE_FILE_ORDER, playableFileCandidatesSql } from "./fileEpisodes";
 import { contentRatingAllowedSql } from "./contentRating";
 import type { DatabasePool } from "../database/databasePool";
 import type { SearchCandidate } from "./searchRanking";
@@ -25,6 +22,8 @@ export interface CatalogueItemRow {
   title: string;
   sortTitle: string;
   originalTitle: string | null;
+  /** The provider's name per language (`{"tr": …, "en": …}`), for search. */
+  localizedTitles?: Record<string, string>;
   overview: string | null;
   tagline: string | null;
   productionYear: number | null;
@@ -60,6 +59,7 @@ const ITEM_COLUMNS = `
   item.title,
   item.sort_title,
   item.original_title,
+  item.localized_titles,
   item.overview,
   item.tagline,
   item.production_year,
@@ -110,6 +110,7 @@ interface RawItemRow extends Record<string, unknown> {
   title: string;
   sort_title: string;
   original_title: string | null;
+  localized_titles?: Record<string, string> | null;
   overview: string | null;
   tagline: string | null;
   production_year: number | null;
@@ -164,6 +165,7 @@ function toItemRow(row: RawItemRow): CatalogueItemRow {
     title: row.title,
     sortTitle: row.sort_title,
     originalTitle: row.original_title,
+    localizedTitles: row.localized_titles ?? {},
     overview: row.overview,
     tagline: row.tagline,
     productionYear: row.production_year,
@@ -749,12 +751,19 @@ export function createCatalogueRepository(
         "COALESCE(item.parent_index_number, 0), COALESCE(item.index_number, 0)",
       ),
 
+    // Besides the shown and original titles, the provider's names in other
+    // languages (localized_titles), so a title an administrator renamed is
+    // still found by the names people know it by.
     searchItems: async (userId, searchQuery, limit) => {
       const pattern = `%${searchQuery.toLowerCase().replace(/[%_\\]/g, "\\$&")}%`;
       return selectItems(
         `item.kind IN ('movie', 'series', 'episode', 'book')
          AND ${mediaAvailableSql()}
-         AND (lower(item.title) LIKE $2 ESCAPE '\\' OR lower(COALESCE(item.original_title, '')) LIKE $2 ESCAPE '\\')
+         AND (lower(item.title) LIKE $2 ESCAPE '\\'
+              OR lower(COALESCE(item.original_title, '')) LIKE $2 ESCAPE '\\'
+              OR EXISTS (
+                SELECT 1 FROM jsonb_each_text(item.localized_titles) AS named(language, value)
+                WHERE lower(named.value) LIKE $2 ESCAPE '\\'))
          AND ${LIBRARY_VISIBILITY_PREDICATE}`,
         [userId, pattern],
         // Prefix matches first, then alphabetical.
@@ -769,10 +778,11 @@ export function createCatalogueRepository(
         kind: string;
         title: string;
         original_title: string | null;
+        localized_titles: Record<string, string> | null;
         series_title: string | null;
       }>(
         `SELECT item.id, item.kind, item.title, item.original_title,
-                series.title AS series_title
+                item.localized_titles, series.title AS series_title
          FROM items item
          LEFT JOIN items series ON series.id = item.series_id
          WHERE item.kind IN ('movie', 'series', 'episode', 'book')
@@ -788,6 +798,9 @@ export function createCatalogueRepository(
         kind: row.kind,
         title: row.title,
         originalTitle: row.original_title,
+        alternateTitles: Object.values(row.localized_titles ?? {}).filter(
+          (value): value is string => typeof value === "string",
+        ),
         seriesTitle: row.series_title,
       }));
     },

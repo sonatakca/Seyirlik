@@ -1926,6 +1926,13 @@ export const en = {
   "tmdbArtwork.artworkApplied": "Saved. The title now uses this image.",
   "tmdbArtwork.fieldTitle": "Title",
   "tmdbArtwork.fieldTagline": "Tagline",
+  "tmdbArtwork.searchNames": "Also found in search as",
+  "tmdbArtwork.searchNamesHint":
+    "Search finds this title by its shown title and by each of these names. Pick one to show it instead, or type your own.",
+  "tmdbArtwork.searchNamesMissing":
+    'TMDB\'s names for this title have not been read yet. Run "Fetch ratings, collections and names" in Library Maintenance.',
+  "tmdbArtwork.searchNameOriginal": "Original",
+  "tmdbArtwork.useAsTitle": "Use as title: {name}",
   "tmdbArtwork.fieldOverview": "Overview",
   "tmdbArtwork.title": "TMDB Artwork",
   "tmdbArtwork.description":
@@ -2175,12 +2182,13 @@ export const en = {
   "tasks.metadataScan": "Metadata lookup",
   "tasks.metadataRefresh": "Metadata refresh",
   "tasks.trickplayGenerate": "Trickplay",
-  "tasks.catalogueEnrich": "Ratings and collections",
+  "tasks.catalogueEnrich": "Ratings, collections and names",
   "tasks.titlesChecked": "Titles checked",
   "tasks.rated": "Titles rated",
   "tasks.inCollections": "Films in a collection",
-  "maintenance.operation.catalogue.enrich": "Fetch ratings and collections",
-  "maintenance.enrichCatalogue": "Fetch ratings and collections",
+  "maintenance.operation.catalogue.enrich":
+    "Fetch ratings, collections and names",
+  "maintenance.enrichCatalogue": "Fetch ratings, collections and names",
   "tasks.segmentsScan": "Intro and credits sweep",
   "tasks.segmentsDetect": "Intros and credits",
   "tasks.segmentsQueued": "Seasons queued",

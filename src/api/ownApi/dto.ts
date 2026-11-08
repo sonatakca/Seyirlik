@@ -56,6 +56,8 @@ export interface ItemDto {
   title: string;
   sortTitle: string;
   originalTitle?: string;
+  /** The provider's name per language (`{"tr": …, "en": …}`), for search. */
+  localizedTitles?: Record<string, string>;
   overview?: string;
   tagline?: string;
   productionYear?: number;

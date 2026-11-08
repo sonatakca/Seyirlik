@@ -600,6 +600,27 @@ describe("film collections", () => {
     expect(collections.calls).toEqual(["detach item-1"]);
   });
 
+  it("reads a title's names in other languages on refresh and in the back-fill", async () => {
+    const names = { tr: "Para Avcısı", en: "The Wolf of Wall Street" };
+    const metadata = fakeMetadata(target({ providerIds: { tmdb: "106646" } }));
+    const service = createMetadataService({
+      metadata: metadata.repository,
+      images: fakeImages(),
+      imageStorage: fakeStorage(),
+      tmdb: fakeTmdb({
+        getMovie: async () => details({ localizedTitles: names }),
+      }),
+    });
+
+    await service.enrich("item-1");
+    expect(metadata.updates).toContainEqual({
+      itemId: "item-1",
+      update: { localizedTitles: names },
+    });
+    await service.refreshItem("item-1");
+    expect(metadata.updates.at(-1)?.update.localizedTitles).toEqual(names);
+  });
+
   it("never gives a series a collection", async () => {
     const metadata = fakeMetadata(
       target({ kind: "series", providerIds: { tmdb: "1" } }),

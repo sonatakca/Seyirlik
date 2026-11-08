@@ -1,5 +1,6 @@
 import type { ArtworkCandidate, ArtworkKind } from "../../lib/artworkApi";
 import type { MediaItem } from "../../lib/types";
+import { foldTitleText, titleSearchNames } from "../../lib/searchModel";
 import type { TranslationKey } from "../../i18n/translations";
 
 /**
@@ -57,20 +58,52 @@ export function supportsTmdbArtwork(item: MediaItem | undefined): boolean {
 }
 
 export function filterTitles(items: MediaItem[], search: string): MediaItem[] {
-  const query = search.trim().toLowerCase();
+  const query = search.trim();
   if (!query) return items;
 
+  const folded = foldTitleText(query);
   return items.filter((item) => {
-    const haystack = [
-      item.Name,
-      item.OriginalTitle,
-      item.ProductionYear?.toString(),
-      item.Id,
-    ]
-      .filter((value): value is string => Boolean(value))
-      .join(" ")
-      .toLowerCase();
-    return haystack.includes(query);
+    const haystack = foldTitleText(
+      [...titleSearchNames(item), item.ProductionYear?.toString(), item.Id]
+        .filter((value): value is string => Boolean(value))
+        .join(" "),
+    );
+    return haystack.includes(folded);
+  });
+}
+
+/** One name a title is also searchable by, and where it came from. */
+export interface TitleSearchName {
+  /** `original`, or the ISO 639-1 code of the provider's name. */
+  readonly source: "original" | (string & {});
+  readonly value: string;
+}
+
+/**
+ * The names search finds a title by besides its shown title, in the order the
+ * editor lists them: original first, then Turkish and English. A name equal to
+ * one already listed is left out (an English film's English title is its
+ * original), and so is one equal to the shown title, which needs no reminder.
+ */
+export function titleSearchNameChoices(item: MediaItem): TitleSearchName[] {
+  const localized = item.LocalizedTitles ?? {};
+  const ordered: TitleSearchName[] = [
+    ...(item.OriginalTitle
+      ? [{ source: "original", value: item.OriginalTitle }]
+      : []),
+    ...["tr", "en"]
+      .filter((language) => localized[language])
+      .map((language) => ({ source: language, value: localized[language] })),
+    ...Object.entries(localized)
+      .filter(([language]) => language !== "tr" && language !== "en")
+      .map(([source, value]) => ({ source, value })),
+  ];
+  const seen = new Set([foldTitleText(item.Name ?? "")]);
+  return ordered.filter((name) => {
+    const key = foldTitleText(name.value);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
   });
 }
 

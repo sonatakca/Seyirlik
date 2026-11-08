@@ -113,3 +113,40 @@ export function isTypingTarget(target: EventTarget | null): boolean {
     Boolean(target.isContentEditable)
   );
 }
+
+/**
+ * Folds text for title matching: lowercase, accents dropped, and Turkish's
+ * dotless ı read as i, so "avcisi" typed on any keyboard finds "Avcısı". The
+ * same folding the server's search applies (`normalizeSearchText`).
+ */
+export function foldTitleText(value: string): string {
+  return value
+    .toLocaleLowerCase("tr")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/ı/g, "i")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Every name a title can be found by: the one it is shown under, its original
+ * title, and the provider's names in other languages. An administrator may
+ * rename a title, and it must still be found by the names people know.
+ */
+export function titleSearchNames(item: MediaItem): string[] {
+  return [
+    item.Name,
+    item.OriginalTitle,
+    ...Object.values(item.LocalizedTitles ?? {}),
+  ].filter((value): value is string => Boolean(value));
+}
+
+/** Whether any of a title's names contains the typed text. */
+export function matchesTitleQuery(item: MediaItem, query: string): boolean {
+  const folded = foldTitleText(query);
+  if (!folded) return true;
+  return titleSearchNames(item).some((name) =>
+    foldTitleText(name).includes(folded),
+  );
+}

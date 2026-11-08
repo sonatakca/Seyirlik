@@ -1928,6 +1928,13 @@ export const tr = {
     "Kaydedildi. Başlık artık bu görseli kullanıyor.",
   "tmdbArtwork.fieldTitle": "Başlık",
   "tmdbArtwork.fieldTagline": "Slogan",
+  "tmdbArtwork.searchNames": "Aramada şu adlarla da bulunur",
+  "tmdbArtwork.searchNamesHint":
+    "Arama bu yapımı gösterilen başlığıyla ve bu adların her biriyle bulur. Birini seçerek başlık yapabilir ya da kendi başlığınızı yazabilirsiniz.",
+  "tmdbArtwork.searchNamesMissing":
+    'Bu yapımın TMDB adları henüz okunmadı. Kütüphane Bakımı\'nda "Yaş sınırlarını, koleksiyonları ve adları getir" işlemini çalıştırın.',
+  "tmdbArtwork.searchNameOriginal": "Orijinal",
+  "tmdbArtwork.useAsTitle": "Başlık olarak kullan: {name}",
   "tmdbArtwork.fieldOverview": "Açıklama",
   "tmdbArtwork.title": "TMDB Görselleri",
   "tmdbArtwork.description":
@@ -2175,13 +2182,14 @@ export const tr = {
   "tasks.metadataScan": "Veri araması",
   "tasks.metadataRefresh": "Veri yenileme",
   "tasks.trickplayGenerate": "Trickplay",
-  "tasks.catalogueEnrich": "Yaş sınırları ve koleksiyonlar",
+  "tasks.catalogueEnrich": "Yaş sınırları, koleksiyonlar ve adlar",
   "tasks.titlesChecked": "Kontrol edilen yapımlar",
   "tasks.rated": "Yaş sınırı bulunanlar",
   "tasks.inCollections": "Koleksiyondaki filmler",
   "maintenance.operation.catalogue.enrich":
-    "Yaş sınırlarını ve koleksiyonları getir",
-  "maintenance.enrichCatalogue": "Yaş sınırlarını ve koleksiyonları getir",
+    "Yaş sınırlarını, koleksiyonları ve adları getir",
+  "maintenance.enrichCatalogue":
+    "Yaş sınırlarını, koleksiyonları ve adları getir",
   "tasks.segmentsScan": "Jenerik taraması",
   "tasks.segmentsDetect": "Açılış ve kapanış jenerikleri",
   "tasks.segmentsQueued": "Sıraya alınan sezonlar",

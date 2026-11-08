@@ -69,6 +69,7 @@ import {
   supportsTmdbArtwork,
   type ActionStatus,
   type ImageLanguageFilter,
+  titleSearchNameChoices,
 } from "./admin/tmdbArtworkModel";
 import { ArtworkTitleList } from "./admin/tmdbArtwork/ArtworkTitleList";
 import { ArtworkKindSection } from "./admin/tmdbArtwork/ArtworkKindSection";
@@ -959,6 +960,15 @@ export default function TmdbArtworkPage({ itemId }: { itemId?: string } = {}) {
               className={`${field} mt-1`}
             />
           </label>
+          {selectedTitle && selectedSupportsTmdb ? (
+            <TitleSearchNames
+              item={selectedTitle}
+              current={display.title}
+              onUse={(name) =>
+                setDisplay((value) => ({ ...value, title: name }))
+              }
+            />
+          ) : null}
           <label className="block text-xs font-bold text-white/50">
             {t("tmdbArtwork.fieldTagline")}
             <input
@@ -1016,6 +1026,73 @@ export default function TmdbArtworkPage({ itemId }: { itemId?: string } = {}) {
         />
         {editor}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The names search finds a title by besides the one it is shown under.
+ *
+ * Typing a title of one's own replaces the shown one and nothing else: search
+ * keeps the original and TMDB's Turkish and English names. Listing them here
+ * says so, and each one is a shortcut to showing it instead.
+ */
+function TitleSearchNames({
+  item,
+  current,
+  onUse,
+}: {
+  item: MediaItem;
+  current: string;
+  onUse: (name: string) => void;
+}) {
+  const { t, language: uiLanguage } = useLanguage();
+  const names = titleSearchNameChoices(item);
+  const read = Object.keys(item.LocalizedTitles ?? {}).length > 0;
+
+  return (
+    <div className="-mt-1">
+      <p className="text-xs font-bold text-white/50">
+        {t("tmdbArtwork.searchNames")}
+      </p>
+      {names.length > 0 ? (
+        <ul className="mt-1.5 flex flex-wrap gap-1.5">
+          {names.map((name) => {
+            const chosen = current.trim() === name.value;
+            return (
+              <li key={`${name.source}:${name.value}`} className="min-w-0">
+                <button
+                  type="button"
+                  onClick={() => onUse(name.value)}
+                  aria-pressed={chosen}
+                  aria-label={formatTemplate(t("tmdbArtwork.useAsTitle"), {
+                    name: name.value,
+                  })}
+                  className={`inline-flex max-w-full items-baseline gap-1.5 rounded-xl border px-2.5 py-1 text-left text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
+                    chosen
+                      ? "border-emerald-300/40 bg-emerald-400/10 text-emerald-100"
+                      : "border-white/10 bg-black/30 text-white/80 hover:border-white/25 hover:text-white"
+                  }`}
+                >
+                  <span className="shrink-0 text-[0.62rem] font-black uppercase tracking-[0.08em] text-white/40">
+                    {name.source === "original"
+                      ? t("tmdbArtwork.searchNameOriginal")
+                      : languageName(name.source, uiLanguage)}
+                  </span>
+                  <span className="min-w-0 break-words">{name.value}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+      <p className="mt-1.5 text-[0.7rem] font-semibold leading-5 text-white/35">
+        {t(
+          read
+            ? "tmdbArtwork.searchNamesHint"
+            : "tmdbArtwork.searchNamesMissing",
+        )}
+      </p>
     </div>
   );
 }

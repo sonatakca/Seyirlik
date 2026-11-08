@@ -63,6 +63,12 @@ export interface ItemDto {
   title: string;
   sortTitle: string;
   originalTitle?: string;
+  /**
+   * The provider's name for the title per language, keyed by ISO 639-1. Shown
+   * nowhere to viewers: it is what a title can also be searched by after an
+   * administrator renamed it.
+   */
+  localizedTitles?: Record<string, string>;
   overview?: string;
   tagline?: string;
   productionYear?: number;
@@ -245,6 +251,9 @@ export function toItemDto(
     title: row.title,
     sortTitle: row.sortTitle,
     ...(row.originalTitle ? { originalTitle: row.originalTitle } : {}),
+    ...(row.localizedTitles && Object.keys(row.localizedTitles).length > 0
+      ? { localizedTitles: row.localizedTitles }
+      : {}),
     ...(row.overview ? { overview: row.overview } : {}),
     ...(row.tagline ? { tagline: row.tagline } : {}),
     ...(row.productionYear === null

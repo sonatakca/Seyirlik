@@ -450,3 +450,87 @@ describe("IMDb identity", () => {
     });
   });
 });
+
+describe("a title's names in other languages", () => {
+  function translation(
+    language: string,
+    region: string,
+    data: Record<string, string>,
+  ) {
+    return { iso_639_1: language, iso_3166_1: region, data };
+  }
+
+  it("asks for translations in the same request as the details", async () => {
+    const { calls, fetchImpl } = captureFetch({ id: 106646, title: "x" });
+    await createTmdbClient({ apiKey: V3_KEY, fetchImpl }).getMovie("106646");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url.searchParams.get("append_to_response")).toContain(
+      "translations",
+    );
+  });
+
+  it("reads Turkish and English names, and the original stands in for its own language", async () => {
+    // TMDB leaves the English translation's title empty for an English film.
+    const { fetchImpl } = captureFetch({
+      id: 106646,
+      title: "The Wolf of Wall Street",
+      original_title: "The Wolf of Wall Street",
+      original_language: "en",
+      translations: {
+        translations: [
+          translation("en", "US", { title: "" }),
+          translation("tr", "TR", { title: "Para Avcısı" }),
+          translation("fr", "FR", { title: "Le Loup de Wall Street" }),
+        ],
+      },
+    });
+    const details = await createTmdbClient({
+      apiKey: V3_KEY,
+      fetchImpl,
+    }).getMovie("106646");
+    expect(details.localizedTitles).toEqual({
+      tr: "Para Avcısı",
+      en: "The Wolf of Wall Street",
+    });
+  });
+
+  it("prefers the home region's wording and reads a series' names", async () => {
+    const { fetchImpl } = captureFetch({
+      id: 1,
+      name: "Dark",
+      original_name: "Dark",
+      original_language: "de",
+      translations: {
+        translations: [
+          translation("en", "GB", { name: "Dark (UK)" }),
+          translation("en", "US", { name: "Dark" }),
+          translation("tr", "TR", { name: "Karanlık" }),
+        ],
+      },
+    });
+    const details = await createTmdbClient({
+      apiKey: V3_KEY,
+      fetchImpl,
+    }).getSeries("1");
+    expect(details.localizedTitles).toEqual({ tr: "Karanlık", en: "Dark" });
+  });
+
+  it("leaves out a language TMDB has no name in", async () => {
+    const { fetchImpl } = captureFetch({
+      id: 2,
+      title: "Le Fabuleux Destin d'Amélie Poulain",
+      original_title: "Le Fabuleux Destin d'Amélie Poulain",
+      original_language: "fr",
+      translations: { translations: [] },
+    });
+    const details = await createTmdbClient({
+      apiKey: V3_KEY,
+      language: "tr-TR",
+      fetchImpl,
+    }).getMovie("2");
+    // Asked in Turkish, TMDB's answer is the title it shows Turkish viewers.
+    expect(details.localizedTitles).toEqual({
+      tr: "Le Fabuleux Destin d'Amélie Poulain",
+    });
+  });
+});

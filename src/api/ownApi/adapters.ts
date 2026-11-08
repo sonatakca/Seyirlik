@@ -144,6 +144,7 @@ export function toMediaItem(item: ItemDto): MediaItem {
       ? { MediaType: KIND_TO_MEDIA_TYPE[item.kind] as string }
       : {}),
     ...(item.originalTitle ? { OriginalTitle: item.originalTitle } : {}),
+    ...(item.localizedTitles ? { LocalizedTitles: item.localizedTitles } : {}),
     ...(item.overview ? { Overview: item.overview } : {}),
     ...(item.tagline ? { Taglines: [item.tagline] } : {}),
     ...(item.productionYear === undefined

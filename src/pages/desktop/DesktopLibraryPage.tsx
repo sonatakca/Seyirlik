@@ -44,6 +44,7 @@ import { formatTemplate, getDisplayTitle } from "../../lib/format";
 import { preloadMediaPlayback } from "../../lib/playbackPreload";
 import { getRouteForItem, getShelfNavKey } from "../../lib/routes";
 import type { MediaItem } from "../../lib/types";
+import { matchesTitleQuery } from "../../lib/searchModel";
 import { isItemCompleted } from "../../lib/watchStatus";
 import { AnimatedText } from "../../components/AnimatedText";
 import { AnimatedWidth } from "../../components/AnimatedWidth";
@@ -406,11 +407,9 @@ export function DesktopLibraryPage({
       return [];
     }
 
-    const normalizedSearch = searchTerm.trim().toLowerCase();
-    const items = normalizedSearch
-      ? data.items.filter((item) =>
-          item.Name.toLowerCase().includes(normalizedSearch),
-        )
+    const query = searchTerm.trim();
+    const items = query
+      ? data.items.filter((item) => matchesTitleQuery(item, query))
       : data.items;
 
     if (data.library?.Type === "BoxSet") {

@@ -12,6 +12,8 @@ export interface SearchCandidate {
   kind: string;
   title: string;
   originalTitle: string | null;
+  /** The title's names in other languages, as the provider gives them. */
+  alternateTitles?: readonly string[];
   seriesTitle: string | null;
 }
 
@@ -19,6 +21,8 @@ export interface SearchCandidate {
  * series name is a weaker hit than one matched on its own title. */
 const TITLE_WEIGHT = 1;
 const ORIGINAL_TITLE_WEIGHT = 0.95;
+/** Another language's name is as good a hit as the original title. */
+const ALTERNATE_TITLE_WEIGHT = 0.95;
 const SERIES_TITLE_WEIGHT = 0.55;
 
 /** Nudges whole titles above episodes when both match equally well. */
@@ -201,6 +205,12 @@ export function scoreSearchCandidate(
     weigh(
       scoreSearchField(normalizedQuery, queryTokens, candidate.originalTitle),
       ORIGINAL_TITLE_WEIGHT,
+    ),
+    ...(candidate.alternateTitles ?? []).map((name) =>
+      weigh(
+        scoreSearchField(normalizedQuery, queryTokens, name),
+        ALTERNATE_TITLE_WEIGHT,
+      ),
     ),
     weigh(
       scoreSearchField(normalizedQuery, queryTokens, candidate.seriesTitle),

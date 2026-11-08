@@ -121,6 +121,9 @@ export function createMetadataService({
       ...(details.originalLanguage
         ? { originalLanguage: details.originalLanguage }
         : {}),
+      ...(details.localizedTitles
+        ? { localizedTitles: details.localizedTitles }
+        : {}),
       ...(details.overview ? { overview: details.overview } : {}),
       ...(details.tagline ? { tagline: details.tagline } : {}),
       ...(details.releaseDate ? { premiereDate: details.releaseDate } : {}),
@@ -413,9 +416,10 @@ export function createMetadataService({
 
     /**
      * Records the facts a matched title was matched without: its age rating,
-     * and a film's box set. Nothing else about it is re-applied — this is the
-     * back-fill for a library matched before either was read, and it must not
-     * redo artwork a person has chosen.
+     * a film's box set, and its names in other languages for search. Nothing
+     * else about it is re-applied — this is the back-fill for a library
+     * matched before these were read, and it must not redo artwork a person
+     * has chosen.
      */
     enrich: async (
       itemId: string,
@@ -433,10 +437,17 @@ export function createMetadataService({
         target.kind === "series"
           ? await tmdb.getSeries(providerId)
           : await tmdb.getMovie(providerId);
-      if (details.officialRating) {
-        // Locked ratings are kept by the repository, as for every field.
+      // Locked ratings are kept by the repository, as for every field. The
+      // title's names in other languages are read here too, so the back-fill
+      // makes a library matched before they were kept searchable by them.
+      if (details.officialRating || details.localizedTitles) {
         await metadata.applyTitleMetadata(target.id, {
-          officialRating: details.officialRating,
+          ...(details.officialRating
+            ? { officialRating: details.officialRating }
+            : {}),
+          ...(details.localizedTitles
+            ? { localizedTitles: details.localizedTitles }
+            : {}),
         });
       }
       await syncFilmCollection(target, details);

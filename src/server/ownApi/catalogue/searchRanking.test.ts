@@ -145,6 +145,22 @@ describe("rankSearchCandidates", () => {
     expect(search("   ---  ")).toEqual([]);
   });
 
+  it("finds a renamed title by its names in other languages, typos included", () => {
+    const renamed = [
+      candidate("wolf", "Kurt", {
+        originalTitle: "The Wolf of Wall Street",
+        alternateTitles: ["Para Avcısı", "The Wolf of Wall Street"],
+      }),
+      ...CATALOGUE,
+    ];
+    const find = (query: string) =>
+      rankSearchCandidates(query, renamed, 10).map((entry) => entry.id);
+    expect(find("para avcisi")[0]).toBe("wolf");
+    expect(find("para avcsi")[0]).toBe("wolf");
+    expect(find("kurt")[0]).toBe("wolf");
+    expect(find("wolf of wall")[0]).toBe("wolf");
+  });
+
   it("does not match unrelated titles", () => {
     expect(search("zzzzzzzz")).toEqual([]);
   });

@@ -106,6 +106,29 @@ const databaseUrl = process.env.SEYIRLIK_TEST_DATABASE_URL;
         [],
       );
     });
+    it("finds a renamed title by the provider's names in other languages", async () => {
+      const renamed = await item("Kurt");
+      await file(renamed);
+      await pool.query(
+        "UPDATE items SET original_title=$2, localized_titles=$3::jsonb WHERE id=$1",
+        [
+          renamed,
+          "The Wolf of Wall Street",
+          JSON.stringify({ tr: "Para Avcısı", en: "The Wolf of Wall Street" }),
+        ],
+      );
+      for (const typed of ["kurt", "para avc", "wolf of wall"]) {
+        expect(
+          (await catalogue.searchItems(user, typed, 10)).map((row) => row.id),
+        ).toContain(renamed);
+      }
+      const candidate = (await catalogue.listSearchCandidates(user, 100)).find(
+        (entry) => entry.id === renamed,
+      );
+      expect(candidate?.alternateTitles).toEqual(
+        expect.arrayContaining(["Para Avcısı", "The Wolf of Wall Street"]),
+      );
+    });
     it("does not let a succeeded processing job stand in for files that are gone", async () => {
       const fileId = (
         await pool.query("SELECT id FROM media_files WHERE item_id=$1", [
