@@ -130,6 +130,14 @@ import {
   filterSeries,
   jobLabel,
 } from "./processingSeriesModel";
+import {
+  PROCESSING_STATUS_FILTERS,
+  countStatuses,
+  filterByStatus,
+  filterSeriesByStatus,
+  seriesEpisodes,
+  type ProcessingStatusFilter,
+} from "./processingStatusFilter";
 
 const CARD = "rounded-2xl border border-white/10 bg-white/[0.03] p-4 sm:p-5";
 const LABEL =
@@ -1553,6 +1561,12 @@ export function MediaProcessingPage() {
     () => new Set(),
   );
   const [seriesSearchTerm, setSeriesSearchTerm] = useState("");
+  /*
+   * One status chip for both kinds: "show me what is queued" is the same
+   * question whether the operator is looking at films or shows.
+   */
+  const [statusFilter, setStatusFilter] =
+    useState<ProcessingStatusFilter>("all");
   const [busySeriesId, setBusySeriesId] = useState<string | null>(null);
   const [busySeasonId, setBusySeasonId] = useState<string | null>(null);
   const [overview, setOverview] = useState<ProcessingOverview | null>(null);
@@ -2215,7 +2229,7 @@ export function MediaProcessingPage() {
   const counts = overview?.counts;
   const hardware = overview?.hardware;
   const detail = openJob;
-  const filteredItems = useMemo(() => {
+  const searchedItems = useMemo(() => {
     const query = searchTerm.trim().toLocaleLowerCase(language);
     return [...items]
       .sort((left, right) =>
@@ -2228,6 +2242,35 @@ export function MediaProcessingPage() {
       );
   }, [items, language, searchTerm]);
   /*
+   * The overview's own view of each film, joined to the library cards by item
+   * id. Absent on a server that predates the catalogue view, in which case the
+   * chips are not offered for films at all.
+   */
+  const movieFacts = useMemo(
+    () =>
+      overview?.movies
+        ? new Map(overview.movies.map((movie) => [movie.itemId, movie]))
+        : null,
+    [overview],
+  );
+  /* Counted after the search, so each chip says what pressing it would show. */
+  const movieStatusCounts = useMemo(
+    () =>
+      countStatuses(searchedItems.map((item) => movieFacts?.get(item.Id))),
+    [movieFacts, searchedItems],
+  );
+  const filteredItems = useMemo(
+    () =>
+      movieFacts
+        ? filterByStatus(
+            searchedItems,
+            (item) => movieFacts.get(item.Id),
+            statusFilter,
+          )
+        : searchedItems,
+    [movieFacts, searchedItems, statusFilter],
+  );
+  /*
    * The shows, narrowed by the search.
    *
    * `useMemo` on the overview's own array, so a poll that returns an
@@ -2236,18 +2279,30 @@ export function MediaProcessingPage() {
    * touched here at all.
    */
   const allSeries = useMemo(() => overview?.series ?? [], [overview]);
-  const filteredSeries = useMemo(
+  const searchedSeries = useMemo(
     () => filterSeries(allSeries, seriesSearchTerm, language),
     [allSeries, seriesSearchTerm, language],
+  );
+  const seriesStatusCounts = useMemo(
+    () => countStatuses(seriesEpisodes(searchedSeries)),
+    [searchedSeries],
+  );
+  const filteredSeries = useMemo(
+    () => filterSeriesByStatus(searchedSeries, statusFilter),
+    [searchedSeries, statusFilter],
   );
   /*
    * A search opens what it found, without disturbing what the operator opened.
    * Clearing the search therefore returns the page to their own expansions
-   * rather than to a collapsed list.
+   * rather than to a collapsed list. A status chip narrows the tree the same
+   * way, so it opens what it found too.
    */
   const searchExpansion = useMemo(
-    () => autoExpandedIds(filteredSeries, seriesSearchTerm),
-    [filteredSeries, seriesSearchTerm],
+    () =>
+      statusFilter === "all"
+        ? autoExpandedIds(filteredSeries, seriesSearchTerm)
+        : autoExpandedIds(filteredSeries, statusFilter),
+    [filteredSeries, seriesSearchTerm, statusFilter],
   );
   const visibleExpandedSeriesIds = useMemo(
     () => new Set([...expandedSeriesIds, ...searchExpansion.seriesIds]),
@@ -2980,6 +3035,54 @@ export function MediaProcessingPage() {
               </label>
             </div>
 
+            {/*
+             * Status chips. Each count is what pressing it would show under the
+             * current search and content kind; a chip that would show nothing
+             * is dimmed rather than removed, so the row does not reflow as the
+             * queue drains.
+             */}
+            {contentKind === "series" || movieFacts ? (
+              <div
+                role="group"
+                aria-label={t("processing.status.label")}
+                className="scrollbar-none -mx-1 flex gap-2 overflow-x-auto px-1 py-0.5 sm:flex-wrap sm:overflow-visible"
+              >
+                {PROCESSING_STATUS_FILTERS.map((filter) => {
+                  const count = (
+                    contentKind === "series"
+                      ? seriesStatusCounts
+                      : movieStatusCounts
+                  )[filter];
+                  const selected = statusFilter === filter;
+                  return (
+                    <button
+                      key={filter}
+                      type="button"
+                      aria-pressed={selected}
+                      disabled={!selected && count === 0}
+                      onClick={() => setStatusFilter(filter)}
+                      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 ring-1 ring-inset text-xs font-bold transition focus:outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:cursor-default disabled:opacity-35 ${
+                        selected
+                          ? "bg-[var(--accent-soft)] text-white ring-[var(--accent)]"
+                          : "bg-white/[0.03] text-white/60 ring-white/10 enabled:hover:bg-white/[0.06] enabled:hover:text-white/85 enabled:hover:ring-white/20"
+                      }`}
+                    >
+                      {t(`processing.status.${filter}`)}
+                      <span
+                        className={`rounded-full px-1.5 text-[0.6875rem] tabular-nums ${
+                          selected
+                            ? "bg-[var(--accent)] text-black"
+                            : "bg-white/[0.08] text-white/60"
+                        }`}
+                      >
+                        {count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+
             {contentKind === "series" ? (
               <div
                 id="processing-kind-panel-series"
@@ -2988,9 +3091,11 @@ export function MediaProcessingPage() {
               >
                 {filteredSeries.length === 0 ? (
                   <div className={`${CARD} text-center text-sm text-white/55`}>
-                    {seriesSearchTerm.trim()
-                      ? t("processing.tv.noSearchResults")
-                      : t("processing.tv.emptySeries")}
+                    {statusFilter !== "all" && searchedSeries.length > 0
+                      ? t("processing.status.empty")
+                      : seriesSearchTerm.trim()
+                        ? t("processing.tv.noSearchResults")
+                        : t("processing.tv.emptySeries")}
                   </div>
                 ) : (
                   <ProcessingSeriesTree
@@ -3055,9 +3160,11 @@ export function MediaProcessingPage() {
                 aria-labelledby="processing-kind-movies"
                 className={`${CARD} text-center text-sm text-white/55`}
               >
-                {searchTerm.trim()
-                  ? t("processing.noSearchResults")
-                  : t("processing.emptyTitles")}
+                {statusFilter !== "all" && searchedItems.length > 0
+                  ? t("processing.status.empty")
+                  : searchTerm.trim()
+                    ? t("processing.noSearchResults")
+                    : t("processing.emptyTitles")}
               </div>
             ) : (
               <ul
