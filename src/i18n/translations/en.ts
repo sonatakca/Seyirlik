@@ -1326,6 +1326,10 @@ export const en = {
   "processing.subtitles.sidecar": "file beside the source",
   "processing.subtitles.forced": "Forced",
   "processing.subtitles.running": "reading the source · {elapsed}",
+  "processing.subtitles.reading":
+    "reading the source · {percent}% · {elapsed}",
+  "processing.subtitles.readingRemaining":
+    "reading the source · {percent}% · {remaining} left",
   "processing.subtitles.skipped": "skipped: could not be converted",
   "processing.history.total": "Total",
   "processing.history.count.planning": "{count} epochs",

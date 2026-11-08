@@ -2401,11 +2401,19 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
               }
 
               case "subtitle-progress": {
+                const previous = live.subtitles;
                 live.subtitles = event.progress;
                 const global = advance("subtitles", event.progress.fraction);
-                // Each sample is a track starting or finishing: all of them
-                // are state changes, and there are only a handful.
-                publishLiveThrottled(true);
+                // A track starting or finishing goes out at once; the read
+                // position of a running track waits its turn.
+                const stateChanged =
+                  previous === undefined ||
+                  previous.tracks.length !== event.progress.tracks.length ||
+                  previous.tracks.some(
+                    (track, index) =>
+                      track.state !== event.progress.tracks[index]?.state,
+                  );
+                publishLiveThrottled(stateChanged);
                 if (Date.now() - lastPersistMs >= PERSIST_INTERVAL_MS) {
                   lastPersistMs = Date.now();
                   void store

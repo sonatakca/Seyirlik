@@ -1323,6 +1323,9 @@ export const tr = {
   "processing.subtitles.sidecar": "kaynağın yanındaki dosya",
   "processing.subtitles.forced": "Zorunlu",
   "processing.subtitles.running": "kaynak okunuyor · {elapsed}",
+  "processing.subtitles.reading": "kaynak okunuyor · %{percent} · {elapsed}",
+  "processing.subtitles.readingRemaining":
+    "kaynak okunuyor · %{percent} · {remaining} kaldı",
   "processing.subtitles.skipped": "atlandı: dönüştürülemedi",
   "processing.history.total": "Toplam",
   "processing.history.count.planning": "{count} bölüm",

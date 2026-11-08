@@ -2646,6 +2646,39 @@ export async function packageAdaptiveRendition(
       fraction: 0,
       writtenBytes: 0,
     };
+    const emitSubtitleProgress = (): void => {
+      onEvent?.({
+        type: "subtitle-progress",
+        mediaId: request.mediaId,
+        progress: {
+          ...subtitleProgress,
+          tracks: subtitleProgress.tracks.map((entry) => ({ ...entry })),
+        },
+      });
+    };
+    const refreshSubtitleFraction = (): void => {
+      const finished = subtitleProgress.tracks.filter(
+        (entry) => entry.state === "complete" || entry.state === "skipped",
+      ).length;
+      const running = subtitleProgress.tracks.find(
+        (entry) => entry.state === "running",
+      );
+      subtitleProgress.completedTracks = finished;
+      subtitleProgress.fraction = safeFraction(
+        finished + (running?.fraction ?? 0),
+        subtitleProgress.tracks.length,
+      );
+    };
+    /** Whole percent, so a two-hour read sends a hundred samples, not thousands. */
+    const reportSubtitleRead = (id: string, fraction: number): void => {
+      const track = subtitleProgress.tracks.find((entry) => entry.id === id);
+      if (!track || track.state !== "running") return;
+      const stepped = Math.floor(fraction * 100) / 100;
+      if (track.fraction !== undefined && stepped <= track.fraction) return;
+      track.fraction = stepped;
+      refreshSubtitleFraction();
+      emitSubtitleProgress();
+    };
     const reportSubtitle = (
       id: string,
       state: SubtitleTrackProgress["state"],
@@ -2655,14 +2688,8 @@ export async function packageAdaptiveRendition(
       if (!track) return;
       track.state = state;
       if (bytes !== undefined) track.bytes = bytes;
-      const finished = subtitleProgress.tracks.filter(
-        (entry) => entry.state === "complete" || entry.state === "skipped",
-      ).length;
-      subtitleProgress.completedTracks = finished;
-      subtitleProgress.fraction = safeFraction(
-        finished,
-        subtitleProgress.tracks.length,
-      );
+      if (state !== "running") delete track.fraction;
+      refreshSubtitleFraction();
       subtitleProgress.writtenBytes = subtitleProgress.tracks.reduce(
         (sum, entry) => sum + (entry.bytes ?? 0),
         0,
@@ -2674,14 +2701,7 @@ export async function packageAdaptiveRendition(
         delete subtitleProgress.currentId;
         delete subtitleProgress.currentStartedAtMs;
       }
-      onEvent?.({
-        type: "subtitle-progress",
-        mediaId: request.mediaId,
-        progress: {
-          ...subtitleProgress,
-          tracks: subtitleProgress.tracks.map((entry) => ({ ...entry })),
-        },
-      });
+      emitSubtitleProgress();
     };
 
     if (subtitleProgress.tracks.length > 0) {
@@ -2723,12 +2743,9 @@ export async function packageAdaptiveRendition(
          * the length of the hole — and cues whose bytes were inside it are
          * absent, which the warning says rather than the file pretending.
          */
-        ...(damagedIntervals.length > 0
-          ? {
-              damagedIntervals,
-              sourceDurationSeconds: probe.durationSeconds,
-            }
-          : {}),
+        ...(damagedIntervals.length > 0 ? { damagedIntervals } : {}),
+        sourceDurationSeconds: probe.durationSeconds,
+        onProgress: (fraction) => reportSubtitleRead(id, fraction),
         ...(signal ? { signal } : {}),
       });
       if (extracted.partial) {

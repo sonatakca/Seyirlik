@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { planSourceRanges, type SourceInterval } from "./epochs/salvage";
+import { parseFfmpegProgressFields } from "../progress";
 
 const MAX_WEBVTT_BYTES = 32 * 1024 * 1024;
 
@@ -23,6 +24,16 @@ export function buildWebVttExtractionArgs(
     "-v",
     "error",
     "-nostdin",
+    /*
+     * Where FFmpeg has got to in the source. An embedded track is found by
+     * reading the whole file, which over Drive is tens of minutes, and without
+     * this the page can only say how long the read has been going.
+     */
+    "-progress",
+    "pipe:1",
+    "-stats_period",
+    "1",
+    "-nostats",
     "-y",
     ...(range && range.startSeconds > 0
       ? ["-ss", range.startSeconds.toFixed(3)]
@@ -194,6 +205,7 @@ async function runWebVttExtraction({
   outputPath,
   range,
   signal,
+  onPosition,
 }: {
   ffmpegPath: string;
   inputPath: string;
@@ -201,6 +213,12 @@ async function runWebVttExtraction({
   outputPath: string;
   range?: { startSeconds: number; durationSeconds: number };
   signal?: AbortSignal;
+  /**
+   * Seconds into what this run reads, from FFmpeg's `-progress` blocks. It is
+   * the timestamp of the last cue written, so it holds still through a long
+   * stretch without dialogue and then catches up.
+   */
+  onPosition?: (seconds: number) => void;
 }): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(
@@ -226,7 +244,29 @@ async function runWebVttExtraction({
       return;
     }
     signal?.addEventListener("abort", abort, { once: true });
-    child.stdout.resume();
+    let pending = "";
+    let fields: Record<string, string> = {};
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      pending += chunk;
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? "";
+      for (const line of lines) {
+        const separator = line.indexOf("=");
+        if (separator <= 0) continue;
+        const key = line.slice(0, separator).trim();
+        fields[key] = line.slice(separator + 1).trim();
+        if (key !== "progress") continue;
+        if (onPosition) {
+          try {
+            onPosition(parseFfmpegProgressFields(fields).processedSeconds);
+          } catch {
+            // A reporting fault never costs the extraction.
+          }
+        }
+        fields = {};
+      }
+    });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       stderr = `${stderr}${chunk}`.slice(-4096);
@@ -252,6 +292,7 @@ export async function extractWebVttFile({
   damagedIntervals = [],
   sourceDurationSeconds,
   signal,
+  onProgress,
 }: {
   ffmpegPath: string;
   inputPath: string;
@@ -266,9 +307,17 @@ export async function extractWebVttFile({
    * the job's warning rather than papered over by moving what follows.
    */
   damagedIntervals?: readonly SourceInterval[];
-  /** Required when `damagedIntervals` is non-empty, to bound the last range. */
+  /**
+   * Required when `damagedIntervals` is non-empty, to bound the last range.
+   * Also what `onProgress` measures against: without it there is no fraction.
+   */
   sourceDurationSeconds?: number;
   signal?: AbortSignal;
+  /**
+   * How much of the read is done, 0 to 1, never moving backwards. Reaches 1
+   * only when the file has been written.
+   */
+  onProgress?: (fraction: number) => void;
 }): Promise<{ fileSizeBytes: number; contents: string; partial: boolean }> {
   const readable =
     damagedIntervals.length > 0 && sourceDurationSeconds
@@ -277,20 +326,48 @@ export async function extractWebVttFile({
         )
       : [];
 
+  let reported = 0;
+  const report = (fraction: number): void => {
+    if (!onProgress || !Number.isFinite(fraction)) return;
+    const bounded = Math.min(1, Math.max(reported, fraction));
+    if (bounded <= reported && bounded < 1) return;
+    reported = bounded;
+    onProgress(bounded);
+  };
+  /*
+   * FFmpeg's position can reach the full duration before the muxer has
+   * finished, so a running read stops just short of done.
+   */
+  const RUNNING_CEILING = 0.999;
+
   if (readable.length === 0) {
+    const total = sourceDurationSeconds ?? 0;
     await runWebVttExtraction({
       ffmpegPath,
       inputPath,
       streamIndex,
       outputPath,
       ...(signal ? { signal } : {}),
+      ...(onProgress && total > 0
+        ? {
+            onPosition: (seconds: number) =>
+              report(Math.min(RUNNING_CEILING, seconds / total)),
+          }
+        : {}),
     });
   } else {
     const scratch = await mkdtemp(path.join(tmpdir(), "seyirlik-webvtt-"));
     try {
       const groups: WebVttCue[][] = [];
+      const readableSeconds = readable.reduce(
+        (sum, range) => sum + range.durationSeconds,
+        0,
+      );
+      let readSeconds = 0;
       for (const [ordinal, range] of readable.entries()) {
         const partPath = path.join(scratch, `part-${ordinal}.vtt`);
+        const before = readSeconds;
+        readSeconds += range.durationSeconds;
         try {
           await runWebVttExtraction({
             ffmpegPath,
@@ -302,6 +379,20 @@ export async function extractWebVttFile({
               durationSeconds: range.durationSeconds,
             },
             ...(signal ? { signal } : {}),
+            ...(onProgress && readableSeconds > 0
+              ? {
+                  // Cues in a range come out timed from zero, so the
+                  // position is already relative to the range's start.
+                  onPosition: (seconds: number) =>
+                    report(
+                      Math.min(
+                        RUNNING_CEILING,
+                        (before + Math.min(seconds, range.durationSeconds)) /
+                          readableSeconds,
+                      ),
+                    ),
+                }
+              : {}),
           });
         } catch {
           /*
@@ -338,6 +429,7 @@ export async function extractWebVttFile({
       `WebVTT extraction for stream ${streamIndex} did not produce WebVTT.`,
     );
   }
+  report(1);
   return { fileSizeBytes: file.size, contents, partial: readable.length > 0 };
 }
 

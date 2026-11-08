@@ -880,10 +880,38 @@ function PlanningPanel({
 }
 
 /**
+ * The running track's line: how far into the source, and what is left once at
+ * least 2% has been read — before that the rate is mostly FFmpeg opening the
+ * file, and the estimate would swing by hours.
+ */
+function subtitleRunningLabel(
+  fraction: number | undefined,
+  elapsedSeconds: number,
+  t: Translate,
+): string {
+  const elapsed = formatDuration(elapsedSeconds);
+  if (fraction === undefined || fraction <= 0) {
+    return formatTemplate(t("processing.subtitles.running"), { elapsed });
+  }
+  const percent = String(Math.min(99, Math.floor(fraction * 100)));
+  if (fraction < 0.02 || elapsedSeconds <= 0) {
+    return formatTemplate(t("processing.subtitles.reading"), {
+      percent,
+      elapsed,
+    });
+  }
+  const remaining = Math.round((elapsedSeconds * (1 - fraction)) / fraction);
+  return formatTemplate(t("processing.subtitles.readingRemaining"), {
+    percent,
+    remaining: formatDuration(remaining),
+  });
+}
+
+/**
  * Subtitles, track by track.
  *
- * Each track is its own FFmpeg run and reports nothing until it finishes, so
- * the list is the progress: done, running for how long, still to come.
+ * Each track is its own FFmpeg run. The running one says how far it has read
+ * through the source and, once that is enough to go on, how long is left.
  */
 function SubtitlePanel({
   progress,
@@ -941,16 +969,14 @@ function SubtitlePanel({
             <span className="ml-auto tabular-nums text-white/45">
               {track.state === "running" &&
               progress.currentStartedAtMs !== undefined
-                ? formatTemplate(t("processing.subtitles.running"), {
-                    elapsed: formatDuration(
-                      Math.max(
-                        0,
-                        Math.round(
-                          (nowMs - progress.currentStartedAtMs) / 1000,
-                        ),
-                      ),
+                ? subtitleRunningLabel(
+                    track.fraction,
+                    Math.max(
+                      0,
+                      Math.round((nowMs - progress.currentStartedAtMs) / 1000),
                     ),
-                  })
+                    t,
+                  )
                 : track.state === "skipped"
                   ? t("processing.subtitles.skipped")
                   : track.bytes

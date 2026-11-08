@@ -307,6 +307,12 @@ export interface SubtitleTrackProgress {
   state: "waiting" | "running" | "complete" | "skipped";
   /** Size of the WebVTT written, once it is. */
   bytes?: number;
+  /**
+   * How far the running track's read has got, 0 to 1, from FFmpeg's position
+   * in the source. Absent until FFmpeg reports one, and for a sidecar, which
+   * is a small local file.
+   */
+  fraction?: number;
 }
 
 /**
@@ -314,13 +320,13 @@ export interface SubtitleTrackProgress {
  *
  * One FFmpeg run per track, one after another, and an embedded track has to
  * read the whole source to find its cues, so a title with eight embedded
- * subtitle tracks reads its source eight times. Counted in tracks because that
- * is the unit of work: each run reports nothing until it has finished.
+ * subtitle tracks reads its source eight times. Counted in tracks, with the
+ * running track's own `fraction` carrying the read between them.
  */
 export interface SubtitlePhaseProgress {
   tracks: SubtitleTrackProgress[];
   completedTracks: number;
-  /** Finished (complete or skipped) over all tracks. */
+  /** Finished tracks plus the running track's fraction, over all tracks. */
   fraction: number;
   currentId?: string;
   /** When the running track started, so the page can say how long it has run. */

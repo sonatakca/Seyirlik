@@ -545,6 +545,40 @@ describe("phase panels render the measurements they are given", () => {
     expect(screen.getByText("processing.subtitles.sidecar")).toBeTruthy();
   });
 
+  it("says how far the running subtitle read has got and what is left", async () => {
+    await renderPanel(
+      live({
+        phase: "subtitles",
+        subtitles: {
+          tracks: [
+            {
+              id: "subtitle-3",
+              origin: "embedded",
+              language: "eng",
+              state: "running",
+              fraction: 0.5,
+            },
+            {
+              id: "subtitle-900",
+              origin: "sidecar",
+              language: "tur",
+              state: "waiting",
+            },
+          ],
+          completedTracks: 0,
+          fraction: 0.25,
+          currentId: "subtitle-3",
+          currentStartedAtMs: Date.now() - 600_000,
+          writtenBytes: 0,
+        },
+      }),
+    );
+    expect(
+      screen.getByText("processing.subtitles.readingRemaining"),
+    ).toBeTruthy();
+    expect(screen.queryByText("processing.subtitles.running")).toBeNull();
+  });
+
   /**
    * A finished build keeps its history on the row. The card used to show the
    * video panel's last state — "video encoding complete" — and nothing else.
