@@ -121,11 +121,11 @@ const SWIPE_VELOCITY_PX_PER_MS = 0.45;
 const SWIPE_GIVE = 0.22;
 const SWIPE_GIVE_MAX_PX = 44;
 /**
- * Presses that arrive while a travel is under way wait for it, in order, so
- * none is lost and no two travels ever overlap. Only a couple wait: more
- * would keep the hero moving long after the hand has stopped.
+ * A press that arrives while a travel is under way waits for it, so no two
+ * travels ever overlap. Only one waits: more would keep the hero moving
+ * after the hand has stopped.
  */
-const MAX_PENDING = 2;
+const MAX_PENDING = 1;
 
 type HeroCommand =
   | { kind: "next" }
