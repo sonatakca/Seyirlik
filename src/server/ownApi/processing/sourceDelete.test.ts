@@ -377,6 +377,42 @@ describe("removing a source for a particular job", () => {
     });
   }
 
+  it("locates the file the scan still sees over a lost one it ties with", async () => {
+    const data = await fixture();
+    const located = await createProcessingEnqueuer({
+      catalogue: {
+        listFilesForItem: async () => [
+          {
+            id: "lost",
+            relativePath: "Movies/Solaris (1972)/src/Solaris old.mkv",
+            missingSince: new Date("2026-10-18T11:22:10Z"),
+            sizeBytes: 10n,
+          },
+          {
+            id: FILE,
+            relativePath: "Movies/Solaris (1972)/Solaris (1972).mkv",
+            missingSince: null,
+            sizeBytes: 10n,
+          },
+        ],
+      } as unknown as CatalogueRepository,
+      store: stubStore(null),
+      queue: {} as unknown as JobQueue,
+      mediaRoot: data.root,
+      workRoot: data.root,
+      ffprobePath: "ffprobe",
+      hardware: async () =>
+        ({ platform: "test", adapters: [] }) as unknown as Awaited<
+          ReturnType<Parameters<typeof createProcessingEnqueuer>[0]["hardware"]>
+        >,
+      storageGuard: { mayStartWork: () => true } as unknown as Parameters<
+        typeof createProcessingEnqueuer
+      >[0]["storageGuard"],
+    }).locateSource(ITEM);
+    expect(located.file.id).toBe(FILE);
+    expect(located.absolutePath).toBe(data.sourcePath);
+  });
+
   it("removes it when the job's fingerprint is the source's", async () => {
     const data = await fixture();
     const removal = await enqueuer(data.root).removeSource(ITEM, FILE, {

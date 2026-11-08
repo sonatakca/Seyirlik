@@ -271,14 +271,22 @@ export function createProcessingEnqueuer({
   ) => {
     const files = await catalogue.listFilesForItem(itemId);
     /*
-     * `listFilesForItem` returns primary first, largest first — the same order
-     * `getPrimaryFile` picks from — so `files[0]` is the canonical source the
-     * rest of Seyirlik plays. This is what keeps the `.mkv` and the `.mp4` of
-     * one episode from becoming two jobs writing to one package.
+     * `listFilesForItem` returns primary first, largest first, so the first
+     * file the scan still sees is the canonical source the rest of Seyirlik
+     * plays — the same pick as `getPrimaryFile` and the catalogue's canonical
+     * join. This is what keeps the `.mkv` and the `.mp4` of one episode from
+     * becoming two jobs writing to one package.
+     *
+     * Present before missing, because the query does not order by it: a title
+     * re-downloaded after its old file was lost keeps the dead row, and when
+     * the two tie on primary and size the dead one used to win, so the page
+     * called a title with its source on disk unprocessable. A title whose
+     * every row is missing still resolves, to find the package it left.
      */
     const file = mediaFileId
       ? files.find((candidate) => candidate.id === mediaFileId)
-      : files[0];
+      : (files.find((candidate) => candidate.missingSince === null) ??
+        files[0]);
     if (!file) {
       throw new OwnApiError(
         "MEDIA_NOT_FOUND",

@@ -8,6 +8,7 @@ import type {
   ProcessingStateCounts,
 } from "../../../lib/processingApi";
 import {
+  episodeTally,
   hasActiveWork,
   metadataStatus,
   monitoringStatus,
@@ -176,6 +177,61 @@ describe("the title dock's processing status", () => {
       key: "titleDock.processing.episodesPartial",
       values: { done: 4, total: 8 },
     });
+  });
+});
+
+describe("a show whose sources were deleted after processing", () => {
+  const episode = (over: Record<string, unknown>) => ({
+    packageState: "complete",
+    sourceAvailable: false,
+    ...over,
+  });
+  const series = {
+    seriesId: "show",
+    // The server's figures: every episode is both complete and unavailable.
+    counts: counts({ total: 4, complete: 3, unavailable: 4 }),
+    seasons: [
+      {
+        seasonId: "s1",
+        counts: counts({ total: 4, complete: 3, unavailable: 4 }),
+        episodes: [
+          episode({}),
+          episode({}),
+          episode({}),
+          // Lost with nothing built: the only one truly out of reach.
+          episode({ packageState: "none" }),
+        ],
+      },
+    ],
+  } as unknown as ProcessingSeries;
+  const scope = { kind: "series", seriesId: "show" } as const;
+  const picked = pickProcessing(overview({ series: [series] }), scope);
+
+  it("counts finished packages as ready, not as missing episodes", () => {
+    expect(episodeTally(picked)).toEqual({ done: 3, reachable: 3, noFile: 1 });
+    expect(processingStatus(picked, scope)).toEqual({
+      tone: "ok",
+      key: "titleDock.processing.episodesDone",
+      values: { done: 3, total: 3 },
+    });
+  });
+
+  it("still says nothing is on disk when nothing is", () => {
+    const empty = {
+      ...series,
+      seasons: [
+        {
+          ...series.seasons[0],
+          episodes: [episode({ packageState: "none" })],
+        },
+      ],
+    } as unknown as ProcessingSeries;
+    expect(
+      processingStatus(
+        pickProcessing(overview({ series: [empty] }), scope),
+        scope,
+      ).key,
+    ).toBe("titleDock.processing.noFiles");
   });
 });
 

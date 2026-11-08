@@ -52,6 +52,7 @@ import "../../home/heroDock.css";
 import type { HeroCentreDockPlace } from "../../home/heroCentreDock";
 import {
   DOCK_SECTIONS,
+  episodeTally,
   hasActiveWork,
   jobPercent,
   pickProcessing,
@@ -802,14 +803,15 @@ function ProcessingBody({
 
   if (scope.kind === "series") {
     const counts = seriesCounts(processing);
+    const tally = episodeTally(processing);
     const seasonId = scope.seasonId;
     return (
       <div className="space-y-3">
-        {counts ? (
+        {counts && tally ? (
           <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Fact label={t("titleDock.processing.countDone")}>
               <span className="tabular-nums">
-                {counts.complete}/{counts.total - counts.unavailable}
+                {tally.done}/{tally.reachable}
               </span>
             </Fact>
             <Fact label={t("titleDock.processing.countActive")}>
@@ -819,7 +821,7 @@ function ProcessingBody({
               <span className="tabular-nums">{counts.eligible}</span>
             </Fact>
             <Fact label={t("titleDock.processing.countNoFile")}>
-              <span className="tabular-nums">{counts.unavailable}</span>
+              <span className="tabular-nums">{tally.noFile}</span>
             </Fact>
           </dl>
         ) : (

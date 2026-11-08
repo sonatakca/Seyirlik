@@ -96,6 +96,43 @@ export function seriesCounts(
 }
 
 /**
+ * How many episodes are ready, out of how many could be, and how many have
+ * nothing on disk at all.
+ *
+ * Counted from the episodes rather than from the server's counts, because
+ * there "complete" and "unavailable" overlap: a finished episode whose source
+ * was deleted after its package was verified is both. Subtracting one from the
+ * other made a fully processed show read "no episodes on disk", 26/0 ready,
+ * 26 with no file. An episode is out of reach only when it has neither a
+ * source nor a finished package.
+ */
+export function episodeTally(
+  processing: DockProcessing,
+): { done: number; reachable: number; noFile: number } | undefined {
+  const episodes =
+    processing.season?.episodes ??
+    processing.series?.seasons?.flatMap((season) => season.episodes ?? []);
+  if (episodes && episodes.length > 0) {
+    let done = 0;
+    let reachable = 0;
+    for (const episode of episodes) {
+      const complete = episode.packageState === "complete";
+      if (complete) done += 1;
+      if (complete || episode.sourceAvailable) reachable += 1;
+    }
+    return { done, reachable, noFile: episodes.length - reachable };
+  }
+  // A view without its episodes still has the server's own figures.
+  const counts = seriesCounts(processing);
+  if (!counts) return undefined;
+  return {
+    done: counts.complete,
+    reachable: counts.total - counts.unavailable,
+    noFile: counts.unavailable,
+  };
+}
+
+/**
  * Whether the dock should look again soon: something for this title is
  * queued or running, so its figures will move.
  */
@@ -120,18 +157,20 @@ export function processingStatus(
 
   if (scope.kind === "series") {
     const counts = seriesCounts(processing);
-    if (!counts) return { tone: "unknown", key: "titleDock.status.unknown" };
-    const available = counts.total - counts.unavailable;
+    const tally = episodeTally(processing);
+    if (!counts || !tally)
+      return { tone: "unknown", key: "titleDock.status.unknown" };
+    const available = tally.reachable;
     if (available <= 0)
       return { tone: "idle", key: "titleDock.processing.noFiles" };
-    const values = { done: counts.complete, total: available };
+    const values = { done: tally.done, total: available };
     if (counts.active > 0)
       return {
         tone: "busy",
         key: "titleDock.processing.episodesActive",
         values: { ...values, active: counts.active },
       };
-    if (counts.complete >= available)
+    if (tally.done >= available)
       return { tone: "ok", key: "titleDock.processing.episodesDone", values };
     return {
       tone: "attention",
