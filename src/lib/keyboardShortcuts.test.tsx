@@ -14,7 +14,7 @@ function Carousel({
   isDefault?: boolean;
   onScreen?: boolean;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
+  const ref = useRef<HTMLDivElement | null>(null);
   useCarouselArrowKeys(ref, (direction) => onStep(name, direction), {
     isDefault,
   });
