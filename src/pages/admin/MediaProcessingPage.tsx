@@ -28,6 +28,7 @@ import {
 } from "../../lib/mediaApi";
 import type { MediaItem, MediaLibrary } from "../../lib/types";
 import { getDisplayTitle } from "../../lib/format";
+import { matchesSearchText, titleSearchNames } from "../../lib/searchModel";
 import {
   cancelProcessingJob,
   deleteProcessingJob,
@@ -2230,15 +2231,15 @@ export function MediaProcessingPage() {
   const hardware = overview?.hardware;
   const detail = openJob;
   const searchedItems = useMemo(() => {
-    const query = searchTerm.trim().toLocaleLowerCase(language);
     return [...items]
       .sort((left, right) =>
         getDisplayTitle(left).localeCompare(getDisplayTitle(right), language),
       )
       .filter((item) =>
-        query
-          ? getDisplayTitle(item).toLocaleLowerCase(language).includes(query)
-          : true,
+        matchesSearchText(searchTerm, [
+          getDisplayTitle(item),
+          ...titleSearchNames(item),
+        ]),
       );
   }, [items, language, searchTerm]);
   /*
@@ -2280,8 +2281,8 @@ export function MediaProcessingPage() {
    */
   const allSeries = useMemo(() => overview?.series ?? [], [overview]);
   const searchedSeries = useMemo(
-    () => filterSeries(allSeries, seriesSearchTerm, language),
-    [allSeries, seriesSearchTerm, language],
+    () => filterSeries(allSeries, seriesSearchTerm),
+    [allSeries, seriesSearchTerm],
   );
   const seriesStatusCounts = useMemo(
     () => countStatuses(seriesEpisodes(searchedSeries)),

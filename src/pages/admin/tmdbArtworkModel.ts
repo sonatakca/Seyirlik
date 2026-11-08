@@ -1,6 +1,10 @@
 import type { ArtworkCandidate, ArtworkKind } from "../../lib/artworkApi";
 import type { MediaItem } from "../../lib/types";
-import { foldTitleText, titleSearchNames } from "../../lib/searchModel";
+import {
+  foldTitleText,
+  matchesSearchText,
+  titleSearchNames,
+} from "../../lib/searchModel";
 import type { TranslationKey } from "../../i18n/translations";
 
 /**
@@ -61,15 +65,13 @@ export function filterTitles(items: MediaItem[], search: string): MediaItem[] {
   const query = search.trim();
   if (!query) return items;
 
-  const folded = foldTitleText(query);
-  return items.filter((item) => {
-    const haystack = foldTitleText(
-      [...titleSearchNames(item), item.ProductionYear?.toString(), item.Id]
-        .filter((value): value is string => Boolean(value))
-        .join(" "),
-    );
-    return haystack.includes(folded);
-  });
+  return items.filter((item) =>
+    matchesSearchText(query, [
+      ...titleSearchNames(item),
+      item.ProductionYear,
+      item.Id,
+    ]),
+  );
 }
 
 /** One name a title is also searchable by, and where it came from. */

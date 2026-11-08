@@ -141,6 +141,8 @@ export interface ProcessingSeries {
   title: string;
   sortTitle: string;
   productionYear: number | null;
+  /** Its other names (original, other languages, added), for the search box. */
+  searchNames: string[];
   seasonCount: number;
   episodeCount: number;
   seasons: ProcessingSeason[];
@@ -555,6 +557,7 @@ export function projectCatalogue(
       title: string;
       sortTitle: string;
       productionYear: number | null;
+      searchNames: string[];
       seasons: Map<
         string,
         {
@@ -590,6 +593,7 @@ export function projectCatalogue(
         title: row.seriesTitle ?? row.title,
         sortTitle: row.seriesSortTitle ?? row.seriesTitle ?? row.title,
         productionYear: row.seriesYear,
+        searchNames: row.seriesSearchNames ?? [],
         seasons: new Map(),
       };
       seriesById.set(row.seriesId, series);
@@ -640,6 +644,7 @@ export function projectCatalogue(
         title: entry.title,
         sortTitle: entry.sortTitle,
         productionYear: entry.productionYear,
+        searchNames: entry.searchNames,
         seasonCount: seasons.length,
         episodeCount: seasons.reduce(
           (total, season) => total + season.episodes.length,

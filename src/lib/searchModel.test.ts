@@ -6,6 +6,7 @@ import {
   isSearchShortcut,
   isSearchableQuery,
   isTypingTarget,
+  matchesSearchText,
   matchesTitleQuery,
 } from "./searchModel";
 import type { MediaItem } from "./types";
@@ -116,5 +117,37 @@ describe("matchesTitleQuery", () => {
 
   it("does not match a name the title does not have", () => {
     expect(matchesTitleQuery(wolf, "dune")).toBe(false);
+  });
+});
+
+describe("matchesSearchText", () => {
+  const dragon = [
+    "Ejderhanı Nasıl Eğitirsin",
+    "How to Train Your Dragon",
+    2010,
+  ];
+
+  it("finds a title by its original name, not only the shown one", () => {
+    expect(matchesSearchText("dragon", dragon)).toBe(true);
+    expect(matchesSearchText("Egi", dragon)).toBe(true);
+    expect(matchesSearchText("ejderhani", dragon)).toBe(true);
+  });
+
+  it("needs every typed word, from any of the values, in any order", () => {
+    expect(matchesSearchText("dragon 2010", dragon)).toBe(true);
+    expect(matchesSearchText("train dragon", dragon)).toBe(true);
+    expect(matchesSearchText("dragon 2019", dragon)).toBe(false);
+  });
+
+  it("reads punctuation as a space", () => {
+    expect(matchesSearchText("spider man", ["Spider-Man: No Way Home"])).toBe(
+      true,
+    );
+    expect(matchesSearchText("spider-man", ["Spider Man"])).toBe(true);
+  });
+
+  it("matches everything for a blank query and nothing from no values", () => {
+    expect(matchesSearchText("  ", [])).toBe(true);
+    expect(matchesSearchText("a", [null, undefined, ""])).toBe(false);
   });
 });

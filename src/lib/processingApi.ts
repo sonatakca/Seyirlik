@@ -527,6 +527,8 @@ export interface ProcessingSeries {
   title: string;
   sortTitle: string;
   productionYear: number | null;
+  /** Its other names (original, other languages, added); absent from older servers. */
+  searchNames?: string[];
   seasonCount: number;
   episodeCount: number;
   seasons: ProcessingSeason[];

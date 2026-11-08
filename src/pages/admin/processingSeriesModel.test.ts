@@ -116,6 +116,23 @@ describe("filtering the tree", () => {
     expect(filterSeries(LIBRARY, "  ")).toHaveLength(2);
   });
 
+  it("finds a show by its original and added names", () => {
+    const library = [
+      {
+        ...series("Ejderha Hanedanı", [
+          season(1, [episode("S01E01", "Ejderhanın Mirasçıları")]),
+        ]),
+        searchNames: ["House of the Dragon"],
+      },
+      ...LIBRARY,
+    ];
+    const [show, ...rest] = filterSeries(library, "house dragon");
+    expect(show!.title).toBe("Ejderha Hanedanı");
+    expect(show!.seasons[0]!.episodes).toHaveLength(1);
+    expect(rest).toEqual([]);
+    expect(filterSeries(library, "hanedani")).toHaveLength(1);
+  });
+
   it("keeps every episode of a show whose own name matches", () => {
     const [show] = filterSeries(LIBRARY, "andor");
     expect(show!.title).toBe("Andor");

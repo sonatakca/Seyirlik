@@ -4,6 +4,7 @@ import type {
   ProcessingSeries,
   ProcessingStateCounts,
 } from "../../lib/processingApi";
+import { matchesSearchText } from "../../lib/searchModel";
 
 /**
  * The television view's own logic, kept out of the component.
@@ -14,31 +15,34 @@ import type {
  * without a filter resetting or a season closing under the operator's hand.
  */
 
-/** A search that matches a show, a season, an episode title, or `S01E01`. */
+/**
+ * A search that matches a show by any of its names, a season, an episode
+ * title, or `S01E01`.
+ */
 export function matchesQuery(
   series: ProcessingSeries,
   season: ProcessingSeason,
   episode: ProcessingEpisode,
   query: string,
 ): boolean {
-  if (!query) return true;
-  const haystack = [
-    series.title,
+  return matchesSearchText(query, [
+    ...seriesNames(series),
     season.title,
     episode.title,
     episode.code,
     // So "s01e1" and "1x01" style searches still land on the right episode.
     `${episode.seasonNumber}x${episode.episodeNumber ?? ""}`,
-  ]
-    .join(" ")
-    .toLowerCase();
-  return haystack.includes(query);
+  ]);
+}
+
+function seriesNames(series: ProcessingSeries): string[] {
+  return [series.title, ...(series.searchNames ?? [])];
 }
 
 /**
  * The tree, narrowed to what the search matches.
  *
- * A show whose *own* title matches keeps all of its episodes: someone typing
+ * A show found by one of its names keeps all of its episodes: someone typing
  * "Sopranos" wants the show, not an empty show. Otherwise only the matching
  * episodes survive, and a season with none of them is dropped along with a
  * show that has no seasons left.
@@ -46,21 +50,19 @@ export function matchesQuery(
 export function filterSeries(
   series: readonly ProcessingSeries[],
   rawQuery: string,
-  locale = "en",
 ): ProcessingSeries[] {
-  const query = rawQuery.trim().toLocaleLowerCase(locale);
-  if (!query) return [...series];
+  if (!rawQuery.trim()) return [...series];
 
   const filtered: ProcessingSeries[] = [];
   for (const show of series) {
-    const showMatches = show.title.toLocaleLowerCase(locale).includes(query);
+    const showMatches = matchesSearchText(rawQuery, seriesNames(show));
     const seasons: ProcessingSeason[] = [];
 
     for (const season of show.seasons) {
       const episodes = showMatches
         ? season.episodes
         : season.episodes.filter((episode) =>
-            matchesQuery(show, season, episode, query),
+            matchesQuery(show, season, episode, rawQuery),
           );
       if (episodes.length === 0) continue;
       seasons.push(

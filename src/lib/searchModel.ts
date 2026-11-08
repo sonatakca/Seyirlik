@@ -115,9 +115,11 @@ export function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 /**
- * Folds text for title matching: lowercase, accents dropped, and Turkish's
- * dotless ı read as i, so "avcisi" typed on any keyboard finds "Avcısı". The
- * same folding the server's search applies (`normalizeSearchText`).
+ * Folds text for matching: lowercase, accents dropped, Turkish's dotless ı read
+ * as i, and punctuation read as a space, so "avcisi" typed on any keyboard
+ * finds "Avcısı" and "spider man" finds "Spider-Man". The same folding the
+ * server's search applies (`normalizeSearchText`), except that letters outside
+ * the Latin alphabet are kept rather than dropped.
  */
 export function foldTitleText(value: string): string {
   return value
@@ -125,8 +127,32 @@ export function foldTitleText(value: string): string {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/ı/g, "i")
-    .replace(/\s+/g, " ")
+    .replace(/ø/g, "o")
+    .replace(/æ/g, "ae")
+    .replace(/ß/g, "ss")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
+}
+
+/**
+ * The one rule every search box on the site matches by: each typed word must
+ * appear, folded, in one of the values, in any order. Pass a title's every
+ * name (`titleSearchNames`, or the `searchNames` an admin endpoint sends) next
+ * to whatever else the box searches, so a title is found by the names people
+ * know it by wherever they look for it, not only in the main search.
+ */
+export function matchesSearchText(
+  query: string,
+  values: Iterable<string | number | null | undefined>,
+): boolean {
+  const words = foldTitleText(query).split(" ").filter(Boolean);
+  if (words.length === 0) return true;
+  const folded: string[] = [];
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+    folded.push(foldTitleText(String(value)));
+  }
+  return words.every((word) => folded.some((text) => text.includes(word)));
 }
 
 /**
@@ -144,11 +170,7 @@ export function titleSearchNames(item: MediaItem): string[] {
   ].filter((value): value is string => Boolean(value));
 }
 
-/** Whether any of a title's names contains the typed text. */
+/** Whether the typed text finds a title by any of its names. */
 export function matchesTitleQuery(item: MediaItem, query: string): boolean {
-  const folded = foldTitleText(query);
-  if (!folded) return true;
-  return titleSearchNames(item).some((name) =>
-    foldTitleText(name).includes(folded),
-  );
+  return matchesSearchText(query, titleSearchNames(item));
 }

@@ -35,6 +35,8 @@ export interface LibraryTitle extends HoldingFacts {
   episodeCount: number;
   availableEpisodeCount: number;
   artwork: TitleArtwork;
+  /** Its other names (original, other languages, added); absent from older servers. */
+  searchNames?: string[];
 }
 
 export interface TitleArtwork {

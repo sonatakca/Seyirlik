@@ -21,6 +21,7 @@ import {
   type LibraryTitleKind,
 } from "../../lib/libraryAdminApi";
 import { releaseSearchUrl } from "../../lib/wantedApi";
+import { matchesSearchText } from "../../lib/searchModel";
 import { downloadInventory } from "../../lib/inventoryExport";
 import { RemoveTitleDialog } from "./RemoveTitleDialog";
 import { onTitleRemoved } from "./titleRemovalProgress";
@@ -220,9 +221,11 @@ export function LibraryBoard({ refreshKey = 0 }: { refreshKey?: number }) {
   const visible = (current ?? []).filter(
     (title) =>
       (filter === "all" || toneOf(title, title.desired) === filter) &&
-      title.title
-        .toLocaleLowerCase()
-        .includes(query.trim().toLocaleLowerCase()),
+      matchesSearchText(query, [
+        title.title,
+        ...(title.searchNames ?? []),
+        title.year,
+      ]),
   );
   const everything = KINDS.flatMap((value) => titles[value] ?? []);
 

@@ -34,6 +34,7 @@ import type {
   PlaybackSourceCandidate,
 } from "../lib/types";
 import { setPageTitle } from "../lib/pageTitle";
+import { matchesSearchText, titleSearchNames } from "../lib/searchModel";
 import type { TranslationKey } from "../i18n/translations";
 
 interface PlaybackAuditRow {
@@ -43,6 +44,8 @@ interface PlaybackAuditRow {
   year?: number;
   seriesName?: string;
   seasonName?: string;
+  /** Every name the title is known by, so the search finds it by any of them. */
+  searchNames?: string[];
   selectedMode: PlaybackMode;
   container: string;
   videoCodec: string;
@@ -267,6 +270,7 @@ function enrichRowWithItem(
     year: item.ProductionYear,
     seriesName: item.SeriesName,
     seasonName: item.SeasonName,
+    searchNames: titleSearchNames(item),
   };
 }
 
@@ -559,16 +563,16 @@ export function PlaybackAuditPage() {
   }, [rows]);
 
   const filteredRows = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-
     return rows.filter((row) => {
-      const matchesQuery =
-        normalizedQuery.length === 0 ||
-        row.name.toLowerCase().includes(normalizedQuery) ||
-        row.container.toLowerCase().includes(normalizedQuery) ||
-        row.videoCodec.toLowerCase().includes(normalizedQuery) ||
-        row.audioCodec.toLowerCase().includes(normalizedQuery) ||
-        row.reasons.join(" ").toLowerCase().includes(normalizedQuery);
+      const matchesQuery = matchesSearchText(query, [
+        row.name,
+        ...(row.searchNames ?? []),
+        row.seriesName,
+        row.container,
+        row.videoCodec,
+        row.audioCodec,
+        ...row.reasons,
+      ]);
 
       const matchesMode =
         modeFilter === "all" || row.selectedMode === modeFilter;

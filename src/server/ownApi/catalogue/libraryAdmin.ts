@@ -10,6 +10,7 @@
  * described by what its episodes hold. Aliases are code-owned SQL identifiers.
  */
 import type { DatabaseExecutor } from "../database/databaseTypes";
+import { otherSearchNames } from "./searchNames";
 import type { TmdbClient } from "../metadata/tmdbClient";
 import {
   resolveEpisodeMonitoring,
@@ -57,6 +58,8 @@ export interface LibraryTitle extends HoldingFacts {
   episodeCount: number;
   availableEpisodeCount: number;
   artwork: TitleArtwork;
+  /** Its other names (original, other languages, added), for the list's search. */
+  searchNames: string[];
 }
 
 /** What a poster needs: the cover and logo as stored, and where the logo sits. */
@@ -213,9 +216,14 @@ type TitleRow = HoldingRow & {
   imdbId: string | null;
   episodeCount: number;
   availableEpisodeCount: number;
+  originalTitle: string | null;
+  localizedTitles: Record<string, string> | null;
+  searchAliases: string[] | null;
 };
 
 const TITLE_SELECT = `SELECT item.id, item.kind, item.title, item.production_year AS year, item.desired,
+    item.original_title AS "originalTitle", item.localized_titles AS "localizedTitles",
+    item.search_aliases AS "searchAliases",
     item.provider_ids->>'tmdb' AS "tmdbId", item.provider_ids->>'imdb' AS "imdbId",
     (SELECT count(*)::int FROM items e WHERE e.series_id = item.id AND e.kind = 'episode') AS "episodeCount",
     (SELECT count(*)::int FROM items e WHERE e.series_id = item.id AND e.kind = 'episode'
@@ -255,6 +263,12 @@ function toTitle(row: TitleRow, coverPresent: boolean): LibraryTitle {
             },
       missing: !coverPresent,
     },
+    searchNames: otherSearchNames(
+      row.title,
+      row.originalTitle,
+      row.localizedTitles,
+      row.searchAliases,
+    ),
     ...holding(row),
   };
 }

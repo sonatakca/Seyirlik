@@ -41,6 +41,7 @@ import {
   saveCuratedList,
 } from "../../lib/mediaApi";
 import { setPageTitle } from "../../lib/pageTitle";
+import { matchesSearchText, titleSearchNames } from "../../lib/searchModel";
 import type { MediaItem } from "../../lib/types";
 import {
   applyVisibleOrder,
@@ -146,22 +147,15 @@ function itemMatchesQuery(
   query: string,
   t: ReturnType<typeof useLanguage>["t"],
 ): boolean {
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-  if (!normalizedQuery) return true;
-
-  return [
+  return matchesSearchText(query, [
     getDisplayTitle(item),
-    item.Name,
+    ...titleSearchNames(item),
     item.SortName,
     item.SeriesName,
-    item.ProductionYear?.toString(),
+    item.ProductionYear,
     getItemTypeLabel(item, t),
     item.Id,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLocaleLowerCase()
-    .includes(normalizedQuery);
+  ]);
 }
 
 interface CurationItemRowProps {

@@ -3,6 +3,7 @@ import { PLAYABLE_FILE_ORDER, playableFileCandidatesSql } from "./fileEpisodes";
 import { contentRatingAllowedSql } from "./contentRating";
 import type { DatabasePool } from "../database/databasePool";
 import type { SearchCandidate } from "./searchRanking";
+import { otherSearchNames } from "./searchNames";
 
 export type ItemKind =
   | "movie"
@@ -423,6 +424,8 @@ export interface ProcessableTitleRow {
   seriesTitle: string | null;
   seriesSortTitle: string | null;
   seriesYear: number | null;
+  /** The series' other names (original, other languages, added), for search. */
+  seriesSearchNames?: string[];
   seasonId: string | null;
   seasonTitle: string | null;
   /**
@@ -1062,6 +1065,9 @@ export function createCatalogueRepository(
            series.title AS series_title,
            series.sort_title AS series_sort_title,
            series.production_year AS series_year,
+           series.original_title AS series_original_title,
+           series.localized_titles AS series_localized_titles,
+           series.search_aliases AS series_search_aliases,
            season.id AS season_id,
            season.title AS season_title,
            COALESCE(season.index_number, item.parent_index_number) AS season_number,
@@ -1191,6 +1197,15 @@ function toProcessableTitleRow(
     seriesTitle: textOrNull(row.series_title),
     seriesSortTitle: textOrNull(row.series_sort_title),
     seriesYear: numberOrNull(row.series_year),
+    seriesSearchNames: row.series_id
+      ? otherSearchNames(
+          textOrNull(row.series_title),
+          textOrNull(row.series_original_title),
+          (row.series_localized_titles as Record<string, string> | null) ??
+            null,
+          (row.series_search_aliases as string[] | null) ?? null,
+        )
+      : [],
     seasonId: textOrNull(row.season_id),
     seasonTitle: textOrNull(row.season_title),
     seasonNumber: numberOrNull(row.season_number),
