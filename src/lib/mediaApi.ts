@@ -375,6 +375,48 @@ export async function getItemPeople(itemId: string): Promise<ItemPersonDto[]> {
   );
 }
 
+/** A title's drawn card: its cover with the logo laid over it. */
+export interface ShareCardImage {
+  src: string;
+  width: number;
+  height: number;
+}
+
+const shareCards = new Map<string, Promise<ShareCardImage | null>>();
+
+/**
+ * The picture a shared link of this title shows, or null when it has none
+ * (no cover or no logo). Asked once per title per page load: the answer names
+ * a content-versioned URL, and a missing card is not drawn by asking again.
+ */
+export function getShareCardImage(
+  itemId: string,
+): Promise<ShareCardImage | null> {
+  let pending = shareCards.get(itemId);
+  if (!pending) {
+    pending = ownApiClient
+      .request<{
+        image: { path: string; width: number; height: number } | null;
+      }>(`/share/items/${encodeURIComponent(itemId)}`, { background: true })
+      .then(({ image }) =>
+        image
+          ? {
+              src: ownApiUrl(image.path),
+              width: image.width,
+              height: image.height,
+            }
+          : null,
+      )
+      .catch(() => {
+        // A failed lookup may succeed later; only an answer is remembered.
+        shareCards.delete(itemId);
+        return null;
+      });
+    shareCards.set(itemId, pending);
+  }
+  return pending;
+}
+
 export async function getSimilarItems(
   itemId: string,
   limit = 18,

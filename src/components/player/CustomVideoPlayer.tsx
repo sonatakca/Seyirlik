@@ -1743,7 +1743,7 @@ export function CustomVideoPlayer({
 
   useMediaSessionControls({
     enabled: !partyWatch.isActive,
-    title,
+    name: itemMetadata.title ?? item.Name,
     item,
     isPlaying: progress.isPlaying,
     currentTime: progress.currentTime,
