@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabasePool } from "../database/databasePool";
+import { defaultJobPriority } from "./quickJobs";
 import {
   parseMaintenanceProgress,
   type MaintenanceProgress,
@@ -372,7 +373,7 @@ export function createJobQueue(pool: DatabasePool): JobQueue {
     enqueue: async ({
       jobType,
       payload = {},
-      priority = 100,
+      priority = defaultJobPriority(jobType),
       maxAttempts = 3,
       runAfter,
       dedupeKey,

@@ -17,6 +17,12 @@ import {
   workerLanes,
 } from "./workerRole";
 import type { WorkerLane } from "./worker";
+import {
+  DEFAULT_JOB_PRIORITY,
+  QUICK_JOB_PRIORITY,
+  QUICK_JOB_TYPES,
+  defaultJobPriority,
+} from "./quickJobs";
 
 /** Which lane of these would claim a job of this type, if any. */
 function claimingLane(lanes: WorkerLane[], jobType: string): string | null {
@@ -107,6 +113,7 @@ describe("worker roles", () => {
       "media",
       "trickplay",
       "library",
+      "quick",
     ]);
     expect(claimingLane(all, IMPORT_JOB_TYPES.run)).toBe("library");
     expect(claimingLane(all, SUBTITLE_JOB_TYPES.run)).toBeNull();
@@ -182,6 +189,56 @@ describe("worker roles", () => {
     expect(
       claimingLane(workerLanes("light", []), SUBTITLE_ANALYSIS_JOB_TYPE),
     ).toBeNull();
+  });
+
+  /*
+   * Three subtitle searches filled the library lane and a scan pressed from
+   * the dashboard waited minutes for a second of work. The quick slot claims
+   * only short work, so it is free whenever the library lane is not.
+   */
+  it("keeps one slot for short work wherever the library side runs", () => {
+    for (const role of ["light", "all"] as const) {
+      for (const bridge of [false, true]) {
+        const quick = workerLanes(role, [], { bridge }).filter(
+          (lane) => lane.name === "quick",
+        );
+        expect(quick).toEqual([
+          {
+            name: "quick",
+            jobTypes: [...QUICK_JOB_TYPES],
+            concurrency: 1,
+          },
+        ]);
+      }
+    }
+    expect(QUICK_JOB_TYPES).toEqual([
+      JOB_TYPES.libraryScan,
+      JOB_TYPES.metadataRefresh,
+      JOB_TYPES.libraryMaintenance,
+    ]);
+    // Never long work, never anything the heavy machine owns.
+    for (const type of QUICK_JOB_TYPES) {
+      expect(HEAVY_JOB_TYPES).not.toContain(type);
+      expect(LONG_JOB_TYPES).not.toContain(type);
+    }
+    expect(workerLanes("heavy", []).some((lane) => lane.name === "quick")).toBe(
+      false,
+    );
+    // A disabled type stays disabled in the quick slot as well.
+    expect(
+      workerLanes("light", [JOB_TYPES.metadataRefresh]).find(
+        (lane) => lane.name === "quick",
+      )?.jobTypes,
+    ).toEqual([JOB_TYPES.libraryScan, JOB_TYPES.libraryMaintenance]);
+  });
+
+  it("puts short work just ahead of the default and behind the all-in-one pass", () => {
+    expect(defaultJobPriority(JOB_TYPES.libraryScan)).toBe(QUICK_JOB_PRIORITY);
+    expect(defaultJobPriority(SUBTITLE_JOB_TYPES.run)).toBe(
+      DEFAULT_JOB_PRIORITY,
+    );
+    expect(QUICK_JOB_PRIORITY).toBeLessThan(DEFAULT_JOB_PRIORITY);
+    expect(QUICK_JOB_PRIORITY).toBeGreaterThan(90);
   });
 
   it("leaves encode bookkeeping to the worker that runs the encoder", () => {

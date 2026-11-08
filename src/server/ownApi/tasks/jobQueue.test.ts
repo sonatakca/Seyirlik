@@ -93,6 +93,25 @@ describe("enqueueing a job", () => {
     ).resolves.toBe("job-1");
     expect(query).toHaveBeenCalledTimes(1);
   });
+
+  it("puts short work ahead of the backlog unless the caller chose a place", async () => {
+    const { pool, query } = poolThatRecords();
+    const queue = createJobQueue(pool);
+    const priorityOf = (call: number) => query.mock.calls[call]?.[1]?.[3];
+
+    await queue.enqueue({
+      jobType: "library.scan",
+      payload: { libraryId: "l" },
+    });
+    await queue.enqueue({
+      jobType: "metadata.refresh",
+      payload: { itemId: "i" },
+    });
+    await queue.enqueue({ jobType: "subtitle.run" });
+    await queue.enqueue({ jobType: "library.scan", priority: 150 });
+
+    expect([0, 1, 2, 3].map(priorityOf)).toEqual([95, 95, 100, 150]);
+  });
 });
 
 /**

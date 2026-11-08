@@ -3,6 +3,7 @@ import { IMPORT_JOB_TYPES } from "../imports/importJobs";
 import { GARBAGE_JOB_TYPES } from "../maintenance/garbageCollector";
 import { MEDIA_LANE_JOB_TYPES, TRICKPLAY_LANE_JOB_TYPES } from "./jobHandlers";
 import type { WorkerLane } from "./worker";
+import { QUICK_JOB_TYPES } from "./quickJobs";
 import { SUBTITLE_ANALYSIS_JOB_TYPE } from "../subtitles/subtitleAnalysis";
 
 /**
@@ -196,6 +197,7 @@ function roleLanes(
         excludeJobTypes: [...HEAVY_JOB_TYPES, ...disabledJobTypes],
         concurrency: 3,
       },
+      ...quickLane(disabledJobTypes),
     ];
   }
   return [
@@ -212,5 +214,23 @@ function roleLanes(
       ],
       concurrency: 3,
     },
+    ...quickLane(disabledJobTypes),
   ];
+}
+
+/**
+ * One slot that only short work may take (`quickJobs.ts`).
+ *
+ * It overlaps the library lane rather than taking these types away from it:
+ * when the library lane is idle they still run three at a time, and when it is
+ * full of subtitle searches this slot is the one still free. Overlap is safe
+ * because both lanes claim through the same `SKIP LOCKED` statement.
+ */
+function quickLane(disabledJobTypes: readonly string[]): WorkerLane[] {
+  const jobTypes = QUICK_JOB_TYPES.filter(
+    (type) => !disabledJobTypes.includes(type),
+  );
+  return jobTypes.length > 0
+    ? [{ name: "quick", jobTypes, concurrency: 1 }]
+    : [];
 }
