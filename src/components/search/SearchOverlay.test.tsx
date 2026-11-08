@@ -133,10 +133,14 @@ describe("SearchOverlay", () => {
       },
     ]);
 
-    expect(await screen.findByText("Salazar's Revenge")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Salazar's Revenge" }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("status", { name: "Searching…" })).toBeNull();
     // The poster shimmers where it will be until it has loaded, then fades in.
-    const row = screen.getByText("Salazar's Revenge").closest("button")!;
+    const row = screen
+      .getByRole("button", { name: "Salazar's Revenge" })
+      .closest("button")!;
     const poster = row.querySelector("img")!;
     expect(row.querySelector(".shimmer")).not.toBeNull();
     expect(poster.className).toContain("opacity-0");
@@ -158,14 +162,117 @@ describe("SearchOverlay", () => {
     await vi.advanceTimersByTimeAsync(400);
 
     await waitFor(() => {
-      expect(screen.getByText("Arrival")).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Arrival" }),
+      ).toBeInTheDocument();
     });
 
-    fireEvent.keyDown(input, { key: "ArrowDown" });
+    // Films share one shelf: Right at the end of the text steps along it.
+    fireEvent.keyDown(input, { key: "ArrowRight" });
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(navigate).toHaveBeenCalledWith("/movies/movie-2");
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("moves between a shelf and episode rows, returning to the shelf's place", async () => {
+    mockedSearchItems.mockResolvedValue([
+      item("movie-1", "Arrival", "Movie"),
+      item("movie-2", "Annihilation", "Movie"),
+      item("movie-3", "Alien", "Movie"),
+      item("episode-1", "Pilot", "Episode"),
+      item("episode-2", "Second", "Episode"),
+    ]);
+
+    renderOverlay();
+    const input = screen.getByRole("searchbox");
+    fireEvent.change(input, { target: { value: "aaa" } });
+    await vi.advanceTimersByTimeAsync(400);
+    await waitFor(() => {
+      expect(screen.getByText("Pilot")).toBeInTheDocument();
+    });
+
+    const active = () =>
+      document.querySelector('[data-search-active="true"]')?.textContent;
+
+    // Before browsing, Left belongs to the caret.
+    fireEvent.keyDown(input, { key: "ArrowLeft" });
+    expect(active()).toContain("Arrival");
+
+    fireEvent.keyDown(input, { key: "ArrowRight" });
+    fireEvent.keyDown(input, { key: "ArrowRight" });
+    expect(active()).toContain("Alien");
+
+    // Down leaves the shelf for the first episode, not the next film.
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(active()).toContain("Pilot");
+    // The shelf is not left blank: it still names, dimmed, where focus stood.
+    const caption = document.querySelector("p.search-caption-in")!;
+    expect(caption.textContent).toBe("Alien");
+    expect(caption).toHaveAttribute("data-resting", "true");
+    // Left and Right do nothing on a row of one.
+    fireEvent.keyDown(input, { key: "ArrowRight" });
+    expect(active()).toContain("Pilot");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(active()).toContain("Second");
+
+    // Back up onto the shelf where focus last stood.
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(active()).toContain("Alien");
+
+    // Typing hands Left back to the caret.
+    fireEvent.change(input, { target: { value: "aaab" } });
+    fireEvent.keyDown(input, { key: "ArrowLeft" });
+    expect(active()).toContain("Alien");
+  });
+
+  it("names only the focused title, in full, under its shelf", async () => {
+    const long = "Star Wars: Episode VI - Return of the Jedi (1983)";
+    mockedSearchItems.mockResolvedValue([
+      item("movie-1", "Arrival", "Movie"),
+      item("movie-2", long, "Movie"),
+    ]);
+
+    renderOverlay();
+    const input = screen.getByRole("searchbox");
+    fireEvent.change(input, { target: { value: "aaa" } });
+    await vi.advanceTimersByTimeAsync(400);
+    await screen.findByRole("button", { name: long });
+
+    const caption = () =>
+      Array.from(document.querySelectorAll("p.search-caption-in")).map(
+        (node) => node.textContent,
+      );
+    expect(caption()).toEqual(["Arrival"]);
+
+    fireEvent.keyDown(input, { key: "ArrowRight" });
+    expect(caption()).toEqual([long]);
+    // Never cut short: no truncation anywhere on the shelf.
+    expect(document.querySelector("[data-search-shelf] .truncate")).toBeNull();
+  });
+
+  it("lets the pointer take focus", async () => {
+    mockedSearchItems.mockResolvedValue([
+      item("movie-1", "Arrival", "Movie"),
+      item("episode-1", "Pilot", "Episode"),
+    ]);
+
+    renderOverlay();
+    fireEvent.change(screen.getByRole("searchbox"), {
+      target: { value: "arr" },
+    });
+    await vi.advanceTimersByTimeAsync(400);
+    await waitFor(() => {
+      expect(screen.getByText("Pilot")).toBeInTheDocument();
+    });
+
+    const pilot = screen.getByText("Pilot").closest("button")!;
+    fireEvent.pointerMove(pilot);
+    expect(pilot).toHaveAttribute("data-search-active", "true");
+    fireEvent.keyDown(screen.getByRole("searchbox"), { key: "Enter" });
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(navigate).not.toHaveBeenCalledWith("/movies/movie-1");
   });
 
   it("closes on Escape", async () => {
@@ -206,8 +313,10 @@ describe("SearchOverlay", () => {
       expect(screen.getByText("Suggestions")).toBeInTheDocument();
     });
 
-    expect(screen.getByText("Arrival")).toBeInTheDocument();
-    expect(screen.getByText("Severance")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Arrival" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Severance" }),
+    ).toBeInTheDocument();
     // Suggestions are one list, not split by kind.
     expect(screen.queryByText("Movies")).not.toBeInTheDocument();
     expect(mockedSearchItems).not.toHaveBeenCalled();
@@ -221,7 +330,9 @@ describe("SearchOverlay", () => {
     renderOverlay();
 
     await waitFor(() => {
-      expect(screen.getByText("Arrival")).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Arrival" }),
+      ).toBeInTheDocument();
     });
 
     fireEvent.keyDown(screen.getByRole("searchbox"), { key: "Enter" });
@@ -267,7 +378,7 @@ describe("SearchOverlay", () => {
       .closest("button")
       ?.querySelector("span > img");
     const movieArtwork = screen
-      .getByText("Arrival")
+      .getByRole("button", { name: "Arrival" })
       .closest("button")
       ?.querySelector("span > img");
 
@@ -323,11 +434,13 @@ describe("SearchOverlay", () => {
     await vi.advanceTimersByTimeAsync(400);
 
     await waitFor(() => {
-      expect(screen.getByText("Arrival")).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Arrival" }),
+      ).toBeInTheDocument();
     });
 
     const placement = screen
-      .getByText("Arrival")
+      .getByRole("button", { name: "Arrival" })
       .closest("button")!
       .querySelector('[data-logo-layout="true"]') as HTMLElement | null;
 
@@ -353,10 +466,14 @@ describe("SearchOverlay", () => {
     await vi.advanceTimersByTimeAsync(400);
 
     await waitFor(() => {
-      expect(screen.getByText("Arrival")).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Arrival" }),
+      ).toBeInTheDocument();
     });
 
-    const row = screen.getByText("Arrival").closest("button")!;
+    const row = screen
+      .getByRole("button", { name: "Arrival" })
+      .closest("button")!;
     expect(row.querySelector('[data-logo-layout="true"]')).toBeNull();
     expect(row.querySelectorAll("img")).toHaveLength(2);
   });

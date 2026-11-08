@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 import {
   AnimatePresence,
@@ -31,9 +39,9 @@ import {
   groupSearchResults,
   isSearchableQuery,
   type SearchGroup,
+  type SearchGroupId,
 } from "../../lib/searchModel";
 import type { MediaItem } from "../../lib/types";
-import { SlidingIndicator } from "../ui/SlidingIndicator";
 
 interface SearchOverlayProps {
   isOpen: boolean;
@@ -70,9 +78,122 @@ function getResultSubtitle(item: MediaItem): string {
   return item.ProductionYear ? String(item.ProductionYear) : "";
 }
 
-/** The artwork tile's frame: 16:9 for an episode still, 2:3 for a poster. */
-function tileSize(isStill: boolean): string {
+/**
+ * The artwork tile's frame: 16:9 for an episode still, 2:3 for a poster. On a
+ * shelf every tile is a poster, large enough for its logo to be read.
+ */
+function tileSize(isStill: boolean, onShelf = false): string {
+  if (onShelf) return "aspect-[2/3] w-28 sm:w-[8.5rem]";
   return isStill ? "aspect-video w-28 sm:w-36" : "aspect-[2/3] w-14 sm:w-16";
+}
+
+/**
+ * Titles (films, series, books) sit side by side on a shelf, the way a console
+ * shelves them; episodes stay rows, since a still needs its words beside it.
+ */
+function isShelfGroup(group: SearchGroup): boolean {
+  return group.items.every((item) => item.Type !== "Episode");
+}
+
+// Focus pops in place with a touch of overshoot and lets go faster than it
+// arrived; nothing travels between results.
+const FOCUS_IN = "220ms cubic-bezier(0.2, 0.9, 0.25, 1.18)";
+const FOCUS_OUT = "140ms cubic-bezier(0.4, 0, 1, 1)";
+
+function focusTransition(active: boolean): string {
+  return active
+    ? `transform ${FOCUS_IN}, opacity 160ms ease-out`
+    : `transform ${FOCUS_OUT}, opacity ${FOCUS_OUT}`;
+}
+
+/**
+ * The focused artwork grows toward the viewer, outlined with a gap and lifted
+ * off the panel by a dark shadow. Transform and opacity only, so the
+ * compositor plays it.
+ */
+function FocusLift({
+  active,
+  origin,
+  scale,
+  children,
+}: {
+  active: boolean;
+  origin: string;
+  scale: number;
+  children: ReactNode;
+}) {
+  const layer = {
+    opacity: active ? 1 : 0,
+    transition: focusTransition(active),
+  };
+  return (
+    <span
+      className="relative block shrink-0 motion-reduce:!transition-none"
+      style={{
+        transformOrigin: origin,
+        transform: active ? `scale(${scale})` : "scale(1)",
+        transition: focusTransition(active),
+      }}
+    >
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 rounded-lg shadow-[0_10px_24px_rgba(0,0,0,0.7)]"
+        style={layer}
+      />
+      <span
+        aria-hidden="true"
+        data-search-focus-ring="true"
+        className="pointer-events-none absolute -inset-[4px] rounded-[0.7rem] border-2 border-white"
+        style={layer}
+      />
+      {children}
+    </span>
+  );
+}
+
+/**
+ * The focused title's whole name, under its shelf, where it never has to be
+ * cut short to fit a poster's width. When focus is elsewhere the shelf keeps
+ * naming, dimmed, the title focus will return to, so it never sits blank.
+ */
+function ShelfCaption({
+  item,
+  resting,
+  language,
+}: {
+  item: MediaItem | undefined;
+  resting: boolean;
+  language: Language;
+}) {
+  const subtitle = item ? getResultSubtitle(item) : "";
+  return (
+    <div aria-hidden="true" className="min-h-[2.25rem] px-3 pb-1">
+      {item ? (
+        <p
+          key={item.Id}
+          data-resting={resting ? "true" : undefined}
+          className="search-caption-in flex flex-wrap items-baseline gap-x-2.5 text-base font-black leading-snug text-white transition-opacity duration-200 motion-reduce:transition-none"
+          style={{ opacity: resting ? 0.4 : 1 }}
+        >
+          <span>{getResultTitle(item, language)}</span>
+          {subtitle ? (
+            <span className="text-[0.7rem] font-bold uppercase tracking-[0.1em] text-white/45">
+              {subtitle}
+            </span>
+          ) : null}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Words beside a lifted still step aside with it; resting ones recede. */
+function focusTextStyle(active: boolean, shift: number): CSSProperties {
+  return {
+    transform: active ? `translateX(${shift}px)` : "translateX(0)",
+    opacity: active ? 1 : 0.72,
+    transition: focusTransition(active),
+  };
 }
 
 /** An image that arrives fades in over its placeholder rather than popping. */
@@ -108,22 +229,22 @@ function ResultsSkeleton({ label }: { label: string }) {
         aria-hidden="true"
         className="shimmer mx-2 mb-3 mt-2 block h-2.5 w-16 rounded-full"
       />
-      <ul aria-hidden="true" className="space-y-1">
-        {[0.62, 0.48, 0.7, 0.54].map((width, index) => (
-          <li key={index} className="flex items-center gap-3 px-3 py-2">
-            <span
-              className={`shimmer block shrink-0 rounded-lg ${tileSize(false)}`}
-            />
-            <span className="flex min-w-0 flex-1 flex-col gap-2">
-              <span
-                className="shimmer block h-3.5 rounded-full"
-                style={{ width: `${width * 100}%` }}
-              />
-              <span className="shimmer block h-2.5 w-12 rounded-full" />
-            </span>
-          </li>
+      {/* Titles land on a shelf first, so the skeleton is one. */}
+      <ul
+        aria-hidden="true"
+        className="-mx-3 flex gap-4 overflow-hidden px-5 pb-3 pt-7"
+      >
+        {[0, 1, 2, 3, 4].map((index) => (
+          <li
+            key={index}
+            className={`shimmer block shrink-0 rounded-lg ${tileSize(false, true)}`}
+          />
         ))}
       </ul>
+      <span
+        aria-hidden="true"
+        className="shimmer mx-2 mb-3 block h-3.5 w-48 rounded-full"
+      />
     </div>
   );
 }
@@ -218,12 +339,14 @@ function ResultLogo({
 function ResultArtwork({
   item,
   language,
+  onShelf = false,
 }: {
   item: MediaItem;
   language: Language;
+  onShelf?: boolean;
 }) {
   const { shape, imageUrl, logoUrl } = getMediaArtwork(item, language, {
-    posterWidth: 240,
+    posterWidth: onShelf ? 360 : 240,
     stillWidth: 440,
     logoWidth: 320,
   });
@@ -235,6 +358,7 @@ function ResultArtwork({
     <span
       className={`relative block shrink-0 overflow-hidden rounded-lg bg-white/[0.06] ${tileSize(
         isStill,
+        onShelf,
       )}`}
     >
       {waiting ? (
@@ -254,7 +378,7 @@ function ResultArtwork({
         <span className="absolute inset-0 bg-[linear-gradient(145deg,#27272a,#09090b)]" />
       )}
 
-      {logoUrl && !isStill ? (
+      {logoUrl && (onShelf || !isStill) ? (
         <ResultLogo item={item} logoUrl={logoUrl} posterShown={!waiting} />
       ) : null}
     </span>
@@ -266,7 +390,6 @@ export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
-  const resultsRef = useRef<HTMLDivElement | null>(null);
   const shouldReduceMotion = useReducedMotion();
   // Guards against a slow request for an old query overwriting a newer one.
   const requestSequenceRef = useRef(0);
@@ -291,6 +414,57 @@ export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {
       : [];
   }, [hasQuery, results, suggestions]);
   const flatResults = useMemo(() => flattenSearchGroups(groups), [groups]);
+  // Position of each result in keyboard order, across groups.
+  const flatIndexById = useMemo(
+    () => new Map(flatResults.map((item, index) => [item.Id, index])),
+    [flatResults],
+  );
+  // Keyboard rows in flat-index terms: a shelf is one row, each episode its own.
+  const rows = useMemo(() => {
+    const out: { shelf?: SearchGroup; indices: number[] }[] = [];
+    let index = 0;
+    for (const group of groups) {
+      if (isShelfGroup(group)) {
+        out.push({ shelf: group, indices: group.items.map(() => index++) });
+      } else {
+        for (let i = 0; i < group.items.length; i++) {
+          out.push({ indices: [index++] });
+        }
+      }
+    }
+    return out;
+  }, [groups]);
+  // The title focus last stood on in each shelf: stepping back onto the shelf
+  // returns there, and the shelf's caption names it while focus is away.
+  const [shelfPlaces, setShelfPlaces] = useState<
+    Partial<Record<SearchGroupId, string>>
+  >({});
+  // Left/Right move the caret until the person starts moving through results.
+  const browsingRef = useRef(false);
+  // Only keyboard moves scroll the list; a pointer is already where it looks.
+  const pointerFocusRef = useRef(false);
+
+  /** Where a shelf stands: its remembered title if still on it, else its first. */
+  const shelfPlace = (shelf: SearchGroup): MediaItem | undefined => {
+    const id = shelfPlaces[shelf.id];
+    return shelf.items.find((entry) => entry.Id === id) ?? shelf.items[0];
+  };
+
+  /** Moves focus, and remembers it as its shelf's place when it is on one. */
+  const focusResult = (index: number) => {
+    setActiveIndex(index);
+    const item = flatResults[index];
+    const shelf = groups.find(
+      (group) => isShelfGroup(group) && item && group.items.includes(item),
+    );
+    if (shelf && item) {
+      setShelfPlaces((places) =>
+        places[shelf.id] === item.Id
+          ? places
+          : { ...places, [shelf.id]: item.Id },
+      );
+    }
+  };
 
   useEffect(() => {
     if (!isOpen) {
@@ -411,17 +585,49 @@ export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {
       return;
     }
 
-    if (event.key === "ArrowDown") {
+    const rowIndex = Math.max(
+      0,
+      rows.findIndex((row) => row.indices.includes(activeIndex)),
+    );
+    const row = rows[rowIndex]?.indices ?? [];
+
+    const focus = (index: number) => {
+      pointerFocusRef.current = false;
+      focusResult(index);
+    };
+
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
-      setActiveIndex((current) => (current + 1) % flatResults.length);
+      browsingRef.current = true;
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      const next = rows[(rowIndex + step + rows.length) % rows.length];
+      const place = next.shelf ? shelfPlace(next.shelf) : undefined;
+      focus(
+        place
+          ? (flatIndexById.get(place.Id) ?? next.indices[0])
+          : next.indices[0],
+      );
       return;
     }
 
-    if (event.key === "ArrowUp") {
+    if (
+      (event.key === "ArrowRight" || event.key === "ArrowLeft") &&
+      row.length > 1
+    ) {
+      const input = event.target as HTMLInputElement;
+      const caretAtEnd =
+        input.value === undefined ||
+        (input.selectionStart === input.value.length &&
+          input.selectionEnd === input.value.length);
+      // Right at the end of the text has nothing to move, so it starts browsing.
+      if (!browsingRef.current && !(event.key === "ArrowRight" && caretAtEnd)) {
+        return;
+      }
       event.preventDefault();
-      setActiveIndex(
-        (current) => (current - 1 + flatResults.length) % flatResults.length,
-      );
+      browsingRef.current = true;
+      const place = row.indexOf(activeIndex);
+      const next = row[place + (event.key === "ArrowRight" ? 1 : -1)];
+      if (next !== undefined) focus(next);
       return;
     }
 
@@ -436,24 +642,28 @@ export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {
   };
 
   useEffect(() => {
+    if (pointerFocusRef.current) return;
     const activeElement = listRef.current?.querySelector<HTMLElement>(
       '[data-search-active="true"]',
     );
 
     // Guarded because scrollIntoView is absent in non-browser DOMs.
     if (typeof activeElement?.scrollIntoView === "function") {
-      activeElement.scrollIntoView({ block: "nearest" });
+      // Each result carries a scroll margin as deep as its neighbour, so the
+      // list moves while there is still one more result in view past focus:
+      // what comes next is always visible before it is reached.
+      activeElement.scrollIntoView({
+        block: "nearest",
+        inline: "nearest",
+        behavior: shouldReduceMotion ? "auto" : "smooth",
+      });
     }
-  }, [activeIndex]);
+  }, [activeIndex, shouldReduceMotion]);
 
   if (typeof document === "undefined") {
     return null;
   }
 
-  // Position of each result in keyboard order, across groups.
-  const flatIndexById = new Map(
-    flatResults.map((item, index) => [item.Id, index]),
-  );
   // The panel drops from where the search control lives, and leaves faster
   // than it arrived; with reduced motion it only fades.
   const panelMotion: HTMLMotionProps<"div"> = shouldReduceMotion
@@ -514,7 +724,10 @@ export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {
                 ref={inputRef}
                 type="search"
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) => {
+                  browsingRef.current = false;
+                  setQuery(event.target.value);
+                }}
                 placeholder={t("search.placeholder")}
                 aria-label={t("search.placeholder")}
                 autoComplete="off"
@@ -572,79 +785,155 @@ export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {
                   })}
                 </p>
               ) : (
-                <div ref={resultsRef} className="relative">
-                  {/* One highlight that follows the arrow keys from row to row. */}
-                  <SlidingIndicator
-                    containerRef={resultsRef}
-                    activeSelector='[data-search-active="true"]'
-                    measureKey={`${activeIndex}:${flatResults.length}:${query}`}
-                    className="rounded-xl bg-white/[0.12]"
-                  />
-                  {groups.map((group) => (
-                    <div key={group.id} className="relative mb-2 last:mb-0">
-                      <p className="px-3 py-2 text-[0.68rem] font-black uppercase tracking-[0.16em] text-[var(--accent)]">
-                        {t(group.labelKey)}
-                      </p>
+                <div className="relative">
+                  {groups.map((group) => {
+                    const onShelf = isShelfGroup(group);
+                    return (
+                      <div key={group.id} className="relative mb-2 last:mb-0">
+                        <p className="px-3 py-2 text-[0.68rem] font-black uppercase tracking-[0.16em] text-[var(--accent)]">
+                          {t(group.labelKey)}
+                        </p>
 
-                      <ul className="space-y-1">
-                        {group.items.map((item) => {
-                          const flatIndex = flatIndexById.get(item.Id) ?? 0;
-                          const isActive = flatIndex === activeIndex;
-                          const subtitle = getResultSubtitle(item);
-                          // A list arriving as a list: capped, so the twelfth row
-                          // is not still waiting after the first has been read.
-                          const delay = Math.min(flatIndex * 0.024, 0.2);
+                        <ul
+                          className={
+                            onShelf
+                              ? // Edge to edge, with room above for a lifted poster.
+                                "-mx-2 flex gap-4 overflow-x-auto overscroll-x-contain px-5 pb-3 pt-4 scrollbar-none"
+                              : "space-y-1"
+                          }
+                        >
+                          {group.items.map((item) => {
+                            const flatIndex = flatIndexById.get(item.Id) ?? 0;
+                            const isActive = flatIndex === activeIndex;
+                            const subtitle = getResultSubtitle(item);
+                            // A list arriving as a list: capped, so the twelfth
+                            // result is not still waiting after the first has
+                            // been read.
+                            const delay = Math.min(flatIndex * 0.024, 0.2);
+                            const takeFocus = () => {
+                              browsingRef.current = true;
+                              if (isActive) return;
+                              pointerFocusRef.current = true;
+                              focusResult(flatIndex);
+                            };
 
-                          return (
-                            <motion.li
-                              key={item.Id}
-                              initial={
-                                shouldReduceMotion
-                                  ? { opacity: 0 }
-                                  : { opacity: 0, transform: move({ y: 8 }) }
-                              }
-                              animate={{
-                                opacity: 1,
-                                ...(shouldReduceMotion ? {} : settle),
-                                transition: {
-                                  duration: 0.26,
-                                  delay,
-                                  ease: [0.22, 1, 0.36, 1],
-                                },
-                              }}
-                            >
-                              <button
-                                type="button"
-                                data-search-active={
-                                  isActive ? "true" : undefined
+                            return (
+                              <motion.li
+                                key={item.Id}
+                                className={onShelf ? "shrink-0" : undefined}
+                                initial={
+                                  shouldReduceMotion
+                                    ? { opacity: 0 }
+                                    : {
+                                        opacity: 0,
+                                        transform: move(
+                                          onShelf ? { x: 12 } : { y: 8 },
+                                        ),
+                                      }
                                 }
-                                onClick={() => openResult(item)}
-                                className={`relative flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left transition focus:outline-none focus:ring-2 focus:ring-[var(--accent)] ${
-                                  isActive ? "" : "hover:bg-white/[0.08]"
-                                }`}
+                                animate={{
+                                  opacity: 1,
+                                  ...(shouldReduceMotion ? {} : settle),
+                                  transition: {
+                                    duration: 0.26,
+                                    delay,
+                                    ease: [0.22, 1, 0.36, 1],
+                                  },
+                                }}
                               >
-                                <ResultArtwork
-                                  item={item}
-                                  language={language}
-                                />
-
-                                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                                  <span className="truncate text-sm font-black text-white sm:text-base">
-                                    {getResultTitle(item, language)}
-                                  </span>
-                                  {subtitle ? (
-                                    <span className="truncate text-[0.7rem] font-bold uppercase tracking-[0.1em] text-white/45">
-                                      {subtitle}
+                                {onShelf ? (
+                                  <button
+                                    type="button"
+                                    data-search-active={
+                                      isActive ? "true" : undefined
+                                    }
+                                    data-search-shelf="true"
+                                    onClick={() => openResult(item)}
+                                    onPointerMove={takeFocus}
+                                    className="block w-28 scroll-mx-28 scroll-mb-32 scroll-mt-12 rounded-lg pt-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] sm:w-[8.5rem]"
+                                  >
+                                    <FocusLift
+                                      active={isActive}
+                                      origin="50% 100%"
+                                      scale={1.08}
+                                    >
+                                      <ResultArtwork
+                                        item={item}
+                                        language={language}
+                                        onShelf
+                                      />
+                                    </FocusLift>
+                                    {/* The poster and its logo name the title; the full name is read out here and shown under the shelf. */}
+                                    <span className="sr-only">
+                                      {[
+                                        getResultTitle(item, language),
+                                        subtitle,
+                                      ]
+                                        .filter(Boolean)
+                                        .join(", ")}
                                     </span>
-                                  ) : null}
-                                </span>
-                              </button>
-                            </motion.li>
-                          );
-                        })}
-                      </ul>
-                    </div>
-                  ))}
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    data-search-active={
+                                      isActive ? "true" : undefined
+                                    }
+                                    onClick={() => openResult(item)}
+                                    onPointerMove={takeFocus}
+                                    className="relative flex w-full scroll-my-24 items-center gap-3 rounded-xl px-3 py-2 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                                  >
+                                    <FocusLift
+                                      active={isActive}
+                                      origin="0% 50%"
+                                      scale={1.1}
+                                    >
+                                      <ResultArtwork
+                                        item={item}
+                                        language={language}
+                                      />
+                                    </FocusLift>
+
+                                    <span
+                                      className="relative flex min-w-0 flex-1 flex-col gap-0.5"
+                                      style={focusTextStyle(isActive, 14)}
+                                    >
+                                      <span className="truncate text-sm font-black text-white sm:text-base">
+                                        {getResultTitle(item, language)}
+                                      </span>
+                                      {subtitle ? (
+                                        <span className="truncate text-[0.7rem] font-bold uppercase tracking-[0.1em] text-white/45">
+                                          {subtitle}
+                                        </span>
+                                      ) : null}
+                                    </span>
+                                  </button>
+                                )}
+                              </motion.li>
+                            );
+                          })}
+                        </ul>
+
+                        {onShelf ? (
+                          <ShelfCaption
+                            item={
+                              group.items.find(
+                                (entry) =>
+                                  flatIndexById.get(entry.Id) === activeIndex,
+                              ) ?? shelfPlace(group)
+                            }
+                            resting={
+                              !group.items.some(
+                                (entry) =>
+                                  flatIndexById.get(entry.Id) === activeIndex,
+                              )
+                            }
+                            language={language}
+                          />
+                        ) : null}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
