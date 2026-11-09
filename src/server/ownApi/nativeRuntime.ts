@@ -1,4 +1,5 @@
-import { stat } from "node:fs/promises";
+import { stat, statfs } from "node:fs/promises";
+import type { PublicationCache } from "../../renditions/adaptive/publishTitle";
 import { hostname, tmpdir } from "node:os";
 import path from "node:path";
 import type { IncomingMessage } from "node:http";
@@ -112,6 +113,7 @@ import { createProcessingJobRunner } from "./processing/jobRunner";
 import {
   createDatabaseDriveUploadStore,
   createDriveRcClient,
+  publicationCacheReserveBytes,
   createDriveUploadTracker,
   driveRcConfigFromEnvironment,
 } from "./processing/driveUpload";
@@ -1207,6 +1209,28 @@ export async function createNativeRuntime({
     ? driveRcConfigFromEnvironment(environment)
     : null;
   const driveRcClient = driveRc ? createDriveRcClient(driveRc) : null;
+  /*
+   * Publication into that mount lands in its cache on a local disk first, and
+   * leaves at the network's pace. Writing a package in at disk speed filled
+   * the laptop's C: and failed two finished encodes, so each file now waits
+   * for room on the cache's own volume; see `PublicationCache`.
+   */
+  const publicationCache: PublicationCache | undefined = driveRcClient
+    ? {
+        reserveBytes: publicationCacheReserveBytes(environment),
+        async freeBytes() {
+          const { path: cachePath } = await driveRcClient.cacheStats();
+          // `\\?\C:\...` names the same folder; statfs wants the plain form.
+          const plain = cachePath.replace(/^\\\\\?\\/, "");
+          const space = await statfs(plain);
+          return space.bavail * space.bsize;
+        },
+        async pendingUploads() {
+          const stats = await driveRcClient.cacheStats();
+          return stats.uploadsInProgress + stats.uploadsQueued;
+        },
+      }
+    : undefined;
 
   /*
    * The enqueuer as the machine that encodes sees it: its own mount, scratch
@@ -1879,6 +1903,7 @@ export async function createNativeRuntime({
           // How the processing page names this machine beside its encoder.
           workerName: environment.SEYIRLIK_WORKER_NAME?.trim() || hostname(),
           ...(driveUploads ? { driveUploads } : {}),
+          ...(publicationCache ? { publicationCache } : {}),
           store: processingJobs,
           paths: renditionPaths,
           registry: renditionRegistry,

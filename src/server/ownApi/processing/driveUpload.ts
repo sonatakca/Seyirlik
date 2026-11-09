@@ -64,6 +64,19 @@ export function driveRcConfigFromEnvironment(
   }
 }
 
+/**
+ * Room always left on the cache's disk while a package is copied into the
+ * mount: `SEYIRLIK_PUBLICATION_CACHE_RESERVE_GB`, 10 GB unless set. The same
+ * disk holds the encode workspaces and the mount's read cache, which keep
+ * growing while a publication waits.
+ */
+export function publicationCacheReserveBytes(
+  environment: Record<string, string | undefined> = process.env,
+): number {
+  const gigabytes = Number(environment.SEYIRLIK_PUBLICATION_CACHE_RESERVE_GB);
+  return (Number.isFinite(gigabytes) && gigabytes > 0 ? gigabytes : 10) * 1e9;
+}
+
 export interface RcQueueEntry {
   name: string;
   size: number;
@@ -86,8 +99,17 @@ export interface RcRemoteFile {
   Size: number;
 }
 
+export interface RcCacheStats {
+  /** The cache's own directory, as rclone reports it (`\\?\C:\...`). */
+  path: string;
+  uploadsInProgress: number;
+  uploadsQueued: number;
+}
+
 export interface DriveRcClient {
   queue(): Promise<RcQueueEntry[]>;
+  /** The mount's write-back cache: where it is, and what it still has to send. */
+  cacheStats(): Promise<RcCacheStats>;
   transferring(): Promise<RcTransfer[]>;
   /**
    * Every file under `directory` (a `/`-separated path under the remote's
@@ -130,6 +152,20 @@ export function createDriveRcClient(
     async queue() {
       const result = await call<{ queue?: RcQueueEntry[] }>("vfs/queue");
       return result.queue ?? [];
+    },
+    async cacheStats() {
+      const result = await call<{
+        diskCache?: Partial<RcCacheStats>;
+      }>("vfs/stats", {});
+      const cache = result.diskCache;
+      if (!cache || typeof cache.path !== "string" || !cache.path) {
+        throw new Error("rclone reported no disk cache for the mount.");
+      }
+      return {
+        path: cache.path,
+        uploadsInProgress: Number(cache.uploadsInProgress ?? 0),
+        uploadsQueued: Number(cache.uploadsQueued ?? 0),
+      };
     },
     async transferring() {
       const result = await call<{ transferring?: RcTransfer[] }>("core/stats");

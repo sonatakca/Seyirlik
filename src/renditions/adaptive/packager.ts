@@ -95,6 +95,7 @@ import {
   readTitleBuildRecord,
   readTitlePackageManifest,
   TITLE_INCOMING_DIRECTORY,
+  type PublicationCache,
   type TitlePackageManifest,
 } from "./publishTitle";
 import { validateAdaptivePackage } from "./validation";
@@ -356,6 +357,11 @@ export interface AdaptivePackageRequest {
 export interface AdaptivePackagerOptions {
   /** The publication filesystem boundary; encoding and validation stay real. */
   publicationFileSystem?: Pick<typeof import("node:fs/promises"), "rename">;
+  /**
+   * The local cache a cache-backed media mount writes through, so publication
+   * waits for room on it instead of filling it. See `PublicationCache`.
+   */
+  publicationCache?: PublicationCache;
   ffmpegPath?: string;
   ffprobePath?: string;
   encoderPreference?: RenditionEncoderPreference;
@@ -938,6 +944,7 @@ export async function packageAdaptiveRendition(
     retainWorkspaceAfterPublish = false,
     copySourceStreams = true,
     publicationFileSystem,
+    publicationCache,
   }: AdaptivePackagerOptions,
 ): Promise<AdaptivePackageResult> {
   const base = { mediaId: request.mediaId, relativePath: request.relativePath };
@@ -1228,6 +1235,7 @@ export async function packageAdaptiveRendition(
             ...(publicationFileSystem
               ? { fileSystem: publicationFileSystem }
               : {}),
+            ...(publicationCache ? { cache: publicationCache } : {}),
             workVersionRoot,
             titleRoot,
             existing: existingBuildRecord,
@@ -1242,6 +1250,7 @@ export async function packageAdaptiveRendition(
             ...(publicationFileSystem
               ? { fileSystem: publicationFileSystem }
               : {}),
+            ...(publicationCache ? { cache: publicationCache } : {}),
             workVersionRoot,
             titleRoot,
             metadata,

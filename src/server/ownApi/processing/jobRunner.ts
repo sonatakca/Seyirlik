@@ -7,7 +7,10 @@ import {
   replaceableScratchPackageBytes,
   packageAdaptiveRendition,
 } from "../../../renditions/adaptive/packager";
-import { cleanupPublicationIncoming } from "../../../renditions/adaptive/publishTitle";
+import {
+  cleanupPublicationIncoming,
+  type PublicationCache,
+} from "../../../renditions/adaptive/publishTitle";
 import { besideTitleRoot } from "../../../renditions/adaptive/titleRoot";
 import {
   SUPPORTED_VIDEO_EXTENSIONS,
@@ -239,6 +242,11 @@ export interface ProcessingJobRunnerDeps {
    */
   driveUploads?: DriveUploadTracker;
   /**
+   * The local cache that publication into the Drive mount writes through, so
+   * a package waits for room on it rather than filling the disk.
+   */
+  publicationCache?: PublicationCache;
+  /**
    * What to do when part of a source cannot be read at all.
    *
    * Defaults to the deployment's environment setting, which itself defaults to
@@ -458,6 +466,7 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
     scratchIdentityProbe,
     epochTargetSeconds,
     driveUploads,
+    publicationCache,
     sourceDamagePolicy = sourceDamagePolicyFromEnvironment(),
     stalls = stallThresholds(),
     originalLanguageFor,
@@ -1762,6 +1771,7 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
             ? { expectedScratchIdentity: job.scratchIdentity }
             : {}),
           retainWorkspaceAfterPublish: true,
+          ...(publicationCache ? { publicationCache } : {}),
           ...(epochTargetSeconds === undefined ? {} : { epochTargetSeconds }),
           /*
            * What to do about a source that cannot be read. Passed explicitly

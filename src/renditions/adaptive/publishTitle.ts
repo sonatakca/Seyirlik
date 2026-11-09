@@ -271,14 +271,134 @@ async function replicasMatch(
  * Copies one immutable package file without consuming it, resuming a partial
  * destination after checking samples around the resume boundary.
  */
+/**
+ * A destination whose writes wait on a local disk before they leave it.
+ *
+ * The encoding laptop publishes into an rclone mount of Google Drive with a
+ * write-back cache: a file copied into the mount lands in the cache on C:
+ * first and is uploaded after it is closed, at the network's pace. A 38 GB
+ * package copied in at disk speed filled C: in twenty minutes, failed the
+ * publication with EIO and quarantined the mount. The free-space check before
+ * publishing asked Drive, which had room, not the disk the bytes landed on.
+ */
+export interface PublicationCache {
+  /** Free bytes on the volume that holds the cache. */
+  freeBytes(): Promise<number>;
+  /** Files written into the mount and not yet uploaded, queued or sending. */
+  pendingUploads(): Promise<number>;
+  /** Room left free on that volume beyond the file being written. */
+  reserveBytes: number;
+}
+
+/** One cache-backed write at a time across every publication in this process. */
+let cacheTurn: Promise<unknown> = Promise.resolve();
+
+async function inCacheTurn<T>(work: () => Promise<T>): Promise<T> {
+  const previous = cacheTurn;
+  let release!: () => void;
+  cacheTurn = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous.catch(() => undefined);
+  try {
+    return await work();
+  } finally {
+    release();
+  }
+}
+
+const CACHE_POLL_MS = 15_000;
+/** rclone evicts uploaded data once a minute; give it a few passes. */
+const CACHE_IDLE_CHECKS = 8;
+/** A queue that has not drained in this long is not going to. */
+const CACHE_MAX_WAIT_MS = 12 * 60 * 60 * 1000;
+
+function cacheFullError(bytes: number, freeBytes: number): Error {
+  const error = new Error(
+    `The Drive cache on this machine has ${(freeBytes / 1e9).toFixed(1)} GB free and nothing left to upload, too little for a ${(bytes / 1e9).toFixed(1)} GB file.`,
+  ) as NodeJS.ErrnoException;
+  error.code = "ENOSPC";
+  return error;
+}
+
+/**
+ * Waits until the cache's volume can take `bytes` and still keep its reserve.
+ *
+ * Uploads in progress free room as they finish and rclone evicts what it has
+ * sent, so while anything is still pending the wait goes on, which slows a
+ * publication to the network's pace instead of filling the disk. When nothing
+ * is pending and there is still no room after rclone has had time to evict, it
+ * fails as out of space, which defers the job rather than quarantining the
+ * mount. A cache that cannot be asked is not waited on.
+ */
+export async function waitForCacheRoom({
+  cache,
+  bytes,
+  signal,
+  pollMs = CACHE_POLL_MS,
+  idleChecks = CACHE_IDLE_CHECKS,
+  maxWaitMs = CACHE_MAX_WAIT_MS,
+  now = Date.now,
+  sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
+}: {
+  cache: PublicationCache;
+  bytes: number;
+  signal?: AbortSignal;
+  pollMs?: number;
+  idleChecks?: number;
+  maxWaitMs?: number;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<unknown>;
+}): Promise<void> {
+  const started = now();
+  let idle = 0;
+  for (;;) {
+    if (signal?.aborted) throw new Error("Publication was interrupted.");
+    let free: number;
+    let pending: number;
+    try {
+      free = await cache.freeBytes();
+      if (free - bytes >= cache.reserveBytes) return;
+      pending = await cache.pendingUploads();
+    } catch {
+      return;
+    }
+    idle = pending > 0 ? 0 : idle + 1;
+    if (idle >= idleChecks || now() - started >= maxWaitMs) {
+      throw cacheFullError(bytes, free);
+    }
+    await sleep(pollMs);
+  }
+}
+
 export async function copyFileResumable(
   from: string,
   to: string,
   options: {
     signal?: AbortSignal;
     onProgress?: (completedBytes: number, totalBytes: number) => void;
+    /** Set when `to` is inside a cache-backed mount; see `PublicationCache`. */
+    cache?: PublicationCache;
   } = {},
 ): Promise<number> {
+  const { cache } = options;
+  if (cache) {
+    return inCacheTurn(async () => {
+      const [source, written] = await Promise.all([
+        stat(from),
+        stat(to).catch(() => null),
+      ]);
+      await waitForCacheRoom({
+        cache,
+        bytes: Math.max(0, source.size - (written?.size ?? 0)),
+        ...(options.signal ? { signal: options.signal } : {}),
+      });
+      return copyFileResumable(from, to, {
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+      });
+    });
+  }
   const sourceStats = await stat(from);
   if (!sourceStats.isFile())
     throw new Error(`Publication source is not a file: ${from}`);
@@ -402,6 +522,8 @@ export interface PublishTitlePackageInput {
   /** Filesystem commit boundary, shared by activation and recovery. */
   fileSystem?: Pick<typeof import("node:fs/promises"), "rename"> &
     Partial<Pick<typeof import("node:fs/promises"), "rm">>;
+  /** Set when the title folder is inside a cache-backed mount. */
+  cache?: PublicationCache;
 }
 
 /**
@@ -554,6 +676,7 @@ export async function publishTitlePackage({
   destinationReserveBytes = 0,
   retainIncomingAfterPublish = false,
   fileSystem = { rename },
+  cache,
 }: PublishTitlePackageInput): Promise<PublishTitlePackageResult> {
   const plan = planTitleLayout(metadata);
   /*
@@ -685,6 +808,7 @@ export async function publishTitlePackage({
         absolute(staging, published.mediaPath),
         {
           ...(signal ? { signal } : {}),
+          ...(cache ? { cache } : {}),
           onProgress: (completed) =>
             progress.update(step, previous + completed),
         },
@@ -1174,9 +1298,12 @@ export async function publishAdditionalRenditions({
   destinationReserveBytes = 0,
   retainIncomingAfterPublish = false,
   fileSystem = { rename },
+  cache,
 }: {
   workVersionRoot: string;
   titleRoot: string;
+  /** Set when the title folder is inside a cache-backed mount. */
+  cache?: PublicationCache;
   /** The published package's own build record, read from disk. */
   existing: AdaptivePackageMetadata;
   /** Newly encoded renditions, in the packager's work layout. */
@@ -1376,7 +1503,10 @@ export async function publishAdditionalRenditions({
         throw error;
       }
       await cloneGeneration((from, to) =>
-        copyFileResumable(from, to, signal ? { signal } : {}),
+        copyFileResumable(from, to, {
+          ...(signal ? { signal } : {}),
+          ...(cache ? { cache } : {}),
+        }),
       );
     }
   }
@@ -1414,6 +1544,7 @@ export async function publishAdditionalRenditions({
       const stagedMedia = path.join(staging, ...target.media.split("/"));
       await copyFileResumable(sourceMedia, stagedMedia, {
         ...(signal ? { signal } : {}),
+        ...(cache ? { cache } : {}),
       });
       await rename(stagedMedia, destinationMedia);
     }

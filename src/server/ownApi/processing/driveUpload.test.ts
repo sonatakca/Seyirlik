@@ -12,6 +12,8 @@ import {
   type DriveUploadStore,
   type RcQueueEntry,
   type RcTransfer,
+  createDriveRcClient,
+  publicationCacheReserveBytes,
 } from "./driveUpload";
 import {
   combineDriveUploads,
@@ -210,6 +212,11 @@ describe("the tracker", () => {
         return result;
       },
       listRemote: async () => [],
+      cacheStats: async () => ({
+        path: "C:\\cache",
+        uploadsInProgress: 0,
+        uploadsQueued: 0,
+      }),
     };
     const store: DriveUploadStore = {
       write: vi.fn(async (_id: string, upload: StoredDriveUpload) => {
@@ -465,5 +472,54 @@ describe("configuration and the public shape", () => {
     expect(status).not.toHaveProperty("deleteSource");
     expect(status).not.toHaveProperty("source");
     expect(status?.totalBytes).toBe(33_235_270_203);
+  });
+});
+
+describe("the mount's write-back cache", () => {
+  it("reads where the cache is and what it still has to send", async () => {
+    const calls: string[] = [];
+    const fetchImpl = (async (url: string) => {
+      calls.push(String(url));
+      return new Response(
+        JSON.stringify({
+          diskCache: {
+            bytesUsed: 46814792112,
+            outOfSpace: false,
+            path: "\\\\?\\C:\\Seyirlik\\cache\\drive\\vfs\\gdrive",
+            uploadsInProgress: 1,
+            uploadsQueued: 2,
+          },
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+    const client = createDriveRcClient(
+      {
+        url: "http://127.0.0.1:5573",
+        mountRoot: "D:\\",
+        deleteSource: true,
+      },
+      fetchImpl,
+    );
+    await expect(client.cacheStats()).resolves.toEqual({
+      path: "\\\\?\\C:\\Seyirlik\\cache\\drive\\vfs\\gdrive",
+      uploadsInProgress: 1,
+      uploadsQueued: 2,
+    });
+    expect(calls).toEqual(["http://127.0.0.1:5573/vfs/stats"]);
+  });
+
+  it("keeps 10 GB free unless told otherwise", () => {
+    expect(publicationCacheReserveBytes({})).toBe(10e9);
+    expect(
+      publicationCacheReserveBytes({
+        SEYIRLIK_PUBLICATION_CACHE_RESERVE_GB: "25",
+      }),
+    ).toBe(25e9);
+    expect(
+      publicationCacheReserveBytes({
+        SEYIRLIK_PUBLICATION_CACHE_RESERVE_GB: "none",
+      }),
+    ).toBe(10e9);
   });
 });
