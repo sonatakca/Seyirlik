@@ -4,9 +4,12 @@
  * Three kinds of leftover, each identified by what owns it rather than by how
  * old it is:
  *
- * - encode workspaces whose job is no longer pending, queued, running or
- *   paused — asked of the database again for each one, immediately before it
- *   goes, so a job retried a moment ago keeps its workspace;
+ * - encode workspaces no job can resume from any more — a live job keeps its
+ *   own however old it is, a failed or cancelled one only until a later
+ *   attempt publishes the title or its retry window passes (see
+ *   `processing/workspaceRetention.ts`) — asked of the database again for each
+ *   one, immediately before it goes, so a job retried a moment ago keeps its
+ *   workspace;
  * - finished downloads nothing will import: a cancelled or superseded
  *   acquisition's, a blocklisted release's, or one whose import completed but
  *   could not remove its source;

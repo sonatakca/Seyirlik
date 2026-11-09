@@ -11,7 +11,10 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WORKSPACE_CLAIMING_STATES } from "../processing/jobStore";
+import {
+  workspaceClaim,
+  type WorkspaceJob,
+} from "../processing/workspaceRetention";
 import { collectGarbage, createGarbageJobHandler } from "./garbageCollector";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -62,22 +65,81 @@ async function workspace(jobsRoot: string, jobId: string, ageMs: number) {
 const names = async (dir: string) => (await readdir(dir)).sort();
 
 describe("encode workspaces", () => {
-  it("keeps failed and cancelled workspaces available for retry", async () => {
+  it("keeps workspaces a retry could resume from and releases the dead ones", async () => {
     const jobsRoot = path.join(root, "jobs");
-    await workspace(jobsRoot, "failed-job", 30 * DAY);
-    await workspace(jobsRoot, "cancelled-job", 30 * DAY);
-    await workspace(jobsRoot, "succeeded-job", 30 * DAY);
-    const states: Record<string, string> = {
-      "failed-job": "failed",
-      "cancelled-job": "cancelled",
-      "succeeded-job": "succeeded",
-    };
-    const claimed = new Set<string>(WORKSPACE_CLAIMING_STATES);
-    await collectGarbage({
+    const outside = await folder(root, "outside", 50);
+    const jobs: Record<string, Partial<WorkspaceJob>> = {
+      "paused-for-a-month": { state: "paused", idleMs: 30 * DAY },
+      "failed-yesterday": { state: "failed", idleMs: DAY },
+      "failed-last-month": { state: "failed", idleMs: 30 * DAY },
+      "cancelled-an-hour-ago": {
+        state: "cancelled",
+        idleMs: 2 * 60 * 60 * 1000,
+      },
+      "cancelled-last-week": { state: "cancelled", idleMs: 7 * DAY },
+      "failed-then-published": {
+        state: "failed",
+        idleMs: DAY,
+        itemId: "published-title",
+      },
+      "succeeded-left-behind": { state: "succeeded", idleMs: DAY },
+    } as never;
+    for (const id of Object.keys(jobs)) {
+      await workspace(jobsRoot, id, 2 * DAY);
+    }
+    // A link inside a dead workspace must go without what it points at.
+    await symlink(
+      outside,
+      path.join(jobsRoot, "failed-last-month", "link"),
+      "junction",
+    );
+    // Adding the link touched the folder; put its age back.
+    const aged = new Date(Date.now() - 2 * DAY);
+    await utimes(path.join(jobsRoot, "failed-last-month"), aged, aged);
+
+    const now = Date.now();
+    const report = await collectGarbage({
       jobsRoot,
-      isWorkspaceClaimed: async (id) => claimed.has(states[id]!),
+      isWorkspaceClaimed: async (id) => {
+        const spec = jobs[id] as unknown as {
+          state: string;
+          idleMs: number;
+          itemId?: string;
+        };
+        const touched = new Date(now - spec.idleMs);
+        const claim = await workspaceClaim({
+          job: {
+            id,
+            itemId: spec.itemId ?? id,
+            profile: "cmaf-hls-aligned-v3",
+            state: spec.state as WorkspaceJob["state"],
+            createdAt: new Date(now - spec.idleMs - DAY),
+            updatedAt: touched,
+            finishedAt: touched,
+          },
+          laterAttemptSucceeded: async (jobId) =>
+            (jobs[jobId] as unknown as { itemId?: string }).itemId ===
+            "published-title",
+          now,
+        });
+        return claim.claimed;
+      },
     });
-    expect(await names(jobsRoot)).toEqual(["cancelled-job", "failed-job"]);
+
+    expect(await names(jobsRoot)).toEqual([
+      "cancelled-an-hour-ago",
+      "failed-yesterday",
+      "paused-for-a-month",
+    ]);
+    expect(
+      report.removed.map((entry) => path.basename(entry.path)).sort(),
+    ).toEqual([
+      "cancelled-last-week",
+      "failed-last-month",
+      "failed-then-published",
+      "succeeded-left-behind",
+    ]);
+    expect(await names(outside)).toEqual(["data.bin"]);
   });
 
   it("removes the workspaces no live job answers to, and only those", async () => {

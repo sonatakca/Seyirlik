@@ -89,10 +89,11 @@ import {
   jobsToPauseOnLoss,
 } from "./processing/storageLoss";
 import { createTaskRoutes } from "./tasks/taskRoutes";
+import { createProcessingJobStore } from "./processing/jobStore";
 import {
-  createProcessingJobStore,
-  WORKSPACE_CLAIMING_STATES,
-} from "./processing/jobStore";
+  workspaceClaim,
+  workspaceRetentionFromEnvironment,
+} from "./processing/workspaceRetention";
 import {
   createHardwareDetector,
   createProcessingRoutes,
@@ -1122,26 +1123,44 @@ export async function createNativeRuntime({
   releaseTimer?.unref?.();
 
   /**
+   * Whether a job can still resume from the workspace named after it.
+   *
+   * One rule for the startup sweep and the periodic collector, asked of the
+   * database afresh for each workspace immediately before it could go, so a
+   * job retried a moment ago keeps what it needs. A paused job owns its
+   * workspace however long it waits; a failed or cancelled one only until a
+   * later attempt has published the title or its retry window has passed.
+   * See `processing/workspaceRetention.ts`.
+   */
+  const workspaceRetention = workspaceRetentionFromEnvironment();
+  const isWorkspaceStillClaimed = async (
+    workspaceId: string,
+  ): Promise<boolean> => {
+    const claim = await workspaceClaim({
+      job: await processingJobs.get(workspaceId),
+      laterAttemptSucceeded: (jobId) =>
+        processingJobs.laterAttemptSucceeded(jobId),
+      policy: workspaceRetention,
+    });
+    if (!claim.claimed) {
+      console.info(
+        `[Seyirlik] Scratch workspace ${workspaceId} is released: ${claim.reason}.`,
+      );
+    }
+    return claim.claimed;
+  };
+
+  /**
    * Releases scratch that no job can still be waiting on.
    *
-   * Only the worker sweeps, and only at startup, because this is the one
-   * moment when nothing is running and the set of jobs that could still claim
-   * a workspace is knowable. A workspace whose job is pending, queued, running
-   * or paused, failed or cancelled is kept for retry however old it looks. A job parked
-   * for a drive that has been unplugged for a month owns the most valuable
-   * directory on the volume, and it is precisely the one an age-based sweep
-   * would take.
+   * Only the worker sweeps, because the process that will run the work owns
+   * its scratch. At startup nothing is running yet, so nothing can be claiming
+   * a workspace this pass has not been told about.
    */
   const sweepAbandonedScratch = async (): Promise<void> => {
-    const live = new Set<string>();
-    for (const state of WORKSPACE_CLAIMING_STATES) {
-      for (const job of await processingJobs.list({ state, limit: 10_000 })) {
-        live.add(job.id);
-      }
-    }
     const sweep = await sweepAbandonedWorkspaces({
       jobsRoot: storageRoles.jobsRoot,
-      stillClaimed: (workspaceId) => live.has(workspaceId),
+      stillClaimed: isWorkspaceStillClaimed,
     });
     if (sweep.removed.length > 0) {
       console.info(
@@ -1778,13 +1797,9 @@ export async function createNativeRuntime({
    * asked about again immediately before it goes, so a job retried or a
    * download resumed a moment earlier keeps what it needs.
    */
-  const LIVE_PROCESSING_STATES = new Set<string>(WORKSPACE_CLAIMING_STATES);
   const collectGarbageJob = createGarbageJobHandler({
     jobsRoot: storageRoles.jobsRoot,
-    isWorkspaceClaimed: async (workspaceId) => {
-      const job = await processingJobs.get(workspaceId);
-      return job !== null && LIVE_PROCESSING_STATES.has(job.state);
-    },
+    isWorkspaceClaimed: isWorkspaceStillClaimed,
     ...(acquisition && importing && importConfig
       ? {
           downloadRoot: importConfig.downloadRoot,

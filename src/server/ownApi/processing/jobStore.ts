@@ -6,16 +6,6 @@ import type {
   VolumeIdentity,
 } from "../../../renditions/processing/storageIdentity";
 
-/** Job rows that still own retryable scratch; shared by startup and periodic cleanup. */
-export const WORKSPACE_CLAIMING_STATES = [
-  "pending",
-  "queued",
-  "running",
-  "paused",
-  "failed",
-  "cancelled",
-] as const;
-
 /**
  * The durable record of one media-processing job.
  *
@@ -504,6 +494,15 @@ export interface ProcessingJobStore {
   get(id: string): Promise<ProcessingJobRecord | null>;
   getByQueueJobId(jobId: string): Promise<ProcessingJobRecord | null>;
   findActiveForFile(mediaFileId: string): Promise<ProcessingJobRecord | null>;
+  /**
+   * Whether a later job for the same item and profile has succeeded.
+   *
+   * Asked by the scratch collector: once a later attempt has published the
+   * title, an earlier failed or cancelled attempt's workspace is something
+   * nothing will resume from. Compared in the database, at its own
+   * microsecond precision, so a job can never count as later than itself.
+   */
+  laterAttemptSucceeded(id: string): Promise<boolean>;
   /** Removes a finished history entry. Active work is deliberately retained. */
   deleteFinished(id: string): Promise<boolean>;
   /**
@@ -748,6 +747,22 @@ export function createProcessingJobStore(
         [mediaFileId, ACTIVE_STATES],
       );
       return result.rows[0] ? toRecord(result.rows[0]) : null;
+    },
+
+    async laterAttemptSucceeded(id) {
+      const result = await pool.query(
+        `SELECT 1
+           FROM processing_jobs AS this
+           JOIN processing_jobs AS later
+             ON later.item_id = this.item_id
+            AND later.profile = this.profile
+            AND later.id <> this.id
+            AND later.created_at > this.created_at
+          WHERE this.id = $1 AND later.state = 'succeeded'
+          LIMIT 1`,
+        [id],
+      );
+      return (result.rowCount ?? 0) > 0;
     },
 
     async deleteFinished(id) {

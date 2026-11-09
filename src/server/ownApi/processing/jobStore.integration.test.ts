@@ -102,6 +102,42 @@ describeIfDatabase("processing job store", () => {
     expect(second.id).not.toBe(first.id);
   });
 
+  it("answers whether a later attempt for the same title and profile succeeded", async () => {
+    if (!itemId) return;
+    const earlier = await make();
+    await store.update(earlier.id, { state: "failed", finishedAt: new Date() });
+    expect(await store.laterAttemptSucceeded(earlier.id)).toBe(false);
+
+    const later = await make();
+    await store.update(later.id, { state: "failed", finishedAt: new Date() });
+    // A later attempt that also failed published nothing.
+    expect(await store.laterAttemptSucceeded(earlier.id)).toBe(false);
+
+    const published = await make();
+    await store.update(published.id, {
+      state: "succeeded",
+      finishedAt: new Date(),
+    });
+    expect(await store.laterAttemptSucceeded(earlier.id)).toBe(true);
+    expect(await store.laterAttemptSucceeded(later.id)).toBe(true);
+    // A job is never later than itself, nor is anything after the success.
+    expect(await store.laterAttemptSucceeded(published.id)).toBe(false);
+
+    // Another profile's success says nothing about this one.
+    const otherProfile = await store.create({
+      itemId,
+      mediaFileId: fileId,
+      sourceFingerprint: "a".repeat(64),
+      profile: "other-profile",
+    });
+    created.push(otherProfile.id);
+    await store.update(otherProfile.id, {
+      state: "failed",
+      finishedAt: new Date(),
+    });
+    expect(await store.laterAttemptSucceeded(otherProfile.id)).toBe(false);
+  });
+
   it("removes only finished history entries", async () => {
     if (!itemId) return;
     const active = await make();
