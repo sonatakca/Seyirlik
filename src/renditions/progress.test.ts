@@ -20,10 +20,25 @@ describe("rendition progress reporting", () => {
       }),
     ).toEqual({
       processedSeconds: 8171.53,
+      frames: 195922,
       fps: 96.4,
       speed: 4.01,
       writtenBytes: 3575860224,
     });
+  });
+
+  it("keeps the frame count when a sparse stream leaves out_time N/A", () => {
+    const parsed = parseFfmpegProgressFields({
+      frame: "1847",
+      fps: "57.74",
+      out_time_us: "N/A",
+      out_time: "N/A",
+      speed: "N/A",
+      progress: "continue",
+    });
+    expect(parsed.processedSeconds).toBe(0);
+    expect(parsed.frames).toBe(1847);
+    expect(parsed.speed).toBeUndefined();
   });
 
   it("falls back to the microsecond field when out_time is absent", () => {

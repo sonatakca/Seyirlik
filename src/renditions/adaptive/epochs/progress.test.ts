@@ -3,6 +3,7 @@ import {
   createMediaStallDetector,
   createSpeedEstimator,
   epochProgress,
+  epochVideoProgress,
   estimateEncodeEtaSeconds,
   interpolatedMediaSeconds,
   SPEED_WARMUP_SAMPLES,
@@ -320,5 +321,43 @@ describe("createMediaStallDetector", () => {
     detector.sample(123.29, 20_000);
     detector.reset();
     expect(detector.sample(0, 20_100).stalled).toBe(false);
+  });
+});
+
+describe("epochVideoProgress", () => {
+  it("reads video time from frames while a copied subtitle holds out_time", () => {
+    // How to Train Your Dragon 3, epoch 1: 1847 frames at 23.976 fps, N/A.
+    const progress = epochVideoProgress(
+      { processedSeconds: 0, frames: 1847, fps: 57.74 },
+      24000 / 1001,
+      1800,
+    );
+    expect(progress.processedSeconds).toBeCloseTo(77.035, 3);
+    expect(progress.speed).toBeCloseTo(2.408, 3);
+  });
+
+  it("never goes behind out_time, and keeps FFmpeg's own speed", () => {
+    const progress = epochVideoProgress(
+      { processedSeconds: 120, frames: 2000, fps: 48, speed: 1.53 },
+      24,
+      1800,
+    );
+    expect(progress.processedSeconds).toBe(120);
+    expect(progress.speed).toBe(1.53);
+  });
+
+  it("never runs past the epoch's own length", () => {
+    const progress = epochVideoProgress(
+      { processedSeconds: 0, frames: 50_000 },
+      24,
+      1800,
+    );
+    expect(progress.processedSeconds).toBe(1800);
+  });
+
+  it("leaves a report alone without a frame rate or frames", () => {
+    const report = { processedSeconds: 3, fps: 40 };
+    expect(epochVideoProgress(report, undefined, 1800)).toBe(report);
+    expect(epochVideoProgress(report, 24, 1800)).toBe(report);
   });
 });

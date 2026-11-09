@@ -36,11 +36,16 @@ const steps = Number(process.env.STEPS ?? "3");
 const mode = process.env.STDERR_MODE ?? "none";
 const keepMoving = process.env.KEEP_MOVING === "true";
 const emitEnd = process.env.EMIT_END === "true";
+const outTimeHeld = process.env.OUT_TIME_HELD === "true";
 
 let seconds = 0;
 const report = (state) => {
   const clock = new Date(seconds * 1000).toISOString().slice(11, 23);
-  process.stdout.write("out_time=" + clock + "\\n");
+  // Beside a copied subtitle track with no cue yet, FFmpeg has no out_time
+  // at all; only the video's frame count moves.
+  process.stdout.write("frame=" + seconds * 24 + "\\n");
+  process.stdout.write("out_time=" + (outTimeHeld ? "N/A" : clock) + "\\n");
+  if (outTimeHeld) process.stdout.write("out_time_us=N/A\\n");
   process.stdout.write("speed=1.5x\\n");
   process.stdout.write("fps=48\\n");
   process.stdout.write("progress=" + state + "\\n");
@@ -100,6 +105,7 @@ interface RunOptions {
   stderrMode?: "none" | "source-eio" | "output-eio";
   keepMoving?: boolean;
   emitEnd?: boolean;
+  outTimeHeld?: boolean;
 }
 
 async function runFixture(
@@ -111,6 +117,7 @@ async function runFixture(
   process.env.STDERR_MODE = environment.stderrMode ?? "none";
   process.env.KEEP_MOVING = environment.keepMoving ? "true" : "false";
   process.env.EMIT_END = environment.emitEnd ? "true" : "false";
+  process.env.OUT_TIME_HELD = environment.outTimeHeld ? "true" : "false";
   const samples: number[] = [];
   try {
     await runFfmpeg(process.execPath, [fixture], {
@@ -128,10 +135,23 @@ async function runFixture(
     process.env.STDERR_MODE = previous.STDERR_MODE ?? "";
     process.env.KEEP_MOVING = previous.KEEP_MOVING ?? "";
     process.env.EMIT_END = previous.EMIT_END ?? "";
+    process.env.OUT_TIME_HELD = previous.OUT_TIME_HELD ?? "";
   }
 }
 
 describe("an encoder whose media time stops", () => {
+  it("is still stopped when its frame count stops too", async () => {
+    const { error } = await runFixture(
+      { steps: 3, outTimeHeld: true },
+      {
+        logPath,
+        watchdog: { hardStallMs: 700, terminationGraceMs: 300 },
+      },
+    );
+    expect(error).toBeInstanceOf(EncoderAbortedError);
+    expect((error as EncoderAbortedError).reason).toBe("media-watchdog");
+  }, 30_000);
+
   it("is stopped by the watchdog rather than waited for", async () => {
     const started = Date.now();
     const { error, samples } = await runFixture(
@@ -224,6 +244,31 @@ describe("an encoder that is still working", () => {
     expect((error as EncoderAbortedError).reason).toBe("caller");
     expect(samples.length).toBeGreaterThan(10);
     expect(samples.at(-1)!).toBeGreaterThan(samples[0]!);
+  }, 30_000);
+
+  it("is left alone while only its frame count moves", async () => {
+    /*
+     * Dune 2 and How to Train Your Dragon 3, 2026-11-09: each epoch also copies
+     * the source's subtitles, and FFmpeg's out_time is the least advanced
+     * stream, so it read N/A until the first spoken line while the video
+     * encoded at 58 fps. Thirty seconds of that was called a wedged encoder.
+     */
+    const controller = new AbortController();
+    const runPromise = runFixture(
+      { steps: 2, keepMoving: true, outTimeHeld: true },
+      {
+        logPath,
+        signal: controller.signal,
+        watchdog: { hardStallMs: 600, terminationGraceMs: 300 },
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 1_800));
+    controller.abort();
+    const { error, samples } = await runPromise;
+
+    expect((error as EncoderAbortedError).reason).toBe("caller");
+    expect(samples.length).toBeGreaterThan(10);
+    expect(samples.every((seconds) => seconds === 0)).toBe(true);
   }, 30_000);
 
   it("survives a freeze shorter than the threshold", async () => {

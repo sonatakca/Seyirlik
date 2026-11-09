@@ -220,3 +220,41 @@ export function createMediaStallDetector({
     },
   };
 }
+
+/**
+ * How far an epoch's video has got, from a progress report.
+ *
+ * Each epoch also stream-copies the source's audio and text subtitles into a
+ * second output, and FFmpeg's `out_time` is the least advanced stream across
+ * all of them. A subtitle track has packets only where someone speaks, so
+ * `out_time` reads N/A until the first cue and then stands still through every
+ * quiet stretch, while the video goes on encoding. The video's own frame count,
+ * over the rate it is encoded at, is the time `out_time` meant when the epoch
+ * wrote video alone. Speed is derived the same way when FFmpeg gives none.
+ */
+export function epochVideoProgress<
+  T extends {
+    processedSeconds: number;
+    frames?: number;
+    fps?: number;
+    speed?: number;
+  },
+>(
+  progress: T,
+  frameRate: number | undefined,
+  durationSeconds: number | undefined,
+): T {
+  if (!frameRate || frameRate <= 0 || !progress.frames) return progress;
+  const fromFrames = progress.frames / frameRate;
+  const bounded =
+    durationSeconds !== undefined && durationSeconds > 0
+      ? Math.min(fromFrames, durationSeconds)
+      : fromFrames;
+  return {
+    ...progress,
+    processedSeconds: Math.max(progress.processedSeconds, bounded),
+    ...(progress.speed === undefined && progress.fps !== undefined
+      ? { speed: progress.fps / frameRate }
+      : {}),
+  };
+}

@@ -80,6 +80,7 @@ import {
 } from "../../processExecution";
 import { describeJoinMismatch, joinKeysMatch } from "./fragments";
 import { generatePlaceholderEpoch } from "./placeholder";
+import { epochVideoProgress } from "./progress";
 import {
   discardSourceCopy,
   inspectSourceCopy,
@@ -849,8 +850,18 @@ export async function runEpochBuild({
             },
             ...(onEvent
               ? {
-                  onProgress: (progress) => {
+                  onProgress: (reported) => {
                     inputOpened = true;
+                    /*
+                     * FFmpeg's `frame` counts the first video stream, the
+                     * first rung; its own rate when it has one, else the
+                     * ceiling, which can only understate the time.
+                     */
+                    const progress = epochVideoProgress(
+                      reported,
+                      videoOutputs[0]?.frameRate ?? frameRate,
+                      epoch.durationSeconds,
+                    );
                     meter.sample();
                     lastConfirmedMediaSeconds = Math.max(
                       lastConfirmedMediaSeconds,

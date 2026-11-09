@@ -319,9 +319,16 @@ export function estimateRemainingSeconds(
 /**
  * Parses one `-progress pipe:1` block. FFmpeg repeats every key in each block,
  * so the accumulated record is always complete.
+ *
+ * `processedSeconds` is FFmpeg's `out_time`, which is the *least* advanced
+ * stream across every output. A copied text subtitle track has packets only
+ * where someone speaks, so beside one `out_time` reads N/A until the first cue
+ * and then stands at the last cue through every quiet stretch, however fast
+ * the video is encoding. `frames` is the video's own count and keeps moving.
  */
 export function parseFfmpegProgressFields(fields: Record<string, string>): {
   processedSeconds: number;
+  frames?: number;
   fps?: number;
   speed?: number;
   writtenBytes?: number;
@@ -340,12 +347,14 @@ export function parseFfmpegProgressFields(fields: Record<string, string>): {
     if (Number.isFinite(micros)) processedSeconds = micros / 1_000_000;
   }
 
+  const frames = Number(fields.frame);
   const fps = Number(fields.fps);
   const speed = Number((fields.speed ?? "").replace(/x$/, ""));
   const writtenBytes = Number(fields.total_size);
 
   return {
     processedSeconds: Math.max(0, processedSeconds),
+    ...(Number.isFinite(frames) && frames > 0 ? { frames } : {}),
     ...(Number.isFinite(fps) && fps > 0 ? { fps } : {}),
     ...(Number.isFinite(speed) && speed > 0 ? { speed } : {}),
     ...(Number.isFinite(writtenBytes) && writtenBytes >= 0

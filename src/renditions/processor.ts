@@ -208,6 +208,13 @@ export async function runFfmpeg(
    * figure inside it says work is happening.
    */
   let lastMediaSeconds = 0;
+  /**
+   * Encoded video frames, the second measure of work. `out_time` is the least
+   * advanced stream of every output, so a sparse copied subtitle track holds
+   * it still while the video encodes; a frame count that moves is media being
+   * produced, and an encode reporting one is not stalled.
+   */
+  let lastFrames = 0;
   let lastProgressAtMs = now();
   /**
    * Whether anything has been produced yet.
@@ -275,15 +282,18 @@ export async function runFfmpeg(
                   .trim();
                 if (!line.startsWith("progress=")) continue;
                 const progress = parseFfmpegProgressFields(fields);
+                const frames = progress.frames ?? 0;
                 if (
                   !started ||
-                  progress.processedSeconds > lastMediaSeconds + 1e-6
+                  progress.processedSeconds > lastMediaSeconds + 1e-6 ||
+                  frames > lastFrames
                 ) {
                   started = true;
                   lastMediaSeconds = Math.max(
                     lastMediaSeconds,
                     progress.processedSeconds,
                   );
+                  lastFrames = Math.max(lastFrames, frames);
                   lastProgressAtMs = now();
                 }
                 onProgress(progress);
