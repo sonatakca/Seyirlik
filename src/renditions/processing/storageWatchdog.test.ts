@@ -136,6 +136,45 @@ describe("watching the roots a job needs", () => {
     expect(events).toEqual(["lost", "restored"]);
   });
 
+  /**
+   * 2026-11-09: a process started with a hold restored from the incident row
+   * while the volume was already back. Present-at-birth is not a transition,
+   * so only a per-poll report could ever tell the guard.
+   */
+  it("reports every poll that changes nothing, with its answer", async () => {
+    let present = true;
+    const events: string[] = [];
+    const guard = watchdog({
+      check: async () => present,
+      onLost: () => {
+        events.push("lost");
+      },
+      onRestored: () => {
+        events.push("restored");
+      },
+      onSteady: (available) => {
+        events.push(`steady:${available}`);
+      },
+    });
+
+    await guard.poll();
+    await guard.poll();
+    present = false;
+    await guard.poll();
+    await guard.poll();
+    present = true;
+    await guard.poll();
+
+    // A transition poll reports the transition only, never both.
+    expect(events).toEqual([
+      "steady:true",
+      "steady:true",
+      "lost",
+      "steady:false",
+      "restored",
+    ]);
+  });
+
   it("does not overlap checks on a slow volume", async () => {
     let inside = 0;
     let concurrent = 0;

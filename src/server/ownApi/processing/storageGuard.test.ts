@@ -228,6 +228,47 @@ describe("a quarantine across a restart", () => {
   });
 });
 
+describe("an outage restored from the row after the volume came back", () => {
+  /**
+   * 2026-11-09: the Drive mount was stopped at 17:39 and back at 18:03, but no
+   * running process saw it return, and after a reboot both processes read the
+   * open `unavailable` row and held it. The runtime now tells the guard on
+   * every present poll while it is unavailable; this is what that telling does.
+   */
+  it("lifts once the volume has answered past the settling period", async () => {
+    const incidents = fakeIncidents();
+    let clock = 1_000_000;
+    const first = build({ incidents, now: () => clock });
+    await first.guard.observeAvailability(false);
+    expect(first.guard.health.state).toBe("unavailable");
+
+    clock += 24 * 60_000;
+    const second = build({ incidents, available: () => true, now: () => clock });
+    await second.guard.reload();
+    expect(second.guard.health.state).toBe("unavailable");
+    expect(second.guard.mayStartWork()).toBe(false);
+
+    await second.guard.observeAvailability(true);
+    expect(second.guard.health.state).toBe("healthy");
+    expect(second.guard.mayStartWork()).toBe(true);
+    expect(await incidents.findOpen(ROOT)).toBeNull();
+  });
+
+  it("waits out the settling period for an outage that just began", async () => {
+    let clock = 1_000_000;
+    const { guard } = build({ now: () => clock });
+    await guard.observeAvailability(false);
+
+    clock += 10_000;
+    await guard.observeAvailability(true);
+    expect(guard.health.state).toBe("unavailable");
+
+    clock += 60_000;
+    await guard.observeAvailability(true);
+    expect(guard.health.state).toBe("healthy");
+  });
+});
+
 describe("the operator's way back", () => {
   it("needs a verification and then a resume", async () => {
     const incidents = fakeIncidents();

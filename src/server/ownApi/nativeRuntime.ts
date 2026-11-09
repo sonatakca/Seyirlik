@@ -927,6 +927,23 @@ export async function createNativeRuntime({
    * split into its own process, two runtimes see the volume return, and two
    * runtimes requeueing the same job would build the same rendition twice.
    */
+  /**
+   * The storage answered: tell the guard, and release what the watchdog held.
+   */
+  const storageReturned = async (): Promise<void> => {
+    await storageGuard.observeAvailability(true);
+    if (!processingWorker) return;
+    /*
+     * Only the jobs the watchdog itself paused: a job an operator paused by
+     * hand stays paused, because the drive returning does not answer why a
+     * person stopped it. And only when the guard agrees — a quarantined
+     * volume coming back is a quarantined volume, and the poll that noticed
+     * it is exactly the poll a failing drive passes between retry storms.
+     */
+    if (storageGuard.resumesAutomatically() || storageGuard.mayStartWork()) {
+      await requeueStorageInterruptedJobs();
+    }
+  };
   const storageWatchdog = createStorageWatchdog({
     mediaRoot,
     /*
@@ -974,18 +991,21 @@ export async function createNativeRuntime({
         );
       }
     },
-    onRestored: async () => {
-      await storageGuard.observeAvailability(true);
-      if (!processingWorker) return;
+    onRestored: () => storageReturned(),
+    onSteady: async (available) => {
       /*
-       * Only the jobs the watchdog itself paused: a job an operator paused by
-       * hand stays paused, because the drive returning does not answer why a
-       * person stopped it. And only when the guard agrees — a quarantined
-       * volume coming back is a quarantined volume, and the poll that noticed
-       * it is exactly the poll a failing drive passes between retry storms.
+       * A hold restored from the incident record at startup, or one this
+       * process raised but never saw lifted, is still `unavailable` while the
+       * storage answers every poll. Nothing transitions, so nothing would ever
+       * tell the guard. On 2026-11-09 a reboot left both processes holding a
+       * 17:39 outage for good while the Drive mount had been back since 18:03.
+       *
+       * Only `unavailable` is re-told: it is the one state a present volume
+       * may lift on its own, after the guard's own settling period. Suspect,
+       * quarantined and recovery-pending keep waiting for what they wait for.
        */
-      if (storageGuard.resumesAutomatically() || storageGuard.mayStartWork()) {
-        await requeueStorageInterruptedJobs();
+      if (available && storageGuard.health.state === "unavailable") {
+        await storageReturned();
       }
     },
   });

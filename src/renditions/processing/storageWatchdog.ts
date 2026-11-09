@@ -28,6 +28,16 @@ export interface StorageWatchdogOptions {
   intervalMs?: number;
   onLost?: () => void | Promise<void>;
   onRestored?: () => void | Promise<void>;
+  /**
+   * Every poll that did not change availability, with the answer it reached.
+   *
+   * The transitions alone cannot lift a hold that was raised somewhere else.
+   * A process that starts while an incident row says the storage is gone, but
+   * finds it present, sees no transition at all: the watchdog assumes present
+   * at birth, so present is not news. Without this the hold restored from the
+   * record waited for a disappearance and a return that had already happened.
+   */
+  onSteady?: (available: boolean) => void | Promise<void>;
   /** Injected in tests. */
   check?: (path: string) => Promise<boolean>;
 }
@@ -85,6 +95,7 @@ export function createStorageWatchdog({
   intervalMs = 5_000,
   onLost,
   onRestored,
+  onSteady,
   check = isStorageAvailable,
   identify = storageIdentity,
 }: StorageWatchdogOptions & {
@@ -152,6 +163,8 @@ export function createStorageWatchdog({
       if (nowAvailable !== available) {
         available = nowAvailable;
         await (nowAvailable ? onRestored?.() : onLost?.());
+      } else {
+        await onSteady?.(available);
       }
       return available;
     } finally {
