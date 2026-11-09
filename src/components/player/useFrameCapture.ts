@@ -24,29 +24,64 @@ export const FRAME_CAPTURE_EXIT_MS = 280;
  */
 const PRESENTED_FRAME_TRUST_SECONDS = 2;
 
-/** The media time of the frame each element last put on screen. */
+/** The media time of the frame each element put on screen while held still. */
 const presentedFrameTimes = new WeakMap<HTMLVideoElement, number>();
+/** Elements whose pause and seek events are being listened to. */
+const followedVideos = new WeakSet<HTMLVideoElement>();
+/** Elements with a frame callback outstanding. */
+const armedVideos = new WeakSet<HTMLVideoElement>();
+
+/** Paused or seeking: the only times a frame can be saved or chosen. */
+function isHeldStill(video: HTMLVideoElement): boolean {
+  return video.paused || video.seeking;
+}
 
 /**
- * Follows every frame an element presents, for as long as it lives.
+ * Asks for each frame presented while the element is held still, and stops at
+ * the first one presented in playback.
+ *
+ * A frame callback must never stay outstanding through playback: while one is,
+ * WebKit's MSE player copies every decoded frame out of its GPU process to
+ * report it, which held the GPU process near 100% on a large rung and froze
+ * the picture, the clock and the subtitles for seconds at a time (2026-11-09).
+ */
+function armFrameFollower(video: HTMLVideoElement): void {
+  if (armedVideos.has(video) || !isHeldStill(video)) return;
+  armedVideos.add(video);
+  const onFrame: VideoFrameRequestCallback = (_now, metadata) => {
+    if (isHeldStill(video)) {
+      presentedFrameTimes.set(video, metadata.mediaTime);
+      video.requestVideoFrameCallback(onFrame);
+      return;
+    }
+    armedVideos.delete(video);
+    presentedFrameTimes.delete(video);
+  };
+  video.requestVideoFrameCallback(onFrame);
+}
+
+/**
+ * Follows the frames an element presents while it is paused or seeking.
  *
  * `currentTime` does not say which frame is on screen. Chrome and WebKit's
  * MSE path show the last frame that began by it, but Safari has been seen
  * paused on a frame after it and on one before it (Arcane S01E07 at 35:09 and
  * 35:10), so a save keyed to `currentTime` came back a frame or two away — a
  * different shot at a cut. `requestVideoFrameCallback` reports the presented
- * frame's own timestamp, which is the one to save.
+ * frame's own timestamp, which is the one to save. Saving is refused while
+ * playing, so frames are only followed from a pause or a seek.
  */
 export function followPresentedFrames(video: HTMLVideoElement): void {
-  if (presentedFrameTimes.has(video) || !video.requestVideoFrameCallback) {
+  if (followedVideos.has(video) || !video.requestVideoFrameCallback) {
     return;
   }
-  presentedFrameTimes.set(video, Number.NaN);
-  const onFrame: VideoFrameRequestCallback = (_now, metadata) => {
-    presentedFrameTimes.set(video, metadata.mediaTime);
-    video.requestVideoFrameCallback(onFrame);
-  };
-  video.requestVideoFrameCallback(onFrame);
+  followedVideos.add(video);
+  const arm = () => armFrameFollower(video);
+  video.addEventListener("pause", arm);
+  video.addEventListener("seeking", arm);
+  // A time from before playback resumed says nothing about the next pause.
+  video.addEventListener("play", () => presentedFrameTimes.delete(video));
+  arm();
 }
 
 /** Where the frame on screen sits in the media, as exactly as the browser says. */
