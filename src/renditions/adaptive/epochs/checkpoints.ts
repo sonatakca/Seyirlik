@@ -39,6 +39,7 @@ import {
 import { parseEpochPlan, planMatches, type EpochPlan } from "./plan";
 import type { EpochJoinKey } from "./fragments";
 import type { EpochSalvageManifest, SourceInterval } from "./salvage";
+import type { EpochSourceCopyRecord } from "./sourceCopy";
 
 /** Written inside a `.partial` directory so ownership can be established. */
 export const EPOCH_OWNER_FILE = "OWNER.json";
@@ -117,6 +118,13 @@ export interface EpochCheckpointManifest {
    * quietly promote a replacement into an ordinary checkpoint.
    */
   salvage?: EpochSalvageManifest;
+  /**
+   * This epoch's stretch of the retained audio and text subtitle tracks,
+   * copied while the video read the source. Optional: an epoch without one is
+   * still a complete video checkpoint, and the later stages then read the
+   * source themselves. See `sourceCopy.ts`.
+   */
+  sourceCopy?: EpochSourceCopyRecord;
   completedAt: string;
 }
 
@@ -148,6 +156,13 @@ export interface AuxiliaryStageManifest {
    * stop where the source's sound stopped, short of the picture.
    */
   paddedToSeconds?: number;
+  /**
+   * What the stage read: the epochs' stream copies, or the source itself.
+   * Recorded, not part of the identity: both give the same packets.
+   */
+  readFrom?: "epoch-copies" | "source";
+  /** Why the copies were not used, when the source was read instead. */
+  sourceCopyUnavailable?: string;
   totalBytes: number;
   completedAt: string;
 }

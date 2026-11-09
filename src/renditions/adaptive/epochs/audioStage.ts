@@ -44,6 +44,7 @@ import {
   StorageInterruptedError,
 } from "./failure";
 import { planSalvagedAudio, sameDamagedIntervals } from "./audioSalvage";
+import type { SourceCopyAvailability } from "./sourceCopy";
 import { describeInterval, type SourceInterval } from "./salvage";
 import { stallThresholds, type StallThresholds } from "./stallPolicy";
 import type { EncoderWatchdog } from "../../processExecution";
@@ -138,6 +139,12 @@ export interface EnsureAudioStageInput {
   /** Called about four times a second while FFmpeg is reporting. */
   onProgress?: (progress: AudioPhaseProgress) => void;
   now?: () => number;
+  /**
+   * The epochs' copies of the source's tracks, joined, when every epoch has
+   * one. Read instead of the source, which spares a second read of the whole
+   * file. Absent, or naming a reason, and the source is read as before.
+   */
+  sourceCopy?: SourceCopyAvailability;
 }
 
 function sameStreams(
@@ -178,6 +185,7 @@ export async function ensureAudioStage({
   stalls = stallThresholds(),
   onProgress,
   now = Date.now,
+  sourceCopy,
 }: EnsureAudioStageInput): Promise<AudioStageResult> {
   const wanted = audioOutputs.map((output) => output.sourceStreamIndex);
   // How much of the timeline the tracks cover: up to the last frame when the
@@ -243,206 +251,269 @@ export async function ensureAudioStage({
     };
   }
 
-  await rm(stageDirectory, { recursive: true, force: true });
-  await mkdir(stageDirectory, { recursive: true });
-  for (const directory of adaptiveOutputDirectories({
-    videoOutputs: [],
-    audioOutputs: [...audioOutputs],
-  })) {
-    await mkdir(path.join(stageDirectory, ...directory.split("/")), {
-      recursive: true,
-    });
-  }
-
   /*
-   * Two shapes of the same command. An undamaged source is read once, straight
-   * through, exactly as it always was. A damaged one is read once per readable
-   * stretch with generated silence between, concatenated inside the filter
-   * graph so each track is still a single continuous encode over the title's
-   * own timeline — the material after a hole stays where it belongs rather than
-   * being pulled earlier by the length of the hole.
+   * Where the sound is read from. The epochs' copies when every epoch made one
+   * and nothing was salvaged; the source otherwise, and also if reading the
+   * copies fails for any reason, since they are an optimisation and never the
+   * thing that may fail a title.
    */
-  const salvagePlan = salvaging
-    ? planSalvagedAudio({
-        sourcePath,
-        audioOutputs,
-        damagedIntervals,
-        sourceDurationSeconds: coverSeconds,
-      })
-    : null;
-  const args = buildAdaptivePackageFfmpegArgs({
-    inputPath: sourcePath,
-    outputRoot: stageDirectory.split(path.sep).join("/"),
-    videoOutputs: [],
-    audioOutputs: salvagePlan
-      ? [...salvagePlan.outputs]
-      : padding
-        ? [...padding.outputs]
-        : [...audioOutputs],
-    ...(salvagePlan
-      ? {
-          inputs: salvagePlan.inputs,
-          audioFilterComplex: salvagePlan.filterComplex,
-        }
-      : padding
-        ? { audioFilterComplex: padding.filterComplex }
-        : {}),
-    ...(end === undefined ? {} : { durationSeconds: end }),
-    statsPeriodSeconds: 1,
-  });
+  const copyInput =
+    !salvaging &&
+    sourceCopy !== undefined &&
+    "input" in sourceCopy &&
+    wanted.every((index) => sourceCopy.input.positionOf.has(index))
+      ? sourceCopy.input
+      : undefined;
+  let sourceCopyUnavailable: string | undefined =
+    salvaging || sourceCopy === undefined || copyInput
+      ? undefined
+      : "unavailable" in sourceCopy
+        ? sourceCopy.unavailable
+        : "the epoch copies lack a wanted track";
+  let readFrom: "epoch-copies" | "source" = copyInput
+    ? "epoch-copies"
+    : "source";
 
-  /*
-   * Per-track bytes, measured from the files being written.
-   *
-   * FFmpeg reports `total_size=N/A` for HLS outputs, so its own byte counter is
-   * useless here — the same reason the video stage measures its epochs. One
-   * stat per track per second is cheap: a handful of files, not a tree walk.
-   */
-  const trackFiles = audioOutputs.map((output) => ({
-    id: audioRenditionId(output.sourceStreamIndex),
-    streamIndex: output.sourceStreamIndex,
-    meter: createOutputMeter([
-      path.join(
-        stageDirectory,
-        ADAPTIVE_AUDIO_DIRECTORY,
-        audioRenditionId(output.sourceStreamIndex),
-        ADAPTIVE_MEDIA_FILE,
-      ),
-    ]),
-  }));
-  const speed = createSpeedEstimator();
-  let lastReportMs = Number.NEGATIVE_INFINITY;
+  for (;;) {
+    const fromCopies = readFrom === "epoch-copies" && copyInput !== undefined;
+    await rm(stageDirectory, { recursive: true, force: true });
+    await mkdir(stageDirectory, { recursive: true });
+    for (const directory of adaptiveOutputDirectories({
+      videoOutputs: [],
+      audioOutputs: [...audioOutputs],
+    })) {
+      await mkdir(path.join(stageDirectory, ...directory.split("/")), {
+        recursive: true,
+      });
+    }
 
-  const stderr = createStderrTail();
-  try {
-    await runEncoder(ffmpegPath, args, {
-      ...(signal ? { signal } : {}),
-      ...(pauseController ? { pauseController } : {}),
-      logPath,
-      onStderr: (chunk) => stderr.append(chunk),
-      watchdog: {
-        hardStallMs: stalls.hardStallMs,
-        startupStallMs: stalls.startupStallMs,
-        terminationGraceMs: stalls.terminationGraceMs,
-      },
-      ...(onProgress
+    /*
+     * Two shapes of the same command. An undamaged source is read once, straight
+     * through, exactly as it always was. A damaged one is read once per readable
+     * stretch with generated silence between, concatenated inside the filter
+     * graph so each track is still a single continuous encode over the title's
+     * own timeline — the material after a hole stays where it belongs rather than
+     * being pulled earlier by the length of the hole.
+     */
+    const salvagePlan = salvaging
+      ? planSalvagedAudio({
+          sourcePath,
+          audioOutputs,
+          damagedIntervals,
+          sourceDurationSeconds: coverSeconds,
+        })
+      : null;
+    /*
+     * In the joined copies a track sits at its position in the copy, not at
+     * its source index. The rendition keeps the source index as its name.
+     */
+    const readOutputs = fromCopies
+      ? audioOutputs.map((output) => ({
+          ...output,
+          mapStreamIndex: copyInput.positionOf.get(output.sourceStreamIndex)!,
+        }))
+      : [...audioOutputs];
+    const readPadding = fromCopies
+      ? padToPicture(readOutputs, coverSeconds)
+      : padding;
+    const args = buildAdaptivePackageFfmpegArgs({
+      inputPath: sourcePath,
+      outputRoot: stageDirectory.split(path.sep).join("/"),
+      videoOutputs: [],
+      audioOutputs: salvagePlan
+        ? [...salvagePlan.outputs]
+        : readPadding
+          ? [...readPadding.outputs]
+          : readOutputs,
+      ...(fromCopies
         ? {
-            onProgress: (progress) => {
-              for (const track of trackFiles) track.meter.sample();
-              const smoothed = speed.sample(progress.speed);
-              const at = now();
-              if (at - lastReportMs < AUDIO_PROGRESS_INTERVAL_MS) return;
-              lastReportMs = at;
-
-              const tracks = trackFiles.map((track) => {
-                const details = trackDetails?.get(track.streamIndex);
-                return {
-                  id: track.id,
-                  ...(details?.language ? { language: details.language } : {}),
-                  ...(details?.title ? { title: details.title } : {}),
-                  codec: "aac",
-                  channels: details?.channels ?? 0,
-                  writtenBytes: track.meter.latest() ?? 0,
-                };
-              });
-              const fraction = safeFraction(
-                progress.processedSeconds,
-                coverSeconds,
-              );
-              /*
-               * The estimate uses FFmpeg's own throughput multiplier over the
-               * media time that genuinely remains — the same measurement the
-               * video stage trusts, and never a wall clock counting toward a
-               * guessed finish.
-               */
-              const remaining = Math.max(
-                0,
-                coverSeconds - progress.processedSeconds,
-              );
-              const etaSeconds =
-                smoothed && smoothed > 0
-                  ? Math.round(remaining / smoothed)
-                  : undefined;
-              onProgress({
-                tracks,
-                processedSeconds: progress.processedSeconds,
-                durationSeconds: coverSeconds,
-                fraction,
-                ...(smoothed === undefined ? {} : { speed: smoothed }),
-                writtenBytes: tracks.reduce(
-                  (sum, track) => sum + track.writtenBytes,
-                  0,
-                ),
-                ...(etaSeconds === undefined ? {} : { etaSeconds }),
-              });
-            },
+            inputs: [
+              {
+                path: copyInput.listPath,
+                format: "concat",
+                options: copyInput.inputOptions,
+              },
+            ],
           }
         : {}),
+      ...(salvagePlan
+        ? {
+            inputs: salvagePlan.inputs,
+            audioFilterComplex: salvagePlan.filterComplex,
+          }
+        : readPadding
+          ? { audioFilterComplex: readPadding.filterComplex }
+          : {}),
+      ...(end === undefined ? {} : { durationSeconds: end }),
+      statsPeriodSeconds: 1,
     });
-  } catch (error) {
-    await rm(stageDirectory, { recursive: true, force: true }).catch(
-      () => undefined,
-    );
-    if (signal?.aborted) throw error;
-    const message = error instanceof Error ? error.message : String(error);
-    const evidence = readSourceIoEvidence(`${stderr.value()}\n${message}`);
-    const failure = classifyFailure({
-      message,
-      storageAvailable: storageAvailable ? await storageAvailable() : true,
-      evidence,
-      /*
-       * The video stage has already established that this source has an
-       * unreadable region and has spent its retry budget proving it. An audio
-       * pass that hits a *further* one is the same disk failing further, not a
-       * mount that might come back, so it is reported as damage rather than
-       * parked for a watchdog with nothing to wait for.
-       */
-      ioRechecksExhausted: salvaging,
-    });
-    if (
-      failure.kind === "storage-unavailable" ||
-      failure.kind === "storage-device-lost" ||
-      failure.kind === "storage-io" ||
-      failure.kind === "storage-soft-fault" ||
-      failure.kind === "out-of-space"
-    ) {
-      throw new StorageInterruptedError(failure);
-    }
-    throw new AudioStageError(
-      failure.kind === "source-io"
-        ? failure.summary
-        : `Audio could not be packaged. ${failure.detail}`.trim(),
-      failure,
-      evidence.lines,
-    );
-  }
-  /*
-   * A clean exit is not proof the source was read. Checked here for the same
-   * reason the video stage checks it: a demuxer that gave up on a bad region
-   * can still let the muxer finalise, and the duration check below would then
-   * report a truncated soundtrack as an encoding fault.
-   */
-  {
-    const evidence = readSourceIoEvidence(stderr.value());
-    if (evidenceIndictsSource(evidence)) {
+
+    /*
+     * Per-track bytes, measured from the files being written.
+     *
+     * FFmpeg reports `total_size=N/A` for HLS outputs, so its own byte counter is
+     * useless here — the same reason the video stage measures its epochs. One
+     * stat per track per second is cheap: a handful of files, not a tree walk.
+     */
+    const trackFiles = audioOutputs.map((output) => ({
+      id: audioRenditionId(output.sourceStreamIndex),
+      streamIndex: output.sourceStreamIndex,
+      meter: createOutputMeter([
+        path.join(
+          stageDirectory,
+          ADAPTIVE_AUDIO_DIRECTORY,
+          audioRenditionId(output.sourceStreamIndex),
+          ADAPTIVE_MEDIA_FILE,
+        ),
+      ]),
+    }));
+    const speed = createSpeedEstimator();
+    let lastReportMs = Number.NEGATIVE_INFINITY;
+
+    const stderr = createStderrTail();
+    try {
+      await runEncoder(ffmpegPath, args, {
+        ...(signal ? { signal } : {}),
+        ...(pauseController ? { pauseController } : {}),
+        logPath,
+        onStderr: (chunk) => stderr.append(chunk),
+        watchdog: {
+          hardStallMs: stalls.hardStallMs,
+          startupStallMs: stalls.startupStallMs,
+          terminationGraceMs: stalls.terminationGraceMs,
+        },
+        ...(onProgress
+          ? {
+              onProgress: (progress) => {
+                for (const track of trackFiles) track.meter.sample();
+                const smoothed = speed.sample(progress.speed);
+                const at = now();
+                if (at - lastReportMs < AUDIO_PROGRESS_INTERVAL_MS) return;
+                lastReportMs = at;
+
+                const tracks = trackFiles.map((track) => {
+                  const details = trackDetails?.get(track.streamIndex);
+                  return {
+                    id: track.id,
+                    ...(details?.language
+                      ? { language: details.language }
+                      : {}),
+                    ...(details?.title ? { title: details.title } : {}),
+                    codec: "aac",
+                    channels: details?.channels ?? 0,
+                    writtenBytes: track.meter.latest() ?? 0,
+                  };
+                });
+                const fraction = safeFraction(
+                  progress.processedSeconds,
+                  coverSeconds,
+                );
+                /*
+                 * The estimate uses FFmpeg's own throughput multiplier over the
+                 * media time that genuinely remains — the same measurement the
+                 * video stage trusts, and never a wall clock counting toward a
+                 * guessed finish.
+                 */
+                const remaining = Math.max(
+                  0,
+                  coverSeconds - progress.processedSeconds,
+                );
+                const etaSeconds =
+                  smoothed && smoothed > 0
+                    ? Math.round(remaining / smoothed)
+                    : undefined;
+                onProgress({
+                  tracks,
+                  processedSeconds: progress.processedSeconds,
+                  durationSeconds: coverSeconds,
+                  fraction,
+                  ...(smoothed === undefined ? {} : { speed: smoothed }),
+                  writtenBytes: tracks.reduce(
+                    (sum, track) => sum + track.writtenBytes,
+                    0,
+                  ),
+                  ...(etaSeconds === undefined ? {} : { etaSeconds }),
+                });
+              },
+            }
+          : {}),
+      });
+    } catch (error) {
       await rm(stageDirectory, { recursive: true, force: true }).catch(
         () => undefined,
       );
+      if (signal?.aborted) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (fromCopies) {
+        readFrom = "source";
+        sourceCopyUnavailable = `reading the epoch copies failed: ${message.slice(-300)}`;
+        continue;
+      }
+      const evidence = readSourceIoEvidence(`${stderr.value()}\n${message}`);
+      const failure = classifyFailure({
+        message,
+        storageAvailable: storageAvailable ? await storageAvailable() : true,
+        evidence,
+        /*
+         * The video stage has already established that this source has an
+         * unreadable region and has spent its retry budget proving it. An audio
+         * pass that hits a *further* one is the same disk failing further, not a
+         * mount that might come back, so it is reported as damage rather than
+         * parked for a watchdog with nothing to wait for.
+         */
+        ioRechecksExhausted: salvaging,
+      });
+      if (
+        failure.kind === "storage-unavailable" ||
+        failure.kind === "storage-device-lost" ||
+        failure.kind === "storage-io" ||
+        failure.kind === "storage-soft-fault" ||
+        failure.kind === "out-of-space"
+      ) {
+        throw new StorageInterruptedError(failure);
+      }
       throw new AudioStageError(
-        salvaging
-          ? `The source could not be read while building audio around the intervals already known to be damaged (${damagedIntervals
-              .map(describeInterval)
-              .join(", ")}).`
-          : "The source could not be read while its audio was being encoded.",
-        {
-          kind: "source-io",
-          summary: "The source could not be read while audio was encoded.",
-          detail: evidence.lines.join(" | "),
-          evidence,
-        },
+        failure.kind === "source-io"
+          ? failure.summary
+          : `Audio could not be packaged. ${failure.detail}`.trim(),
+        failure,
         evidence.lines,
       );
     }
+    /*
+     * A clean exit is not proof the source was read. Checked here for the same
+     * reason the video stage checks it: a demuxer that gave up on a bad region
+     * can still let the muxer finalise, and the duration check below would then
+     * report a truncated soundtrack as an encoding fault.
+     */
+    {
+      const evidence = readSourceIoEvidence(stderr.value());
+      if (evidenceIndictsSource(evidence)) {
+        await rm(stageDirectory, { recursive: true, force: true }).catch(
+          () => undefined,
+        );
+        if (fromCopies) {
+          readFrom = "source";
+          sourceCopyUnavailable = `the epoch copies could not be read: ${evidence.lines.join(" | ").slice(-300)}`;
+          continue;
+        }
+        throw new AudioStageError(
+          salvaging
+            ? `The source could not be read while building audio around the intervals already known to be damaged (${damagedIntervals
+                .map(describeInterval)
+                .join(", ")}).`
+            : "The source could not be read while its audio was being encoded.",
+          {
+            kind: "source-io",
+            summary: "The source could not be read while audio was encoded.",
+            detail: evidence.lines.join(" | "),
+            evidence,
+          },
+          evidence.lines,
+        );
+      }
+    }
+    break;
   }
 
   let totalBytes = 0;
@@ -499,6 +570,8 @@ export async function ensureAudioStage({
       : {}),
     ...(end === undefined ? {} : { endSeconds: end }),
     ...(padding ? { paddedToSeconds: padding.toSeconds } : {}),
+    readFrom,
+    ...(sourceCopyUnavailable === undefined ? {} : { sourceCopyUnavailable }),
     totalBytes,
     completedAt: new Date().toISOString(),
   };

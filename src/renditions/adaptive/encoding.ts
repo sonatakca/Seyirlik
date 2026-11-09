@@ -85,6 +85,14 @@ export interface AdaptiveEncodingInput {
   startSeconds?: number;
   /** How much of this input to read, in seconds. */
   durationSeconds?: number;
+  /**
+   * Further options for this input, placed immediately before its `-i`.
+   *
+   * Used by the audio stage when it reads the epochs' audio copies through the
+   * concat demuxer, which needs `-safe 0` for absolute paths and `-itsoffset`
+   * to put the joined copies back on the source's own timeline.
+   */
+  options?: readonly string[];
 }
 
 export interface AdaptiveAudioOutput {
@@ -761,6 +769,7 @@ export function buildAdaptivePackageFfmpegArgs({
       ...(input.durationSeconds === undefined || input.durationSeconds <= 0
         ? []
         : ["-t", input.durationSeconds.toFixed(6)]),
+      ...(input.options ?? []),
       ...(input.format === undefined ? [] : ["-f", input.format]),
       "-i",
       input.path,

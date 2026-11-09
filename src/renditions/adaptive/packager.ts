@@ -118,11 +118,16 @@ import {
   type PackageWorkPlan,
   type RenditionPresence,
 } from "./incrementalPlan";
-import { buildWebVttMediaPlaylist, extractWebVttFile } from "./subtitles";
+import {
+  buildWebVttMediaPlaylist,
+  extractWebVttFile,
+  extractWebVttFiles,
+} from "./subtitles";
 import {
   audioStagePath,
   checkpointBytes,
   checkpointRoot,
+  completedEpochPath,
   listCompletedEpochIndexes,
   reconcilePlan,
 } from "./epochs/checkpoints";
@@ -159,6 +164,14 @@ import {
 import { stallThresholds, type StallThresholds } from "./epochs/stallPolicy";
 import type { SourceProbeOutcome } from "./epochs/sourceIo";
 import { probeSourceRangeReadable } from "./epochs/sourceReadProbe";
+import {
+  alignSourceCopyInput,
+  prepareSourceCopyInput,
+  SOURCE_COPY_LIST_FILE,
+  subtitleCodecCopies,
+  type SourceCopyAvailability,
+  type SourceCopyStream,
+} from "./epochs/sourceCopy";
 import {
   damageIntervalOf,
   describeInterval,
@@ -476,6 +489,12 @@ export interface AdaptivePackagerOptions {
   dryRun?: boolean;
   /** Server jobs clean only after their database success commit. */
   retainWorkspaceAfterPublish?: boolean;
+  /**
+   * Whether the epochs copy out the audio and text subtitle tracks for the
+   * later stages (default true). Off, every stage reads the source itself,
+   * which is how the equivalence test builds its reference.
+   */
+  copySourceStreams?: boolean;
 }
 
 /**
@@ -917,6 +936,7 @@ export async function packageAdaptiveRendition(
     signal,
     dryRun = false,
     retainWorkspaceAfterPublish = false,
+    copySourceStreams = true,
     publicationFileSystem,
   }: AdaptivePackagerOptions,
 ): Promise<AdaptivePackageResult> {
@@ -1832,6 +1852,32 @@ export async function packageAdaptiveRendition(
     /** Intervals replaced because the source could not supply them. */
     let sourceDamage: SourceDamageRecord[] = [];
     let damagedIntervals: SourceInterval[] = [];
+    /*
+     * The tracks the epochs copy out as they read the source, so the audio and
+     * subtitle stages do not each read the whole file again afterwards. Only
+     * text subtitles in a codec Matroska keeps as it is; the rest keep their
+     * own read. See `epochs/sourceCopy.ts`.
+     */
+    const sourceCopyStreams: SourceCopyStream[] = !copySourceStreams
+      ? []
+      : [
+          ...[
+            ...new Set(
+              plannedAudioOutputs.map((output) => output.sourceStreamIndex),
+            ),
+          ].map((index) => ({ index, kind: "audio" as const })),
+          ...plannedSubtitleStreamIndexes
+            .filter((index) =>
+              probe.subtitleTracks.some(
+                (track) =>
+                  track.streamIndex === index &&
+                  track.isTextBased &&
+                  subtitleCodecCopies(track.codec),
+              ),
+            )
+            .map((index) => ({ index, kind: "subtitle" as const })),
+        ];
+    let sourceCopy: SourceCopyAvailability | undefined;
     try {
       /*
        * The encoder is taken for the epochs and given back as soon as they are
@@ -1898,6 +1944,7 @@ export async function packageAdaptiveRendition(
         ...(networkStallBackoffMs ? { networkStallBackoffMs } : {}),
         sourceDamagePolicy,
         stalls,
+        sourceCopyStreams,
         /*
          * The bounded readability re-check, asked about the stretch the encoder
          * could not get through rather than about the epoch as a whole. That
@@ -2116,6 +2163,30 @@ export async function packageAdaptiveRendition(
       );
       damagedIntervals = mergeIntervals(sourceDamage.map(damageIntervalOf));
 
+      if (sourceCopyStreams.length > 0) {
+        const joined: SourceCopyAvailability = epochBuild.sourceCopyDropped
+          ? { unavailable: epochBuild.sourceCopyDropped }
+          : await prepareSourceCopyInput({
+              manifests: epochBuild.manifests,
+              epochCount: plan.epochs.length,
+              epochPath: (index) => completedEpochPath(checkpoints, index),
+              listPath: path.join(checkpoints, SOURCE_COPY_LIST_FILE),
+            }).catch((error: unknown) => ({
+              unavailable: `the copies could not be joined: ${error instanceof Error ? error.message : String(error)}`,
+            }));
+        // Measured against the source on this FFmpeg before anything reads
+        // from it; see `alignSourceCopyInput`.
+        sourceCopy =
+          "input" in joined
+            ? await alignSourceCopyInput({
+                ffmpegPath,
+                sourcePath: request.sourcePath,
+                input: joined.input,
+                ...(signal ? { signal } : {}),
+              })
+            : joined;
+      }
+
       if (plannedAudioOutputs.length > 0) {
         onEvent?.({
           type: "build-stage",
@@ -2165,6 +2236,7 @@ export async function packageAdaptiveRendition(
           ...(storageAvailable ? { storageAvailable } : {}),
           ...(damagedIntervals.length > 0 ? { damagedIntervals } : {}),
           stalls,
+          ...(sourceCopy ? { sourceCopy } : {}),
           ...(onEvent
             ? {
                 onProgress: (progress) => {
@@ -2239,6 +2311,23 @@ export async function packageAdaptiveRendition(
         };
       }
       if (error instanceof StorageInterruptedError) {
+        /*
+         * A full scratch disk defers, exactly as the outer handler defers one
+         * it recognises from free space alone. Which of FFmpeg's writes hit
+         * ENOSPC first decides whether its error names the cause, and that
+         * must not decide whether the job is parked as a lost volume instead.
+         */
+        if (error.failure.kind === "out-of-space") {
+          return {
+            ...base,
+            status: "deferred-for-storage",
+            error: error.failure.summary,
+            issues: [error.failure.detail],
+            failureKind: error.failure.kind,
+            workspaceDirectory,
+            scratchIdentity: workspaceClaim?.identity ?? null,
+          };
+        }
         return {
           ...base,
           status: "interrupted",
@@ -2660,19 +2749,45 @@ export async function packageAdaptiveRendition(
       const finished = subtitleProgress.tracks.filter(
         (entry) => entry.state === "complete" || entry.state === "skipped",
       ).length;
-      const running = subtitleProgress.tracks.find(
-        (entry) => entry.state === "running",
-      );
+      // Several tracks run at once when one read serves them all.
+      const running = subtitleProgress.tracks
+        .filter((entry) => entry.state === "running")
+        .reduce((sum, entry) => sum + (entry.fraction ?? 0), 0);
       subtitleProgress.completedTracks = finished;
       subtitleProgress.fraction = safeFraction(
-        finished + (running?.fraction ?? 0),
+        finished + running,
         subtitleProgress.tracks.length,
       );
+    };
+    /*
+     * The running read's recent pace, so what is left follows the read as it
+     * is now: off the local cache at first, then over the network. The
+     * fraction is counted in millionths, a cumulative count the byte-rate
+     * window can measure; a new track starts again from zero, which the window
+     * takes as a new phase.
+     */
+    const SUBTITLE_READ_UNITS = 1_000_000;
+    const subtitleEta = createByteRateEstimator({
+      windowMs: 120_000,
+      minimumSpanMs: 20_000,
+      // A read can stand still through a long stretch without dialogue.
+      staleMs: 120_000,
+    });
+    const sampleSubtitleRead = (fraction: number): void => {
+      const atMs = Date.now();
+      subtitleEta.sample(Math.round(fraction * SUBTITLE_READ_UNITS), atMs);
+      const eta = etaFromRate(
+        (1 - fraction) * SUBTITLE_READ_UNITS,
+        subtitleEta.rate(atMs),
+      );
+      if (eta === undefined) delete subtitleProgress.etaSeconds;
+      else subtitleProgress.etaSeconds = eta;
     };
     /** Whole percent, so a two-hour read sends a hundred samples, not thousands. */
     const reportSubtitleRead = (id: string, fraction: number): void => {
       const track = subtitleProgress.tracks.find((entry) => entry.id === id);
       if (!track || track.state !== "running") return;
+      sampleSubtitleRead(fraction);
       const stepped = Math.floor(fraction * 100) / 100;
       if (track.fraction !== undefined && stepped <= track.fraction) return;
       track.fraction = stepped;
@@ -2697,6 +2812,8 @@ export async function packageAdaptiveRendition(
       if (state === "running") {
         subtitleProgress.currentId = id;
         subtitleProgress.currentStartedAtMs = Date.now();
+        subtitleEta.sample(0, Date.now());
+        delete subtitleProgress.etaSeconds;
       } else if (subtitleProgress.currentId === id) {
         delete subtitleProgress.currentId;
         delete subtitleProgress.currentStartedAtMs;
@@ -2719,6 +2836,94 @@ export async function packageAdaptiveRendition(
         },
       });
     }
+    /*
+     * Every embedded text track reached by one read where it can be. A track
+     * can only be found by reading the whole container, so taking them one at
+     * a time read the source once per track: on a 62 GB remux over the Drive
+     * mount that was an hour or more each. Tracks in the epochs' copies are
+     * read from those, the rest from the source, each group in one pass. A
+     * salvaged source keeps its per-track reads around the holes, and a pass
+     * that fails leaves its tracks to the per-track path below.
+     */
+    const subtitleFileFor = (streamIndex: number): string =>
+      path.join(
+        workVersionRoot,
+        ADAPTIVE_SUBTITLE_DIRECTORY,
+        subtitleRenditionId(streamIndex),
+        ADAPTIVE_SUBTITLE_FILE,
+      );
+    const extractedTogether = new Map<
+      number,
+      { fileSizeBytes: number; contents: string; partial: false }
+    >();
+    if (damagedIntervals.length === 0) {
+      const embeddedText = plannedSubtitleStreamIndexes.filter((streamIndex) =>
+        probe.subtitleTracks.some(
+          (track) => track.streamIndex === streamIndex && track.isTextBased,
+        ),
+      );
+      const copyInput =
+        sourceCopy && "input" in sourceCopy ? sourceCopy.input : undefined;
+      const groups = [
+        {
+          copy: copyInput,
+          tracks: embeddedText.filter((streamIndex) =>
+            copyInput?.positionOf.has(streamIndex),
+          ),
+        },
+        {
+          copy: undefined,
+          tracks: embeddedText.filter(
+            (streamIndex) => !copyInput?.positionOf.has(streamIndex),
+          ),
+        },
+      ];
+      for (const group of groups) {
+        // One track gains nothing from sharing; the per-track path reads it.
+        if (group.tracks.length < 2) continue;
+        const ids = group.tracks.map(subtitleRenditionId);
+        for (const id of ids) reportSubtitle(id, "running");
+        const inputIndexOf = (streamIndex: number): number =>
+          group.copy ? group.copy.positionOf.get(streamIndex)! : streamIndex;
+        try {
+          const results = await extractWebVttFiles({
+            ffmpegPath,
+            inputPath: group.copy ? group.copy.listPath : request.sourcePath,
+            tracks: group.tracks.map((streamIndex) => ({
+              streamIndex: inputIndexOf(streamIndex),
+              outputPath: subtitleFileFor(streamIndex),
+            })),
+            ...(group.copy
+              ? {
+                  input: {
+                    options: group.copy.inputOptions,
+                    format: "concat",
+                  },
+                }
+              : {}),
+            sourceDurationSeconds: probe.durationSeconds,
+            onProgress: (fraction) => {
+              for (const id of ids) reportSubtitleRead(id, fraction);
+            },
+            ...(signal ? { signal } : {}),
+          });
+          for (const streamIndex of group.tracks) {
+            const result = results.get(inputIndexOf(streamIndex));
+            if (result) {
+              extractedTogether.set(streamIndex, { ...result, partial: false });
+            }
+          }
+        } catch (error) {
+          if (signal?.aborted) throw error;
+          for (const id of ids) reportSubtitle(id, "waiting");
+          console.warn(
+            `[seyirlik] ${request.relativePath}: reading subtitle tracks ${group.tracks.join(", ")} together failed; reading them one at a time.`,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      }
+    }
+
     for (const streamIndex of plannedSubtitleStreamIndexes) {
       const sourceTrack = probe.subtitleTracks.find(
         (track) => track.streamIndex === streamIndex && track.isTextBased,
@@ -2732,22 +2937,52 @@ export async function packageAdaptiveRendition(
         workVersionRoot,
         ...subtitlePath.split("/"),
       );
-      const extracted = await extractWebVttFile({
-        ffmpegPath,
-        inputPath: request.sourcePath,
-        streamIndex,
-        outputPath: absoluteSubtitle,
-        /*
-         * Read around the holes rather than through them. Cues after a damaged
-         * interval keep their own timestamps — nothing is shifted earlier by
-         * the length of the hole — and cues whose bytes were inside it are
-         * absent, which the warning says rather than the file pretending.
-         */
-        ...(damagedIntervals.length > 0 ? { damagedIntervals } : {}),
-        sourceDurationSeconds: probe.durationSeconds,
-        onProgress: (fraction) => reportSubtitleRead(id, fraction),
-        ...(signal ? { signal } : {}),
-      });
+      const fromSource = () =>
+        extractWebVttFile({
+          ffmpegPath,
+          inputPath: request.sourcePath,
+          streamIndex,
+          outputPath: absoluteSubtitle,
+          /*
+           * Read around the holes rather than through them. Cues after a
+           * damaged interval keep their own timestamps — nothing is shifted
+           * earlier by the length of the hole — and cues whose bytes were
+           * inside it are absent, which the warning says rather than the file
+           * pretending.
+           */
+          ...(damagedIntervals.length > 0 ? { damagedIntervals } : {}),
+          sourceDurationSeconds: probe.durationSeconds,
+          onProgress: (fraction) => reportSubtitleRead(id, fraction),
+          ...(signal ? { signal } : {}),
+        });
+      /*
+       * The epochs' joined copy holds this track's cues exactly as the source
+       * does, on local disk. Each track used to cost a full read of the source.
+       * A failed read of the copy falls back to the source.
+       */
+      const copyInput =
+        damagedIntervals.length === 0 && sourceCopy && "input" in sourceCopy
+          ? sourceCopy.input
+          : undefined;
+      const copyPosition = copyInput?.positionOf.get(streamIndex);
+      const together = extractedTogether.get(streamIndex);
+      const extracted = together
+        ? together
+        : copyInput && copyPosition !== undefined
+          ? await extractWebVttFile({
+              ffmpegPath,
+              inputPath: copyInput.listPath,
+              streamIndex: copyPosition,
+              outputPath: absoluteSubtitle,
+              input: { options: copyInput.inputOptions, format: "concat" },
+              sourceDurationSeconds: probe.durationSeconds,
+              onProgress: (fraction) => reportSubtitleRead(id, fraction),
+              ...(signal ? { signal } : {}),
+            }).catch((error: unknown) => {
+              if (signal?.aborted) throw error;
+              return fromSource();
+            })
+          : await fromSource();
       if (extracted.partial) {
         for (const record of sourceDamage) record.subtitlesAffected = true;
       }

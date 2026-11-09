@@ -60,7 +60,7 @@ const MAX_FFPROBE_OUTPUT_BYTES = 32 * 1024 * 1024;
  * eleven-gigabyte rendition report where it has reached without the output
  * ever being accumulated.
  */
-async function runFfprobe(
+export async function runFfprobe(
   ffprobePath: string,
   args: string[],
   signal?: AbortSignal,

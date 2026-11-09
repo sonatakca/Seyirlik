@@ -331,6 +331,13 @@ export interface SubtitlePhaseProgress {
   currentId?: string;
   /** When the running track started, so the page can say how long it has run. */
   currentStartedAtMs?: number;
+  /**
+   * Seconds left in the running read, from how fast it moved over the last
+   * two minutes. Absent until there is enough recent progress to judge.
+   * Never the average since the read began: a read whose first part came from
+   * the Drive cache looked minutes from done while it crawled over the network.
+   */
+  etaSeconds?: number;
   writtenBytes: number;
 }
 

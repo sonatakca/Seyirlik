@@ -887,6 +887,7 @@ function PlanningPanel({
 function subtitleRunningLabel(
   fraction: number | undefined,
   elapsedSeconds: number,
+  etaSeconds: number | undefined,
   t: Translate,
 ): string {
   const elapsed = formatDuration(elapsedSeconds);
@@ -894,16 +895,20 @@ function subtitleRunningLabel(
     return formatTemplate(t("processing.subtitles.running"), { elapsed });
   }
   const percent = String(Math.min(99, Math.floor(fraction * 100)));
-  if (fraction < 0.02 || elapsedSeconds <= 0) {
+  /*
+   * What is left comes from the worker's recent read rate, never from the
+   * average since the read began: a read that started on the Drive cache and
+   * went on over the network said "2 minutes left" for over an hour.
+   */
+  if (fraction < 0.02 || etaSeconds === undefined) {
     return formatTemplate(t("processing.subtitles.reading"), {
       percent,
       elapsed,
     });
   }
-  const remaining = Math.round((elapsedSeconds * (1 - fraction)) / fraction);
   return formatTemplate(t("processing.subtitles.readingRemaining"), {
     percent,
-    remaining: formatDuration(remaining),
+    remaining: formatDuration(etaSeconds),
   });
 }
 
@@ -975,6 +980,7 @@ function SubtitlePanel({
                       0,
                       Math.round((nowMs - progress.currentStartedAtMs) / 1000),
                     ),
+                    progress.etaSeconds,
                     t,
                   )
                 : track.state === "skipped"
@@ -2282,8 +2288,7 @@ export function MediaProcessingPage() {
   );
   /* Counted after the search, so each chip says what pressing it would show. */
   const movieStatusCounts = useMemo(
-    () =>
-      countStatuses(searchedItems.map((item) => movieFacts?.get(item.Id))),
+    () => countStatuses(searchedItems.map((item) => movieFacts?.get(item.Id))),
     [movieFacts, searchedItems],
   );
   const filteredItems = useMemo(

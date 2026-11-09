@@ -81,6 +81,16 @@ import {
 import { describeJoinMismatch, joinKeysMatch } from "./fragments";
 import { generatePlaceholderEpoch } from "./placeholder";
 import {
+  discardSourceCopy,
+  inspectSourceCopy,
+  sourceCopyImplicated,
+  sourceCopyOutputArgs,
+  sourceCopyWindow,
+  sourceSupportsStreamCopy,
+  type EpochSourceCopyRecord,
+  type SourceCopyStream,
+} from "./sourceCopy";
+import {
   DEFAULT_SOURCE_DAMAGE_POLICY,
   describeInterval,
   type SourceDamagePolicy,
@@ -345,6 +355,11 @@ export interface RunEpochBuildInput {
   stalls?: StallThresholds;
   /** Injected by failure-injection tests to stop between epochs. */
   beforeEpoch?: (index: number) => void | Promise<void>;
+  /**
+   * Audio and text subtitle tracks to copy out while each epoch reads the
+   * source, so the later stages need not read it again. See `sourceCopy.ts`.
+   */
+  sourceCopyStreams?: readonly SourceCopyStream[];
 }
 
 export interface EpochBuildResult {
@@ -364,6 +379,11 @@ export interface EpochBuildResult {
    * record, the page — is expected to say so rather than let it pass.
    */
   salvaged: SourceDamageRecord[];
+  /**
+   * Why this run stopped copying streams out of the epochs, if it did. The
+   * later stages then read the source as they always did.
+   */
+  sourceCopyDropped?: string;
 }
 
 function expectationsFor(
@@ -571,6 +591,7 @@ export async function runEpochBuild({
   sourceDamagePolicy = DEFAULT_SOURCE_DAMAGE_POLICY,
   stalls = stallThresholds(),
   beforeEpoch,
+  sourceCopyStreams = [],
 }: RunEpochBuildInput): Promise<EpochBuildResult> {
   const expectations = expectationsFor(videoOutputs, codecFamily, hdrState);
   const renditionIds = expectations.map((entry) => entry.id);
@@ -622,6 +643,21 @@ export async function runEpochBuild({
    */
   const alignmentToleranceSeconds =
     (frameRate && frameRate > 0 ? 1 / frameRate : 1 / 30) + 0.002;
+
+  /*
+   * The streams each epoch copies out alongside its video. Emptied, for the
+   * rest of this run, the first time a copy fails or fails its check: the
+   * later stages need every epoch's copy or none, so one missing copy makes
+   * the rest pointless.
+   */
+  let copyStreams: readonly SourceCopyStream[] =
+    sourceCopyStreams.length > 0 && sourceSupportsStreamCopy(sourcePath)
+      ? sourceCopyStreams
+      : [];
+  let sourceCopyDropped: string | undefined =
+    sourceCopyStreams.length > 0 && copyStreams.length === 0
+      ? `the source container (${path.extname(sourcePath) || "none"}) is not copied`
+      : undefined;
 
   for (const epoch of plan.epochs) {
     if (signal?.aborted) throw abortError();
@@ -692,10 +728,12 @@ export async function runEpochBuild({
     let stalledForMs = 0;
     /** What the evidence concluded, once there was enough of it to conclude. */
     let sourceVerdict: SourceReadVerdict | undefined;
+    /** Attempts given back after a failure with the stream copy attached. */
+    let copyFallbacks = 0;
 
     for (
       let attempt = 1;
-      attempt <= attemptsPerEpoch + sourceIoAttempts;
+      attempt <= attemptsPerEpoch + sourceIoAttempts + copyFallbacks;
       attempt += 1
     ) {
       if (signal?.aborted) throw abortError();
@@ -756,6 +794,16 @@ export async function runEpochBuild({
             : { durationSeconds: epoch.durationSeconds }),
           statsPeriodSeconds: EPOCH_STATS_PERIOD_SECONDS,
         });
+        const copying = copyStreams.length > 0;
+        if (copying) {
+          args.push(
+            ...sourceCopyOutputArgs({
+              epochDirectory: handle.directory,
+              streams: copyStreams,
+              window: sourceCopyWindow(plan, epoch.index),
+            }),
+          );
+        }
 
         const protectedSeconds = protectedSecondsAfter(plan, epoch.index);
         /*
@@ -921,6 +969,28 @@ export async function runEpochBuild({
            * from the message. If it is gone the answer is settled.
            */
           let available = storageAvailable ? await storageAvailable() : true;
+
+          /*
+           * A failure FFmpeg ties to the stream copy (output #1) is retried
+           * once without it. The copy is an optimisation and must never be
+           * what fails a title: the stages after the epochs read the source
+           * themselves when it is absent. Any other failure keeps its
+           * meaning, so an encoder that dies still fails the epoch exactly as
+           * it did before copies existed.
+           */
+          if (
+            copying &&
+            available &&
+            !readFailed &&
+            !looksLikeOutOfSpace(`${stderr.value()}\n${message}`) &&
+            sourceCopyImplicated(`${stderr.value()}\n${message}`)
+          ) {
+            copyStreams = [];
+            sourceCopyDropped = `epoch ${epoch.index} failed with the stream copy attached: ${message.slice(-300)}`;
+            copyFallbacks += 1;
+            await handle.discard();
+            continue;
+          }
 
           if (
             onHardStorageFault &&
@@ -1163,6 +1233,23 @@ export async function runEpochBuild({
           (sum, entry) => sum + entry.fileSizeBytes,
           0,
         );
+        let sourceCopy: EpochSourceCopyRecord | undefined;
+        if (copying) {
+          const inspected = await inspectSourceCopy({
+            epochDirectory: handle.directory,
+            streams: copyStreams,
+            window: sourceCopyWindow(plan, epoch.index),
+            ffprobePath,
+            ...(signal ? { signal } : {}),
+          });
+          if (inspected.ok) {
+            sourceCopy = inspected.record;
+          } else {
+            await discardSourceCopy(handle.directory);
+            copyStreams = [];
+            sourceCopyDropped = `epoch ${epoch.index}: ${inspected.reason}`;
+          }
+        }
         const manifest: EpochCheckpointManifest = {
           schemaVersion: EPOCH_CHECKPOINT_SCHEMA_VERSION,
           mediaId: identity.mediaId,
@@ -1182,6 +1269,7 @@ export async function runEpochBuild({
           renditions,
           totalBytes,
           checks: validation.checks,
+          ...(sourceCopy ? { sourceCopy } : {}),
           completedAt: new Date().toISOString(),
         };
 
@@ -1516,6 +1604,7 @@ export async function runEpochBuild({
     bytesWritten,
     videoCodecStrings,
     salvaged,
+    ...(sourceCopyDropped === undefined ? {} : { sourceCopyDropped }),
   };
 }
 

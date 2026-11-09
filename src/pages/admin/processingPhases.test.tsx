@@ -569,6 +569,7 @@ describe("phase panels render the measurements they are given", () => {
           fraction: 0.25,
           currentId: "subtitle-3",
           currentStartedAtMs: Date.now() - 600_000,
+          etaSeconds: 3_600,
           writtenBytes: 0,
         },
       }),
@@ -577,6 +578,39 @@ describe("phase panels render the measurements they are given", () => {
       screen.getByText("processing.subtitles.readingRemaining"),
     ).toBeTruthy();
     expect(screen.queryByText("processing.subtitles.running")).toBeNull();
+  });
+
+  /*
+   * Halfway in ten minutes says nothing about the rest when the first half
+   * came off the local cache: the page waits for the worker's recent-rate
+   * estimate instead of projecting the average.
+   */
+  it("does not guess what is left without the worker's recent-rate estimate", async () => {
+    await renderPanel(
+      live({
+        phase: "subtitles",
+        subtitles: {
+          tracks: [
+            {
+              id: "subtitle-3",
+              origin: "embedded",
+              language: "eng",
+              state: "running",
+              fraction: 0.5,
+            },
+          ],
+          completedTracks: 0,
+          fraction: 0.5,
+          currentId: "subtitle-3",
+          currentStartedAtMs: Date.now() - 600_000,
+          writtenBytes: 0,
+        },
+      }),
+    );
+    expect(screen.getByText("processing.subtitles.reading")).toBeTruthy();
+    expect(
+      screen.queryByText("processing.subtitles.readingRemaining"),
+    ).toBeNull();
   });
 
   /**

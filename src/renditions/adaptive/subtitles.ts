@@ -19,6 +19,11 @@ export function buildWebVttExtractionArgs(
    * from zero, which is what `shiftWebVttCues` then puts back.
    */
   range?: { startSeconds: number; durationSeconds: number },
+  /**
+   * Options and a demuxer for the input, when it is the epochs' joined stream
+   * copies rather than the source. See `epochs/sourceCopy.ts`.
+   */
+  input?: { options: readonly string[]; format: string },
 ): string[] {
   return [
     "-v",
@@ -41,6 +46,7 @@ export function buildWebVttExtractionArgs(
     ...(range && range.durationSeconds > 0
       ? ["-t", range.durationSeconds.toFixed(3)]
       : []),
+    ...(input ? [...input.options, "-f", input.format] : []),
     "-i",
     inputPath,
     "-map",
@@ -204,6 +210,7 @@ async function runWebVttExtraction({
   streamIndex,
   outputPath,
   range,
+  input,
   signal,
   onPosition,
 }: {
@@ -212,6 +219,7 @@ async function runWebVttExtraction({
   streamIndex: number;
   outputPath: string;
   range?: { startSeconds: number; durationSeconds: number };
+  input?: { options: readonly string[]; format: string };
   signal?: AbortSignal;
   /**
    * Seconds into what this run reads, from FFmpeg's `-progress` blocks. It is
@@ -220,12 +228,37 @@ async function runWebVttExtraction({
    */
   onPosition?: (seconds: number) => void;
 }): Promise<void> {
+  await runWebVttFfmpeg({
+    ffmpegPath,
+    args: buildWebVttExtractionArgs(
+      inputPath,
+      streamIndex,
+      outputPath,
+      range,
+      input,
+    ),
+    label: `stream ${streamIndex}`,
+    ...(signal ? { signal } : {}),
+    ...(onPosition ? { onPosition } : {}),
+  });
+}
+
+async function runWebVttFfmpeg({
+  ffmpegPath,
+  args,
+  label,
+  signal,
+  onPosition,
+}: {
+  ffmpegPath: string;
+  args: string[];
+  /** Names what failed, e.g. "stream 3" or "streams 3, 4". */
+  label: string;
+  signal?: AbortSignal;
+  onPosition?: (seconds: number) => void;
+}): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(
-      ffmpegPath,
-      buildWebVttExtractionArgs(inputPath, streamIndex, outputPath, range),
-      { shell: false, windowsHide: true },
-    );
+    const child = spawn(ffmpegPath, args, { shell: false, windowsHide: true });
     let stderr = "";
     let settled = false;
     const finish = (error?: Error) => {
@@ -276,7 +309,7 @@ async function runWebVttExtraction({
       if (code !== 0) {
         finish(
           new Error(
-            `WebVTT extraction for stream ${streamIndex} failed: ${stderr.trim() || `FFmpeg exited ${code}`}`,
+            `WebVTT extraction for ${label} failed: ${stderr.trim() || `FFmpeg exited ${code}`}`,
           ),
         );
       } else finish();
@@ -293,11 +326,18 @@ export async function extractWebVttFile({
   sourceDurationSeconds,
   signal,
   onProgress,
+  input,
 }: {
   ffmpegPath: string;
   inputPath: string;
   streamIndex: number;
   outputPath: string;
+  /**
+   * Options and a demuxer for `inputPath`, when it is the epochs' joined
+   * stream copies. Not combined with `damagedIntervals`: a salvaged build has
+   * no copies.
+   */
+  input?: { options: readonly string[]; format: string };
   /**
    * Stretches the source cannot return.
    *
@@ -347,6 +387,7 @@ export async function extractWebVttFile({
       inputPath,
       streamIndex,
       outputPath,
+      ...(input ? { input } : {}),
       ...(signal ? { signal } : {}),
       ...(onProgress && total > 0
         ? {
@@ -417,6 +458,16 @@ export async function extractWebVttFile({
     }
   }
 
+  const result = await readWebVttOutput(outputPath, streamIndex);
+  report(1);
+  return { ...result, partial: readable.length > 0 };
+}
+
+/** A finished WebVTT file, checked the same way whichever run wrote it. */
+async function readWebVttOutput(
+  outputPath: string,
+  streamIndex: number,
+): Promise<{ fileSizeBytes: number; contents: string }> {
   const file = await stat(outputPath);
   if (!file.isFile() || file.size <= 0 || file.size > MAX_WEBVTT_BYTES) {
     throw new Error(
@@ -429,8 +480,101 @@ export async function extractWebVttFile({
       `WebVTT extraction for stream ${streamIndex} did not produce WebVTT.`,
     );
   }
-  report(1);
-  return { fileSizeBytes: file.size, contents, partial: readable.length > 0 };
+  return { fileSizeBytes: file.size, contents };
+}
+
+/**
+ * Several text subtitle tracks of one input, in a single read.
+ *
+ * An embedded track can only be reached by reading the whole container, so
+ * extracting tracks one at a time read a 62 GB remux once per track over the
+ * Drive mount, an hour or more each. One FFmpeg run with an output per track
+ * reads it once. Each file is checked exactly as a single extraction's is.
+ */
+export function buildWebVttMultiExtractionArgs(
+  inputPath: string,
+  tracks: ReadonlyArray<{ streamIndex: number; outputPath: string }>,
+  input?: { options: readonly string[]; format: string },
+): string[] {
+  return [
+    "-v",
+    "error",
+    "-nostdin",
+    "-progress",
+    "pipe:1",
+    "-stats_period",
+    "1",
+    "-nostats",
+    "-y",
+    ...(input ? [...input.options, "-f", input.format] : []),
+    "-i",
+    inputPath,
+    ...tracks.flatMap((track) => [
+      "-map",
+      `0:${track.streamIndex}`,
+      "-c:s",
+      "webvtt",
+      "-f",
+      "webvtt",
+      track.outputPath,
+    ]),
+  ];
+}
+
+export async function extractWebVttFiles({
+  ffmpegPath,
+  inputPath,
+  tracks,
+  input,
+  sourceDurationSeconds,
+  signal,
+  onProgress,
+}: {
+  ffmpegPath: string;
+  inputPath: string;
+  /** `streamIndex` is the stream in this input; `outputPath` its own file. */
+  tracks: ReadonlyArray<{ streamIndex: number; outputPath: string }>;
+  input?: { options: readonly string[]; format: string };
+  sourceDurationSeconds?: number;
+  signal?: AbortSignal;
+  /** How much of the shared read is done, 0 to 1, never moving backwards. */
+  onProgress?: (fraction: number) => void;
+}): Promise<Map<number, { fileSizeBytes: number; contents: string }>> {
+  if (tracks.length === 0) return new Map();
+  let reported = 0;
+  const total = sourceDurationSeconds ?? 0;
+  await runWebVttFfmpeg({
+    ffmpegPath,
+    args: buildWebVttMultiExtractionArgs(inputPath, tracks, input),
+    label: `streams ${tracks.map((track) => track.streamIndex).join(", ")}`,
+    ...(signal ? { signal } : {}),
+    ...(onProgress && total > 0
+      ? {
+          onPosition: (seconds: number) => {
+            // Short of done until the files are written and checked.
+            const fraction = Math.min(
+              0.999,
+              Math.max(reported, seconds / total),
+            );
+            if (!Number.isFinite(fraction) || fraction <= reported) return;
+            reported = fraction;
+            onProgress(fraction);
+          },
+        }
+      : {}),
+  });
+  const results = new Map<
+    number,
+    { fileSizeBytes: number; contents: string }
+  >();
+  for (const track of tracks) {
+    results.set(
+      track.streamIndex,
+      await readWebVttOutput(track.outputPath, track.streamIndex),
+    );
+  }
+  onProgress?.(1);
+  return results;
 }
 
 export function buildWebVttMediaPlaylist(

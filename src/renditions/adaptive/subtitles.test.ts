@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildWebVttExtractionArgs,
+  buildWebVttMultiExtractionArgs,
   buildWebVttMediaPlaylist,
   formatWebVttTimestamp,
   mergeWebVttCues,
@@ -200,5 +201,46 @@ describe("subtitles across an unreadable interval", () => {
         ].join("\n"),
       ),
     ).toEqual([]);
+  });
+});
+
+describe("buildWebVttMultiExtractionArgs", () => {
+  it("reads the input once and writes one WebVTT output per track", () => {
+    const args = buildWebVttMultiExtractionArgs(
+      "/copies/list.ffconcat",
+      [
+        { streamIndex: 2, outputPath: "/stage/subtitle-3/subtitles.vtt" },
+        { streamIndex: 3, outputPath: "/stage/subtitle-4/subtitles.vtt" },
+      ],
+      { options: ["-safe", "0", "-itsoffset", "0.021000"], format: "concat" },
+    );
+    expect(args.filter((arg) => arg === "-i")).toHaveLength(1);
+    const input = args.indexOf("-i");
+    expect(args.slice(input - 6, input + 2)).toEqual([
+      "-safe",
+      "0",
+      "-itsoffset",
+      "0.021000",
+      "-f",
+      "concat",
+      "-i",
+      "/copies/list.ffconcat",
+    ]);
+    expect(args.slice(input + 2)).toEqual([
+      "-map",
+      "0:2",
+      "-c:s",
+      "webvtt",
+      "-f",
+      "webvtt",
+      "/stage/subtitle-3/subtitles.vtt",
+      "-map",
+      "0:3",
+      "-c:s",
+      "webvtt",
+      "-f",
+      "webvtt",
+      "/stage/subtitle-4/subtitles.vtt",
+    ]);
   });
 });

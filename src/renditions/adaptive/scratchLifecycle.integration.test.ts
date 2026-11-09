@@ -33,6 +33,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { SOURCE_COPY_LIST_FILE } from "./epochs/sourceCopy";
 import type { RenditionPaths } from "../analysis";
 import { computeSourceFingerprint } from "../registry";
 import { prepareProcessingStorageRoles } from "../storageRoles";
@@ -199,9 +200,21 @@ describe("the scratch storage lifecycle", () => {
 
     for (const args of commands) {
       const input = args[args.indexOf("-i") + 1]!;
-      // Read from the media volume, where the file already lay. The source is
-      // never staged onto scratch first.
-      expect(input).toBe(harness.sourcePath);
+      if (input.endsWith(SOURCE_COPY_LIST_FILE)) {
+        /*
+         * The audio and subtitle stages may read the epochs' copies of those
+         * tracks instead: intermediates the epochs wrote to scratch while they
+         * read the source in place.
+         */
+        expect(
+          path.resolve(input).startsWith(`${harness.ssdRoot}${path.sep}`),
+          input,
+        ).toBe(true);
+      } else {
+        // Read from the media volume, where the file already lay. The source
+        // is never staged onto scratch first.
+        expect(input).toBe(harness.sourcePath);
+      }
 
       // Every path the encoder was told to write is under scratch.
       const outputs = args.filter(
