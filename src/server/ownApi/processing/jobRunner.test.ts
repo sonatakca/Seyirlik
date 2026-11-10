@@ -407,6 +407,48 @@ describe("processing job runner", () => {
     expect((await file.read()).items[0]?.adaptiveStatus).toBeUndefined();
   });
 
+  it("tells publication which folder occupants the registry still knows", async () => {
+    const stateRoot = mkdtempSync(path.join(tmpdir(), "seyirlik-runner-"));
+    const registry = createFileRenditionRegistryStore(
+      path.join(stateRoot, "registry.json"),
+    );
+    let occupantIsLive:
+      | ((occupantMediaId: string) => Promise<boolean>)
+      | undefined;
+    let ownId = "";
+    await createProcessingJobRunner({
+      store: fake.store,
+      paths: { ...(paths as object), stateRoot } as never,
+      registry,
+      mediaRoot: "/media",
+      detectHardwareFn: vi.fn(async () => hardware) as never,
+      probeFn: vi.fn(async () => probe()) as never,
+      packageFn: vi.fn(
+        async (
+          request: { mediaId: string },
+          _paths: unknown,
+          options: { occupantIsLive?: (id: string) => Promise<boolean> },
+        ) => {
+          ownId = request.mediaId;
+          occupantIsLive = options.occupantIsLive;
+          return {
+            mediaId: request.mediaId,
+            relativePath: "Movies/Dune.mp4",
+            status: "ready" as const,
+            versionDirectory: "v2-abc",
+          };
+        },
+      ) as never,
+    }).run(input);
+
+    expect(occupantIsLive).toBeTypeOf("function");
+    // The run's own source was registered, so it counts as live; an id from a
+    // source lost long ago does not.
+    await expect(occupantIsLive!(ownId)).resolves.toBe(true);
+    await expect(occupantIsLive!("lost-source")).resolves.toBe(false);
+    rmSync(stateRoot, { recursive: true, force: true });
+  });
+
   it("walks the stages in order and records each one", async () => {
     const packageFn = vi.fn(async () => ({
       mediaId: "file-1",

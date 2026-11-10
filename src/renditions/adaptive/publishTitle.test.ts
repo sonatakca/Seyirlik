@@ -653,6 +653,64 @@ describe("publishing into a folder another title already occupies", () => {
     );
   });
 
+  it("replaces a package whose media the registry no longer knows", async () => {
+    // A film lost with its drive and downloaded again: the new source is a
+    // new media id, and the old package's id is in no registry any more.
+    const first = await buildWorkPackage();
+    await publishTitlePackage({
+      workVersionRoot: first.workVersionRoot,
+      titleRoot: first.titleRoot,
+      metadata: { ...metadata(), mediaId: "lost-source" },
+    });
+    const asked: string[] = [];
+    const second = await buildWorkPackage();
+    await publishTitlePackage({
+      workVersionRoot: second.workVersionRoot,
+      titleRoot: first.titleRoot,
+      metadata: {
+        ...metadata(),
+        mediaId: "new-source",
+        sourceFingerprint: "d".repeat(64),
+      },
+      occupantIsLive: async (occupant) => {
+        asked.push(occupant);
+        return false;
+      },
+    });
+    expect(asked).toEqual(["lost-source"]);
+    expect(
+      (await readTitlePackageManifest(first.titleRoot))?.sourceFingerprint,
+    ).toBe("d".repeat(64));
+  });
+
+  it.each([
+    ["the registry still lists the occupant", async () => true],
+    [
+      "the registry cannot be read",
+      async (): Promise<boolean> => {
+        throw new Error("database unavailable");
+      },
+    ],
+  ])("still refuses when %s", async (_case, occupantIsLive) => {
+    const first = await buildWorkPackage();
+    await publishTitlePackage({
+      workVersionRoot: first.workVersionRoot,
+      titleRoot: first.titleRoot,
+      metadata: { ...metadata(), mediaId: "media-1" },
+    });
+    const published = await readTitlePackageManifest(first.titleRoot);
+    const second = await buildWorkPackage();
+    await expect(
+      publishTitlePackage({
+        workVersionRoot: second.workVersionRoot,
+        titleRoot: first.titleRoot,
+        metadata: { ...metadata(), mediaId: "media-2" },
+        occupantIsLive,
+      }),
+    ).rejects.toBeInstanceOf(TitleRootConflictError);
+    expect(await readTitlePackageManifest(first.titleRoot)).toEqual(published);
+  });
+
   it("still lets a title publish over its own package", async () => {
     const first = await buildWorkPackage();
     await publishTitlePackage({

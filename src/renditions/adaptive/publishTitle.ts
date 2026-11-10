@@ -111,9 +111,22 @@ async function occupantMediaId(titleRoot: string): Promise<string | null> {
 async function assertTitleRootOwnedBy(
   titleRoot: string,
   mediaId: string,
+  occupantIsLive?: (occupantMediaId: string) => Promise<boolean>,
 ): Promise<void> {
   const occupant = await occupantMediaId(titleRoot);
   if (occupant === null || occupant === mediaId) return;
+  /*
+   * A title whose source was replaced — lost with a drive and downloaded
+   * again, say — gets a new media id, and its old package carries the old
+   * one. That package belongs to nobody any more, and refusing to replace it
+   * would leave the title on its old encode forever. Only an occupant the
+   * registry still knows is another title's content. Without an answer, or
+   * when asking fails, the occupant is assumed to be live.
+   */
+  const live = occupantIsLive
+    ? await occupantIsLive(occupant).catch(() => true)
+    : true;
+  if (!live) return;
   throw new TitleRootConflictError(titleRoot, occupant, mediaId);
 }
 
@@ -524,6 +537,12 @@ export interface PublishTitlePackageInput {
     Partial<Pick<typeof import("node:fs/promises"), "rm">>;
   /** Set when the title folder is inside a cache-backed mount. */
   cache?: PublicationCache;
+  /**
+   * Whether the media a package already in the title folder was built from
+   * still exists. When it does not, this package may replace that one; when
+   * it is not given, a different occupant always refuses the publish.
+   */
+  occupantIsLive?: (occupantMediaId: string) => Promise<boolean>;
 }
 
 /**
@@ -677,6 +696,7 @@ export async function publishTitlePackage({
   retainIncomingAfterPublish = false,
   fileSystem = { rename },
   cache,
+  occupantIsLive,
 }: PublishTitlePackageInput): Promise<PublishTitlePackageResult> {
   const plan = planTitleLayout(metadata);
   /*
@@ -727,7 +747,7 @@ export async function publishTitlePackage({
     ],
     onProgress,
   );
-  await assertTitleRootOwnedBy(titleRoot, metadata.mediaId);
+  await assertTitleRootOwnedBy(titleRoot, metadata.mediaId, occupantIsLive);
   // Existing readers retain their root. A replacement is built separately and
   // activated by one atomic file rename, never by retiring their live folders.
   const previous = await readTitlePackageManifest(titleRoot);

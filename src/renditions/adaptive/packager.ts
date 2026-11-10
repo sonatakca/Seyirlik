@@ -362,6 +362,8 @@ export interface AdaptivePackagerOptions {
    * waits for room on it instead of filling it. See `PublicationCache`.
    */
   publicationCache?: PublicationCache;
+  /** See `PublishTitlePackageInput.occupantIsLive`. */
+  occupantIsLive?: (occupantMediaId: string) => Promise<boolean>;
   ffmpegPath?: string;
   ffprobePath?: string;
   encoderPreference?: RenditionEncoderPreference;
@@ -945,6 +947,7 @@ export async function packageAdaptiveRendition(
     copySourceStreams = true,
     publicationFileSystem,
     publicationCache,
+    occupantIsLive,
   }: AdaptivePackagerOptions,
 ): Promise<AdaptivePackageResult> {
   const base = { mediaId: request.mediaId, relativePath: request.relativePath };
@@ -1257,6 +1260,7 @@ export async function packageAdaptiveRendition(
             publicationId: workspaceId,
             destinationReserveBytes: reserveBytes,
             retainIncomingAfterPublish: retainWorkspaceAfterPublish,
+            ...(occupantIsLive ? { occupantIsLive } : {}),
             ...(signal ? { signal } : {}),
             ...onPublishProgress,
           });

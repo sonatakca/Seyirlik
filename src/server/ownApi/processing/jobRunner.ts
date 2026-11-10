@@ -1772,6 +1772,17 @@ export function createProcessingJobRunner(deps: ProcessingJobRunnerDeps) {
             : {}),
           retainWorkspaceAfterPublish: true,
           ...(publicationCache ? { publicationCache } : {}),
+          /*
+           * A title folder holding a package built from a source the registry
+           * no longer knows — the title was downloaded again after its old
+           * source was lost — is this title's to replace. Any occupant the
+           * registry still lists is another title's, and still refuses.
+           */
+          occupantIsLive: async (occupantMediaId) =>
+            findRegistryItemById(
+              await registryStore.read(),
+              occupantMediaId,
+            ) !== undefined,
           ...(epochTargetSeconds === undefined ? {} : { epochTargetSeconds }),
           /*
            * What to do about a source that cannot be read. Passed explicitly
