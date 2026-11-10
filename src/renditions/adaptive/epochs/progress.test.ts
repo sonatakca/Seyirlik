@@ -327,11 +327,13 @@ describe("createMediaStallDetector", () => {
 describe("epochVideoProgress", () => {
   it("reads video time from frames while a copied subtitle holds out_time", () => {
     // How to Train Your Dragon 3, epoch 1: 1847 frames at 23.976 fps, N/A.
-    const progress = epochVideoProgress(
-      { processedSeconds: 0, frames: 1847, fps: 57.74 },
-      24000 / 1001,
-      1800,
-    );
+    const reported: {
+      processedSeconds: number;
+      frames: number;
+      fps: number;
+      speed?: number;
+    } = { processedSeconds: 0, frames: 1847, fps: 57.74 };
+    const progress = epochVideoProgress(reported, 24000 / 1001, 1800);
     expect(progress.processedSeconds).toBeCloseTo(77.035, 3);
     expect(progress.speed).toBeCloseTo(2.408, 3);
   });
