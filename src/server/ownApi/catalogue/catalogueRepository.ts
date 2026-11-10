@@ -419,6 +419,8 @@ export interface ProcessableTitleRow {
   /** Episode number within its season; null for a movie. */
   indexNumber: number | null;
   itemMissingSince: Date | null;
+  /** The title's names per interface language (TMDB's, kept by refresh). */
+  localizedTitles?: Record<string, string> | null;
 
   seriesId: string | null;
   seriesTitle: string | null;
@@ -1056,6 +1058,7 @@ export function createCatalogueRepository(
            item.library_id,
            item.kind,
            item.title,
+           item.localized_titles,
            item.sort_title,
            item.production_year,
            item.runtime_ms,
@@ -1188,6 +1191,8 @@ function toProcessableTitleRow(
     libraryId: row.library_id as string,
     kind: row.kind as "movie" | "episode",
     title: row.title as string,
+    localizedTitles:
+      (row.localized_titles as Record<string, string> | null) ?? null,
     sortTitle: row.sort_title as string,
     productionYear: numberOrNull(row.production_year),
     runtimeMs: textOrNull(row.runtime_ms),

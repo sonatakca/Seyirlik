@@ -29,6 +29,7 @@ export function matchesQuery(
     ...seriesNames(series),
     season.title,
     episode.title,
+    ...Object.values(episode.localizedTitles ?? {}),
     episode.code,
     // So "s01e1" and "1x01" style searches still land on the right episode.
     `${episode.seasonNumber}x${episode.episodeNumber ?? ""}`,
@@ -370,4 +371,15 @@ export function summariseCounts(
     );
   }
   return parts.join(" · ");
+}
+
+/** The episode's name in the site's language, else its catalogue title. */
+export function episodeDisplayTitle(
+  episode: ProcessingEpisode,
+  language: string | undefined,
+): string {
+  const localized = language
+    ? episode.localizedTitles?.[language]?.trim()
+    : undefined;
+  return localized || episode.title;
 }

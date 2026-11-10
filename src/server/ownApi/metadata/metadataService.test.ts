@@ -742,6 +742,7 @@ describe("episode names in both interface languages", () => {
       _season,
       language,
     ) => seasonIn(language),
+    episodeTitle: (number: number) => string = (number) => `Episode ${number}`,
   ) {
     const series = target({
       id: "series-1",
@@ -756,7 +757,7 @@ describe("episode names in both interface languages", () => {
         target({
           id: `e${number}`,
           kind: "episode",
-          title: `Episode ${number}`,
+          title: episodeTitle(number),
           productionYear: null,
           seriesId: "series-1",
           parentIndexNumber: 1,
@@ -809,7 +810,7 @@ describe("episode names in both interface languages", () => {
   });
 
   it("back-fills only the translations from the catalogue enrich", async () => {
-    const { service, byItem } = setup();
+    const { service, byItem } = setup(undefined, (number) => `Named ${number}`);
 
     await service.enrich("series-1");
 
@@ -824,6 +825,33 @@ describe("episode names in both interface languages", () => {
           tr: "Viserys, ikinci çocuğunun doğumunu kutlamak için bir turnuva düzenler.",
         },
       },
+    ]);
+  });
+
+  it("never makes TMDB's TBA an episode's title", async () => {
+    const { series, service, byItem } = setup(async () => [
+      { seasonNumber: 1, episodeNumber: 1, title: "TBA" },
+    ]);
+
+    await service.identify(series);
+
+    for (const update of byItem("e1")) {
+      expect(update).not.toHaveProperty("title");
+      expect(update.localizedTitles ?? {}).toEqual({});
+    }
+  });
+
+  it("names an episode described as TBA once TMDB has named it", async () => {
+    const { service, byItem } = setup(undefined, () => "TBA");
+
+    await service.enrich("series-1");
+
+    expect(byItem("e1")).toEqual([
+      expect.objectContaining({ title: "The Heirs of the Dragon" }),
+    ]);
+    // Turkish has no name for episode 2, but English does.
+    expect(byItem("e2")).toEqual([
+      expect.objectContaining({ title: "The Rogue Prince" }),
     ]);
   });
 

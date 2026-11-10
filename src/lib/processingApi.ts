@@ -496,6 +496,8 @@ export interface ProcessingMovieTitle extends ProcessingTitle {
 }
 
 export interface ProcessingEpisode extends ProcessingTitle {
+  /** The episode's name per interface language, where TMDB gives one. */
+  localizedTitles?: Record<string, string>;
   seasonNumber: number;
   episodeNumber: number | null;
   /** `S01E01`. */

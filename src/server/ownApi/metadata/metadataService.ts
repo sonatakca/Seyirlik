@@ -44,11 +44,17 @@ const STILL_SIZE = PROVIDER_ARTWORK_SIZES.still;
 
 /**
  * The name TMDB gives an episode nobody has named in that language: "Episode
- * 5", "Bölüm 5", "5. Bölüm". It is no name at all, so the language falls back
- * to the episode's own title rather than hiding a real English one.
+ * 5", "Bölüm 5", "5. Bölüm", or "TBA" before it airs. It is no name at all, so
+ * the language falls back to the episode's own title rather than hiding a real
+ * English one, and a refresh never makes it the episode's title.
  */
 const PLACEHOLDER_EPISODE_NAME =
-  /^(?:(?:episode|bölüm)\s*#?\d+|\d+\.\s*bölüm)$/iu;
+  /^(?:(?:episode|bölüm)\s*#?\d+|\d+\.\s*bölüm|tba|tbd|to be announced)$/iu;
+
+function isPlaceholderEpisodeName(name: string | null | undefined): boolean {
+  const trimmed = name?.trim();
+  return !trimmed || PLACEHOLDER_EPISODE_NAME.test(trimmed);
+}
 
 export interface EpisodeTranslations {
   titles: Record<string, string>;
@@ -85,7 +91,7 @@ export async function readSeasonTranslations(
       };
       const title = episode.title?.trim();
       const overview = episode.overview?.trim();
-      if (title && !PLACEHOLDER_EPISODE_NAME.test(title)) {
+      if (title && !isPlaceholderEpisodeName(title)) {
         entry.titles[language] = title;
       }
       if (overview) entry.overviews[language] = overview;
@@ -327,7 +333,9 @@ export function createMetadataService({
             })
           : null;
         await metadata.applyTitleMetadata(local.id, {
-          ...(providerEpisode.title ? { title: providerEpisode.title } : {}),
+          ...(!isPlaceholderEpisodeName(providerEpisode.title)
+            ? { title: providerEpisode.title as string }
+            : {}),
           ...(translated
             ? {
                 localizedTitles: translated.titles,
@@ -403,7 +411,14 @@ export function createMetadataService({
         }
         const translated = translations.get(episode.indexNumber);
         if (!translated) continue;
+        // An episode described before it aired kept TMDB's "TBA" as its title;
+        // the name it has since been given replaces that, and nothing else.
+        const named =
+          isPlaceholderEpisodeName(episode.title) && translated.titles.en
+            ? { title: translated.titles.en }
+            : {};
         await metadata.applyTitleMetadata(episode.id, {
+          ...named,
           localizedTitles: translated.titles,
           localizedOverviews: translated.overviews,
         });

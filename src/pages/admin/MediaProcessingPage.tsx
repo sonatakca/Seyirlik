@@ -3163,6 +3163,7 @@ export function MediaProcessingPage() {
                     busySeriesId={busySeriesId}
                     busySeasonId={busySeasonId}
                     startingItemId={startingItemId}
+                    language={language}
                     t={(key) => t(key as never)}
                   />
                 )}

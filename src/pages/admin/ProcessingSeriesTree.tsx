@@ -23,9 +23,11 @@ import {
   sourceDeletionTargets,
   formatSourceDeletionSize,
   sourceDeletionBytes,
+  episodeDisplayTitle,
 } from "./processingSeriesModel";
 import { formatTemplate } from "./libraryMaintenanceModel";
 import { formatBytes } from "./processingModel";
+import type { Language } from "../../i18n/translations";
 
 /**
  * A show, its seasons and its episodes, as three collapsed levels.
@@ -191,6 +193,7 @@ function EpisodeRow({
   onArmDelete,
   onCancelDelete,
   onDeleteSource,
+  language,
   t,
 }: {
   episode: ProcessingEpisode;
@@ -201,6 +204,7 @@ function EpisodeRow({
   onArmDelete: (key: string) => void;
   onCancelDelete: () => void;
   onDeleteSource: (episode: ProcessingEpisode) => void;
+  language?: Language;
   t: Translate;
 }) {
   const action = episodeAction(episode);
@@ -263,7 +267,7 @@ function EpisodeRow({
             {episode.code}
           </span>
           <span className="truncate text-sm font-bold text-white">
-            {episode.title}
+            {episodeDisplayTitle(episode, language)}
           </span>
           <span className="text-[11px] text-white/40">{stateLabel}</span>
         </div>
@@ -370,6 +374,7 @@ function SeasonBlock({
   deletingDeleteKey,
   onArmDelete,
   onCancelDelete,
+  language,
   t,
 }: {
   series: ProcessingSeries;
@@ -386,6 +391,7 @@ function SeasonBlock({
   deletingDeleteKey: string | null;
   onArmDelete: (key: string) => void;
   onCancelDelete: () => void;
+  language?: Language;
   t: Translate;
 }) {
   const busy = busySeasonId === season.seasonId;
@@ -496,6 +502,7 @@ function SeasonBlock({
               onArmDelete={onArmDelete}
               onCancelDelete={onCancelDelete}
               onDeleteSource={onDeleteEpisodeSource}
+              language={language}
               t={t}
             />
           ))}
@@ -524,6 +531,7 @@ export function ProcessingSeriesTree({
   deletingDeleteKey,
   onArmDelete,
   onCancelDelete,
+  language,
   t,
 }: {
   series: readonly ProcessingSeries[];
@@ -544,6 +552,8 @@ export function ProcessingSeriesTree({
   deletingDeleteKey: string | null;
   onArmDelete: (key: string) => void;
   onCancelDelete: () => void;
+  /** The site's language, for episode names. */
+  language?: Language;
   t: Translate;
 }) {
   return (
@@ -733,6 +743,7 @@ export function ProcessingSeriesTree({
                     deletingDeleteKey={deletingDeleteKey}
                     onArmDelete={onArmDelete}
                     onCancelDelete={onCancelDelete}
+                    language={language}
                     t={t}
                   />
                 ))}

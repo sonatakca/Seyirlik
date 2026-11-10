@@ -107,6 +107,8 @@ export interface ProcessingMovie extends ProcessingTitle {
 }
 
 export interface ProcessingEpisode extends ProcessingTitle {
+  /** The episode's name per interface language, where TMDB gives one. */
+  localizedTitles?: Record<string, string>;
   seasonNumber: number;
   episodeNumber: number | null;
   /** `S01E01`, or `S01` when the episode carries no number. */
@@ -613,6 +615,9 @@ export function projectCatalogue(
 
     season.episodes.push({
       ...title,
+      ...(row.localizedTitles && Object.keys(row.localizedTitles).length > 0
+        ? { localizedTitles: row.localizedTitles }
+        : {}),
       seasonNumber,
       episodeNumber: row.indexNumber,
       code: episodeCode(seasonNumber, row.indexNumber),

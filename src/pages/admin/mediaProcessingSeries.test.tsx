@@ -618,6 +618,27 @@ describe("search", () => {
     ).toEqual(["S01E01"]);
   });
 
+  it("names an episode in the site's language, and finds it by any name", async () => {
+    overview = baseOverview([
+      series("Berlin", [
+        season(1, [
+          {
+            ...episode(1, 1, "TBA"),
+            localizedTitles: { en: "The Collection", tr: "Koleksiyon" },
+          },
+        ]),
+      ]),
+    ]);
+    const user = userEvent.setup();
+    await renderPage();
+    await openSeriesTab(user);
+    await user.type(screen.getByLabelText("processing.tv.searchSeries"), "Koleksiyon");
+
+    const [only] = await screen.findAllByTestId("processing-episode");
+    expect(within(only!).getByText("The Collection")).toBeInTheDocument();
+    expect(within(only!).queryByText("TBA")).toBeNull();
+  });
+
   it("finds an episode by its SxxExx code", async () => {
     await searchFor("s01e10");
     const episodes = await screen.findAllByTestId("processing-episode");
