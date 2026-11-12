@@ -2,6 +2,7 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
+import { Transform, type Readable } from "node:stream";
 
 import { defineBrowserCommand, playwright } from "@vitest/browser-playwright";
 import react from "@vitejs/plugin-react";
@@ -13,6 +14,7 @@ import {
   getFixtureDirectory,
 } from "./src/test/renditionFixtures";
 import { ensureEpochPackageFixture } from "./src/test/epochPackageFixture";
+import { ensureLadderFixture } from "./src/test/ladderFixture";
 
 /**
  * Serves the generated renditions the way the media server does: complete
@@ -103,7 +105,30 @@ function serveRenditionFixtures(): Plugin {
  * entirely by them, so a fixture server that ignored `Range` would hand the
  * player the whole file for every segment and prove nothing about the packaging
  * this suite exists to check.
+ *
+ * `/test-epoch-package/__link/<kbps>/<latencyMs>/…` serves the same package
+ * through a simulated link: every response waits `latencyMs` before its first
+ * byte and is then paced to `kbps`. A master requested under that prefix keeps
+ * it for every playlist and segment it refers to, so a real player measures a
+ * real slow (or fast) server, which is what the opening-rung tests need.
  */
+function paceTo(
+  source: Readable,
+  bitsPerSecond: number,
+  latencyMs: number,
+  response: NodeJS.WritableStream,
+): void {
+  const pacer = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      setTimeout(
+        () => callback(null, chunk),
+        (chunk.length * 8 * 1000) / bitsPerSecond,
+      );
+    },
+  });
+  setTimeout(() => source.pipe(pacer).pipe(response), latencyMs);
+}
+
 function serveEpochPackage(): Plugin {
   return {
     name: "seyirlik-serve-epoch-package",
@@ -122,9 +147,21 @@ function serveEpochPackage(): Plugin {
             next();
             return;
           }
-          const requested = decodeURIComponent(
+          const raw = decodeURIComponent(
             (request.url ?? "").split("?")[0].replace(/^\//, ""),
           );
+          const link = /^__link\/(\d+)\/(\d+)\/(.*)$/.exec(raw);
+          const requested = link ? link[3]! : raw;
+          const send = (stream: Readable) =>
+            link
+              ? paceTo(
+                  stream,
+                  Number(link[1]) * 1000,
+                  Number(link[2]),
+                  response,
+                )
+              : stream.pipe(response);
+          const chunked = { highWaterMark: 16 * 1024 };
           const filePath = path.resolve(titleRoot, requested);
           // A fixture server is still a server: a path that escapes the title
           // folder is refused rather than served.
@@ -160,7 +197,7 @@ function serveEpochPackage(): Plugin {
               if (!range) {
                 response.setHeader("Content-Length", stats.size);
                 response.statusCode = 200;
-                createReadStream(filePath).pipe(response);
+                send(createReadStream(filePath, chunked));
                 return;
               }
               const start = range[1] ? Number(range[1]) : 0;
@@ -179,7 +216,7 @@ function serveEpochPackage(): Plugin {
                 `bytes ${start}-${end}/${stats.size}`,
               );
               response.setHeader("Content-Length", end - start + 1);
-              createReadStream(filePath, { start, end }).pipe(response);
+              send(createReadStream(filePath, { start, end, ...chunked }));
             })
             .catch(() => {
               response.statusCode = 404;
@@ -187,6 +224,67 @@ function serveEpochPackage(): Plugin {
             });
         },
       );
+    },
+  };
+}
+
+/**
+ * Serves the priced-ladder fixture (`src/test/ladderFixture.ts`), with the same
+ * `__link/<kbps>/<latencyMs>/` simulated link as the epoch package, so the
+ * opening-rung tests run a real player against a real slow or fast server.
+ */
+function serveLadderFixture(): Plugin {
+  return {
+    name: "seyirlik-serve-ladder-fixture",
+    async configureServer(server) {
+      const root = await ensureLadderFixture().catch((error) => {
+        console.warn(
+          "[seyirlik] the ladder fixture could not be built:",
+          error instanceof Error ? error.message : String(error),
+        );
+        return null;
+      });
+      server.middlewares.use("/test-ladder", (request, response, next) => {
+        if (!root) {
+          next();
+          return;
+        }
+        const raw = decodeURIComponent(
+          (request.url ?? "").split("?")[0].replace(/^\//, ""),
+        );
+        const link = /^__link\/(\d+)\/(\d+)\/(.*)$/.exec(raw);
+        const filePath = path.resolve(root, link ? link[3]! : raw);
+        if (!filePath.startsWith(`${path.resolve(root)}${path.sep}`)) {
+          response.statusCode = 403;
+          response.end();
+          return;
+        }
+        void stat(filePath)
+          .then((stats) => {
+            if (!stats.isFile()) throw new Error("not a file");
+            response.statusCode = 200;
+            response.setHeader(
+              "Content-Type",
+              filePath.endsWith(".m3u8")
+                ? "application/vnd.apple.mpegurl"
+                : "video/mp4",
+            );
+            response.setHeader("Content-Length", stats.size);
+            response.setHeader("Cache-Control", "no-store");
+            const stream = createReadStream(filePath, {
+              highWaterMark: 16 * 1024,
+            });
+            if (link) {
+              paceTo(stream, Number(link[1]) * 1000, Number(link[2]), response);
+            } else {
+              stream.pipe(response);
+            }
+          })
+          .catch(() => {
+            response.statusCode = 404;
+            response.end();
+          });
+      });
     },
   };
 }
@@ -223,7 +321,12 @@ const pointer = defineBrowserCommand<
 });
 
 export default defineConfig({
-  plugins: [react(), serveRenditionFixtures(), serveEpochPackage()],
+  plugins: [
+    react(),
+    serveRenditionFixtures(),
+    serveEpochPackage(),
+    serveLadderFixture(),
+  ],
   test: {
     include: ["src/**/*.browser.test.tsx"],
     // A real browser with a real decoder. jsdom has no video pipeline at all,

@@ -5,6 +5,14 @@ import {
   canonicalRungClass,
   selectAdaptiveTargetRung,
 } from "../components/player/qualityPreference";
+import {
+  createThroughputAccumulator,
+  deliveryOrigin,
+  openingBandwidthEstimate,
+  rememberDeliveredThroughput,
+  UNKNOWN_LINK_ESTIMATE_BPS,
+  type OpeningEstimate,
+} from "./throughputMemory";
 
 export interface AttachedVideoSource {
   usingHlsJs: boolean;
@@ -25,12 +33,15 @@ export interface AdaptiveHlsController {
   ): void;
   setAudioStream(sourceStreamIndex: number): boolean;
   /**
-   * What the engine has actually measured the link to carry, in bits/second.
+   * The estimate the adaptive policy is currently deciding by, in bits/second.
    *
-   * This is throughput observed while pulling real fragments, which is a far
-   * better number than `navigator.connection.downlink` — that is a coarse,
-   * rounded hint the browser volunteers, and Safari and Firefox do not
-   * volunteer it at all. Undefined when no estimate exists yet.
+   * Once a fragment has landed this is throughput observed while pulling real
+   * fragments, which is a far better number than
+   * `navigator.connection.downlink` — that is a coarse, rounded hint the
+   * browser volunteers, and Safari and Firefox do not volunteer it at all.
+   * Before then it is the opening estimate (see `throughputMemory.ts`), so the
+   * menu labels itself from the same number the policy chose the opening rung
+   * by.
    */
   getBandwidthEstimateBps(): number | undefined;
 }
@@ -265,6 +276,23 @@ const MAX_FORWARD_BUFFER_SECONDS = 60;
 
 /** Used when the engine has not measured a first-byte latency yet. */
 const DEFAULT_TTFB_MS = 400;
+
+/**
+ * Measured fragments that may overturn the opening rung without the up-switch
+ * hold.
+ *
+ * The hold exists so one lucky sample cannot start an oscillation. The opening
+ * rung was not chosen from a sample at all — it was chosen from a prior, which
+ * is weaker evidence than any measurement — so the first real readings are
+ * allowed to correct it at once, upwards as well as down. Two, so the
+ * correction rests on more than one fragment, which is the same evidence the
+ * hold would have collected at the one-second tick. It applies once per
+ * attachment; every later climb is paced by the hold as before.
+ */
+const STARTUP_CONFIRMING_FRAGMENTS = 2;
+
+/** How often a playing session refreshes what it remembers about the link. */
+const THROUGHPUT_PERSIST_INTERVAL_MS = 10_000;
 
 /** Decisions kept for `window.__seyirlikAbr()`. */
 const ABR_LOG_SIZE = 200;
@@ -649,6 +677,30 @@ export function attachSourceToVideo(
 
   if (isHls && Hls.isSupported()) {
     /*
+     * A downloaded title plays from the service worker's cache, so it neither
+     * learns from nor is told about the network: its "throughput" is a disk
+     * read, and remembering it would open the next streamed title at the top
+     * of the ladder.
+     */
+    const throughputOrigin =
+      options.forceMediaSource === true
+        ? undefined
+        : deliveryOrigin(playbackUrl);
+    const opening: OpeningEstimate = throughputOrigin
+      ? openingBandwidthEstimate(throughputOrigin)
+      : { bps: UNKNOWN_LINK_ESTIMATE_BPS, source: "default" };
+    abrRecord("opening-estimate", {
+      source: opening.source,
+      bps: Math.round(opening.bps),
+      ...(opening.ageMs === undefined
+        ? {}
+        : { ageS: Math.round(opening.ageMs / 1000) }),
+      ...(opening.confidence === undefined
+        ? {}
+        : { confidence: opening.confidence }),
+    });
+
+    /*
      * The rung Seyirlik's policy wants while Auto is in charge, read by hls.js
      * through the controller below every time it picks the next fragment.
      * Declared before the engine exists because the engine builds its ABR
@@ -678,7 +730,15 @@ export function attachSourceToVideo(
       maxMaxBufferLength: MAX_FORWARD_BUFFER_SECONDS,
       lowLatencyMode: false,
       startLevel: -1,
-      abrEwmaDefaultEstimate: 5_000_000,
+      /*
+       * What the estimator reports until its first sample, and therefore what
+       * the opening rung is chosen by: the policy decides at MANIFEST_PARSED,
+       * before anything is fetched, and pins that rung as the start level
+       * (see `driveLevel`). It was a fixed 5 Mbps, which under the policy's
+       * two-thirds margin bought 720p for everyone. The estimator drops it
+       * entirely on the first real sample.
+       */
+      abrEwmaDefaultEstimate: opening.bps,
       maxStarvationDelay: 4,
       maxLoadingDelay: 4,
       testBandwidth: true,
@@ -745,6 +805,25 @@ export function attachSourceToVideo(
     let lastStallAt = 0;
     let bandwidthSamples: BandwidthSample[] = [];
     let lastSeekAt = Number.NEGATIVE_INFINITY;
+    /** Main fragments buffered, i.e. samples hls.js's estimator has taken. */
+    let measuredFragments = 0;
+    /** See STARTUP_CONFIRMING_FRAGMENTS. Consumed by the first evaluation that has the evidence. */
+    let startupCorrectionPending = true;
+    const deliveredThroughput = createThroughputAccumulator();
+    let lastThroughputPersistAt = Number.NEGATIVE_INFINITY;
+    const persistDeliveredThroughput = (force = false) => {
+      if (!throughputOrigin) return;
+      const bps = deliveredThroughput.estimateBps();
+      if (bps === undefined) return;
+      const now = Date.now();
+      if (
+        !force &&
+        now - lastThroughputPersistAt < THROUGHPUT_PERSIST_INTERVAL_MS
+      )
+        return;
+      lastThroughputPersistAt = now;
+      rememberDeliveredThroughput(throughputOrigin, bps, { now });
+    };
     /*
      * Whether a fragment of the rung the policy last chose has actually been
      * fetched. A switch only changes what is fetched next, so until one such
@@ -1019,8 +1098,8 @@ export function attachSourceToVideo(
       if (end === null) return;
       // A muxed package would need audio cut too; only the shared-audio
       // layout every adaptive package uses is handled.
-      const audioIsAlternate = hls.audioTracks.some(
-        (track) => Boolean((track as { url?: string }).url),
+      const audioIsAlternate = hls.audioTracks.some((track) =>
+        Boolean((track as { url?: string }).url),
       );
       if (!audioIsAlternate) return;
 
@@ -1220,6 +1299,13 @@ export function attachSourceToVideo(
         );
       }
 
+      // The opening rung's one chance at an immediate correction, consumed
+      // whether or not it is needed so a later climb is paced as usual.
+      const startupCorrection =
+        startupCorrectionPending &&
+        measuredFragments >= STARTUP_CONFIRMING_FRAGMENTS;
+      if (startupCorrection) startupCorrectionPending = false;
+
       // A locked rung is the viewer's decision; nothing here overrides it.
       if (lockedHeight !== null) return;
 
@@ -1287,6 +1373,15 @@ export function attachSourceToVideo(
       // describes the link as it was before it failed.
       if (now < upswitchBlockedUntil) {
         upgradeCandidate = null;
+        return;
+      }
+
+      // See STARTUP_CONFIRMING_FRAGMENTS: the rung below was chosen from a
+      // prior, and the link has now been measured to carry more. Only once a
+      // fragment of that rung has landed, like every other climb.
+      if (startupCorrection && !probing && appliedLevelMeasured) {
+        upgradeCandidate = null;
+        driveLevel(target, "start-correct-up");
         return;
       }
 
@@ -1434,13 +1529,44 @@ export function attachSourceToVideo(
           duration: fragment.duration,
         });
         if (fragment.level === appliedLevel) appliedLevelMeasured = true;
+        const stats = (
+          data as {
+            frag?: {
+              bitrateTest?: boolean;
+              stats?: {
+                loaded?: number;
+                aborted?: boolean;
+                loading?: { start?: number; first?: number; end?: number };
+              };
+            };
+          }
+        ).frag;
+        if (!stats?.bitrateTest) {
+          measuredFragments += 1;
+          const loading = stats?.stats?.loading;
+          if (loading) {
+            deliveredThroughput.add({
+              bytes: stats.stats?.loaded ?? 0,
+              requestStartMs: loading.start ?? Number.NaN,
+              firstByteMs: loading.first ?? Number.NaN,
+              endMs: loading.end ?? Number.NaN,
+              aborted: stats.stats?.aborted === true,
+            });
+            persistDeliveredThroughput();
+          }
+        }
       }
       // Re-checks the old-rung fetch it was waiting on, and waits again if
       // the engine has already started another one.
       if (pendingReplacement !== null) replaceBufferAhead(pendingReplacement);
       // Each buffered fragment is a fresh throughput sample, and the only
-      // regular tick available while playback is steady.
-      evaluateAdaptiveTarget();
+      // regular tick available while playback is steady. Forced while the
+      // opening rung's correction is due, so it lands on the fragment that
+      // earned it rather than up to a second later.
+      evaluateAdaptiveTarget(
+        startupCorrectionPending &&
+          measuredFragments >= STARTUP_CONFIRMING_FRAGMENTS,
+      );
     });
 
     hls.on(Hls.Events.BUFFER_FLUSHED, () => {
@@ -1451,7 +1577,10 @@ export function attachSourceToVideo(
         const middle = (fragment.start + fragment.end) / 2;
         let held = false;
         for (let index = 0; index < buffered.length; index += 1) {
-          if (buffered.start(index) <= middle && buffered.end(index) >= middle) {
+          if (
+            buffered.start(index) <= middle &&
+            buffered.end(index) >= middle
+          ) {
             held = true;
             break;
           }
@@ -1575,6 +1704,9 @@ export function attachSourceToVideo(
         decodedWidth: videoElement.videoWidth,
         decodedHeight: videoElement.videoHeight,
         estimateBps: Math.round(hls.bandwidthEstimate || 0),
+        opening,
+        measuredFragments,
+        deliveredBps: Math.round(deliveredThroughput.estimateBps() ?? 0),
         bufferedAheadS: Number(bufferedAhead().toFixed(1)),
         recentStallCount,
         upswitchBlockedForMs: Math.max(0, upswitchBlockedUntil - Date.now()),
@@ -1645,6 +1777,8 @@ export function attachSourceToVideo(
         },
       },
       destroy: () => {
+        // The next title (often the next episode, moments later) opens from this.
+        persistDeliveredThroughput(true);
         clearInterval(rungTicker);
         observer?.disconnect();
         videoElement.removeEventListener("seeking", onSeeking);

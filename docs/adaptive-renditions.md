@@ -213,8 +213,21 @@ not reprocessing or deleting the source library.
 
 ## Playback and limitations
 
-- hls.js ABR owns Auto mode. Manual selection sets `loadLevel`, so the change is
-  applied at a future aligned fragment without clearing buffered media.
+- Seyirlik's own policy (`src/lib/videoSource.ts`) chooses every rung wherever
+  hls.js can run, Safari included via ManagedMediaSource. It answers through a
+  subclass of hls.js's ABR controller, so the engine stays in automatic mode and
+  a new rung joins at the next aligned fragment without flushing the buffer;
+  hls.js keeps measuring throughput, abandoning late fragments and falling back
+  after errors.
+- The opening rung is chosen before any fragment is fetched, from what this
+  browser last measured the same media origin delivering
+  (`src/lib/throughputMemory.ts`): trusted as measured for 30 minutes, then
+  discounted to 75% within a day and 50% within two weeks, and dropped when
+  the browser reports a different kind of network. Without history it is
+  5 Mbps (720p), or the browser's link hint when that is slower. The first two
+  measured fragments may correct the opening rung at once; later climbs keep
+  the two-second hold. Browser-cache reads and downloaded titles never teach it.
+  `window.__seyirlikAbr()` shows the `opening-estimate` and every decision.
 - Low Data caps ABR at the lowest rung; Higher Resolution permits the highest
   compatible rung; Advanced locks an exact rung.
 - Original is not part of the switching set. Entering or leaving Original is a

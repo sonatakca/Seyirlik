@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, vi } from "vitest";
+import { afterEach, describe, expect, it, beforeEach, vi } from "vitest";
 import { selectModeRungs } from "../components/player/qualityPreference";
 import {
   attachSourceToVideo,
@@ -711,7 +711,13 @@ describe("the adaptive buffer probe", () => {
     let sn = 0;
     const nextFragment = () => {
       sn += 1;
-      return { type: "main", sn, level: drivenLevel(hls), start: sn * 2, duration: 2 };
+      return {
+        type: "main",
+        sn,
+        level: drivenLevel(hls),
+        start: sn * 2,
+        duration: 2,
+      };
     };
 
     return {
@@ -887,7 +893,13 @@ describe("the adaptive buffer probe", () => {
       hls.bandwidthEstimate = estimate;
       sn += 1;
       hls.trigger("hlsFragBuffered", {
-        frag: { type: "main", sn, level: drivenLevel(hls), start: sn * 2, duration: 2 },
+        frag: {
+          type: "main",
+          sn,
+          level: drivenLevel(hls),
+          start: sn * 2,
+          duration: 2,
+        },
       });
     };
 
@@ -1218,8 +1230,18 @@ describe("seamless rung switching", () => {
   });
 
   it("waits for an old-rung fragment in flight before cutting, so it cannot land inside the new rung", () => {
-    const s = session({ estimateBps: 20_000_000, currentTime: 5, bufferEnd: 30 });
-    const inFlight = { type: "main", sn: s.nextSn(), level: 0, start: 30, duration: 2 };
+    const s = session({
+      estimateBps: 20_000_000,
+      currentTime: 5,
+      bufferEnd: 30,
+    });
+    const inFlight = {
+      type: "main",
+      sn: s.nextSn(),
+      level: 0,
+      start: 30,
+      duration: 2,
+    };
     s.hls.trigger("hlsFragLoading", { frag: inFlight });
 
     s.attachment.adaptiveController?.setQualityHeight(720, 720);
@@ -1233,7 +1255,11 @@ describe("seamless rung switching", () => {
   });
 
   it("keeps the whole buffer when it is shorter than the time the new rung needs", () => {
-    const s = session({ estimateBps: 1_000_000, currentTime: 5, bufferEnd: 12 });
+    const s = session({
+      estimateBps: 1_000_000,
+      currentTime: 5,
+      bufferEnd: 12,
+    });
     // 1080p over a 1 Mbps link takes ~12 s per fragment: everything buffered
     // is needed to cover it, so nothing is cut and the rung joins at the end.
     s.attachment.adaptiveController?.setQualityHeight(1080, 1080);
@@ -1243,7 +1269,11 @@ describe("seamless rung switching", () => {
   });
 
   it("never cuts a package whose audio is muxed into the video", () => {
-    const s = session({ estimateBps: 20_000_000, currentTime: 5, bufferEnd: 30 });
+    const s = session({
+      estimateBps: 20_000_000,
+      currentTime: 5,
+      bufferEnd: 30,
+    });
     s.hls.audioTracks = [];
     s.attachment.adaptiveController?.setQualityHeight(720, 720);
     expect(s.hls.loadLevel).toBe(1);
@@ -1272,7 +1302,12 @@ describe("seamless rung switching", () => {
     const s = session({ estimateBps: 900_000, currentTime: 4, bufferEnd: 40 });
     s.hls.levels = [
       { width: 640, height: 360, bitrate: 700_000 },
-      { width: 1280, height: 720, bitrate: 5_000_000, averageBitrate: 2_500_000 },
+      {
+        width: 1280,
+        height: 720,
+        bitrate: 5_000_000,
+        averageBitrate: 2_500_000,
+      },
     ] as typeof s.hls.levels;
     s.hls.bandwidthEstimate = 5_000_000; // affordable on average, not 1.5x peak
     for (let index = 0; index < 3; index += 1) {
@@ -1290,7 +1325,11 @@ describe("seamless rung switching", () => {
   it("never replaces on a climb while the link is falling", () => {
     // Seconds ago the link carried 20 Mbps; it dipped, and now reads 6 Mbps:
     // enough for 720p, but a third of the link has just disappeared.
-    const s = session({ estimateBps: 20_000_000, currentTime: 4, bufferEnd: 40 });
+    const s = session({
+      estimateBps: 20_000_000,
+      currentTime: 4,
+      bufferEnd: 40,
+    });
     for (let index = 0; index < 2; index += 1) {
       s.advance(1000);
       s.buffer(2, 40 + index * 2, 42 + index * 2);
@@ -1312,7 +1351,11 @@ describe("seamless rung switching", () => {
   });
 
   it("returns from a lock to automatic mode without flushing", () => {
-    const s = session({ estimateBps: 20_000_000, currentTime: 5, bufferEnd: 30 });
+    const s = session({
+      estimateBps: 20_000_000,
+      currentTime: 5,
+      bufferEnd: 30,
+    });
     s.attachment.adaptiveController?.setQualityHeight(360, 360);
     const flushesAfterLock = s.flushes.length;
     s.attachment.adaptiveController?.setQualityHeight(null, null, "auto");
@@ -1338,10 +1381,14 @@ describe("the replacement cut", () => {
     // rest of it on append and the previous GOP is untouched.
     setUserAgent("Mozilla/5.0 Chrome/149.0.0.0 Safari/537.36");
     const video = createVideo("");
-    Object.defineProperty(video, "currentTime", { configurable: true, get: () => 5 });
+    Object.defineProperty(video, "currentTime", {
+      configurable: true,
+      get: () => 5,
+    });
     Object.defineProperty(video, "buffered", {
       configurable: true,
-      get: () => ({ length: 1, start: () => 0, end: () => 30 }) as unknown as TimeRanges,
+      get: () =>
+        ({ length: 1, start: () => 0, end: () => 30 }) as unknown as TimeRanges,
     });
     const attachment = attachSourceToVideo(
       video,
@@ -1357,9 +1404,13 @@ describe("the replacement cut", () => {
     hls.audioTracks = [{ name: "track-1", url: "audio/audio.m3u8" }];
     hls.bandwidthEstimate = 20_000_000;
     const flushes: Array<{ startOffset: number }> = [];
-    (hls.on as unknown as (e: string, h: (e: string, d: unknown) => void) => void)(
-      "hlsBufferFlushing",
-      (_event, data) => flushes.push(data as { startOffset: number }),
+    (
+      hls.on as unknown as (
+        e: string,
+        h: (e: string, d: unknown) => void,
+      ) => void
+    )("hlsBufferFlushing", (_event, data) =>
+      flushes.push(data as { startOffset: number }),
     );
     hls.trigger("manifestParsed", {});
     for (let index = 0; index < 15; index += 1) {
@@ -1377,5 +1428,182 @@ describe("the replacement cut", () => {
     attachment.adaptiveController?.setQualityHeight(1080, 1080);
     expect(flushes).toHaveLength(1);
     expect(flushes[0]?.startOffset).toBeCloseTo(5 * 2.002 + 1.001, 6);
+  });
+});
+
+describe("the opening rung", () => {
+  const LADDER = [
+    { width: 256, height: 144, bitrate: 180_000 },
+    { width: 426, height: 240, bitrate: 350_000 },
+    { width: 640, height: 360, bitrate: 700_000 },
+    { width: 854, height: 480, bitrate: 1_400_000 },
+    { width: 1280, height: 720, bitrate: 3_000_000 },
+    { width: 1920, height: 1080, bitrate: 5_500_000 },
+    { width: 3840, height: 2160, bitrate: 20_000_000 },
+  ];
+  const URL_ = "http://example.test/play/master.m3u8";
+  const STORE = "seyirlik:delivery-throughput:v1";
+
+  let clock = 0;
+  beforeEach(() => {
+    hlsMock.instances.length = 0;
+    hlsMock.isSupported.mockReturnValue(true);
+    window.localStorage.clear();
+    clock = 1_800_000_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    setUserAgent("Mozilla/5.0 Chrome/149.0.0.0 Safari/537.36");
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function remember(bps: number, ageMs = 0) {
+    window.localStorage.setItem(
+      STORE,
+      JSON.stringify({ "http://example.test": { bps, at: clock - ageMs } }),
+    );
+  }
+
+  /** A full-screen 1080p player, attached the way the player attaches. */
+  function open(options: Parameters<typeof attachSourceToVideo>[3] = {}) {
+    const video = createVideo("");
+    vi.spyOn(video, "getBoundingClientRect").mockReturnValue({
+      height: 1080,
+    } as DOMRect);
+    const attachment = attachSourceToVideo(
+      video,
+      URL_,
+      "application/vnd.apple.mpegurl",
+      { adaptiveRendition: true, ...options },
+    );
+    const hls = hlsMock.instances.at(-1);
+    if (!hls) throw new Error("hls.js was not attached");
+    hls.levels = [...LADDER];
+    // What hls.js reports before its first sample: the configured default.
+    hls.bandwidthEstimate = (
+      hls.config as { abrEwmaDefaultEstimate: number }
+    ).abrEwmaDefaultEstimate;
+    hls.trigger("manifestParsed", {});
+    let sn = 0;
+    return {
+      hls,
+      attachment,
+      /** A main fragment lands, measured by hls.js at `estimate`. */
+      fragment(estimate: number, bytes = 1_500_000, totalMs = 400) {
+        clock += 300;
+        hls.bandwidthEstimate = estimate;
+        sn += 1;
+        hls.trigger("hlsFragBuffered", {
+          frag: {
+            type: "main",
+            sn,
+            level: drivenLevel(hls),
+            start: sn * 2,
+            duration: 2,
+            stats: {
+              loaded: bytes,
+              loading: { start: 1000, first: 1100, end: 1000 + totalMs },
+            },
+          },
+        });
+      },
+    };
+  }
+
+  it("opens a first-time viewer where it always did", () => {
+    const { hls } = open();
+    expect(hls.config).toMatchObject({ abrEwmaDefaultEstimate: 5_000_000 });
+    expect(hls.levels[drivenLevel(hls)]?.height).toBe(720);
+  });
+
+  it("opens a returning viewer at the rung their link has been measured to carry", () => {
+    remember(40_000_000, 5 * 60_000);
+    const { hls } = open();
+    expect(hls.config).toMatchObject({ abrEwmaDefaultEstimate: 40_000_000 });
+    // 2160p averages 20 Mbps; two thirds of 40 affords it, and the
+    // 1080-tall player at this pixel ratio covers 1080p only.
+    expect(hls.levels[drivenLevel(hls)]?.height).toBe(1080);
+    // And the very first fragment is fetched from it, not from a probe rung.
+    expect(hls.startLevel).toBe(drivenLevel(hls));
+  });
+
+  it("opens a returning viewer on a slow link low, rather than at 720p", () => {
+    remember(1_500_000);
+    const { hls } = open();
+    expect(hls.levels[drivenLevel(hls)]?.height).toBe(360);
+  });
+
+  it("lets the first two measured fragments correct a cautious opening at once", () => {
+    const session = open();
+    expect(session.hls.levels[drivenLevel(session.hls)]?.height).toBe(720);
+    session.fragment(30_000_000);
+    // One fragment is a sample, not evidence.
+    expect(session.hls.levels[drivenLevel(session.hls)]?.height).toBe(720);
+    session.fragment(30_000_000);
+    // No two-second hold: the opening rung was a guess, this is a measurement.
+    expect(session.hls.levels[drivenLevel(session.hls)]?.height).toBe(1080);
+  });
+
+  it("paces every later climb by the ordinary hold", () => {
+    const session = open();
+    session.fragment(6_000_000);
+    session.fragment(6_000_000);
+    // 720p is right for 6 Mbps: the one immediate correction is spent.
+    expect(session.hls.levels[drivenLevel(session.hls)]?.height).toBe(720);
+    clock += 1000;
+    session.fragment(30_000_000);
+    expect(session.hls.levels[drivenLevel(session.hls)]?.height).toBe(720);
+  });
+
+  it("drops an over-optimistic remembered rung on the first measurement", () => {
+    remember(40_000_000);
+    const session = open();
+    expect(session.hls.levels[drivenLevel(session.hls)]?.height).toBe(1080);
+    // Two thirds of 2 Mbps affords 360p; the fall is taken in one step.
+    clock += 1000;
+    session.fragment(2_000_000);
+    expect(session.hls.levels[drivenLevel(session.hls)]?.height).toBe(360);
+  });
+
+  it("hands what one title measured to the next one", () => {
+    const first = open();
+    for (let index = 0; index < 4; index += 1) {
+      // 1.5 MB in 400 ms: 30 Mbps delivered.
+      first.fragment(30_000_000);
+    }
+    first.attachment.destroy();
+    const stored = JSON.parse(window.localStorage.getItem(STORE)!);
+    expect(stored["http://example.test"].bps).toBeCloseTo(30_000_000, -3);
+
+    clock += 2 * 60_000;
+    const next = open();
+    expect(next.hls.config).toMatchObject({
+      abrEwmaDefaultEstimate: stored["http://example.test"].bps,
+    });
+    expect(next.hls.levels[drivenLevel(next.hls)]?.height).toBe(1080);
+  });
+
+  it("never learns from, or is told about, a title played from a download", () => {
+    remember(1_500_000);
+    const offline = open({ forceMediaSource: true });
+    expect(offline.hls.config).toMatchObject({
+      abrEwmaDefaultEstimate: 5_000_000,
+    });
+    for (let index = 0; index < 6; index += 1) {
+      offline.fragment(900_000_000, 1_500_000, 13);
+    }
+    offline.attachment.destroy();
+    expect(
+      JSON.parse(window.localStorage.getItem(STORE)!)["http://example.test"]
+        .bps,
+    ).toBe(1_500_000);
+  });
+
+  it("leaves a locked rung alone through the opening correction", () => {
+    const session = open();
+    session.attachment.adaptiveController?.setQualityHeight(480, 480);
+    session.fragment(30_000_000);
+    session.fragment(30_000_000);
+    expect(session.hls.levels[drivenLevel(session.hls)]?.height).toBe(480);
   });
 });
