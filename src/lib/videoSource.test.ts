@@ -10,6 +10,8 @@ import {
 const hlsMock = vi.hoisted(() => ({
   instances: [] as Array<{
     attachMedia: ReturnType<typeof vi.fn>;
+    stopLoad: ReturnType<typeof vi.fn>;
+    startLoad: ReturnType<typeof vi.fn>;
     destroy: ReturnType<typeof vi.fn>;
     loadSource: ReturnType<typeof vi.fn>;
     on: ReturnType<typeof vi.fn>;
@@ -44,6 +46,7 @@ vi.mock("hls.js", () => {
       BUFFER_APPENDED: "hlsBufferAppended",
       FRAG_BUFFERED: "hlsFragBuffered",
       FRAG_LOADING: "hlsFragLoading",
+      FRAG_LOADED: "hlsFragLoaded",
       FRAG_LOAD_EMERGENCY_ABORTED: "hlsFragLoadEmergencyAborted",
       BUFFER_FLUSHING: "hlsBufferFlushing",
       BUFFER_FLUSHED: "hlsBufferFlushed",
@@ -113,6 +116,8 @@ vi.mock("hls.js", () => {
     >();
 
     attachMedia = vi.fn();
+    stopLoad = vi.fn();
+    startLoad = vi.fn();
     destroy = vi.fn();
     loadSource = vi.fn();
     on = vi.fn(
@@ -1055,9 +1060,14 @@ describe("seamless rung switching", () => {
     } as DOMRect);
     let currentTime = options.currentTime ?? 0;
     let bufferEnd = options.bufferEnd ?? 0;
+    let paused = true;
     Object.defineProperty(video, "currentTime", {
       configurable: true,
       get: () => currentTime,
+    });
+    Object.defineProperty(video, "paused", {
+      configurable: true,
+      get: () => paused,
     });
     Object.defineProperty(video, "buffered", {
       configurable: true,
@@ -1114,6 +1124,9 @@ describe("seamless rung switching", () => {
       nextSn: () => (sn += 1),
       setTime(seconds: number) {
         currentTime = seconds;
+      },
+      setPlaying(playing: boolean) {
+        paused = !playing;
       },
       setBufferEnd(seconds: number) {
         bufferEnd = seconds;
@@ -1201,7 +1214,7 @@ describe("seamless rung switching", () => {
     s.restore();
   });
 
-  it("replaces only what lies beyond the fetch margin on a manual pick, on a fragment boundary, video only", () => {
+  it("puts a manual pick on screen within three seconds, on a fragment boundary, video only", () => {
     const s = session({
       estimateBps: 20_000_000,
       currentTime: 5,
@@ -1214,12 +1227,13 @@ describe("seamless rung switching", () => {
     expect(s.hls.loadLevel).toBe(2);
     expect(s.flushes).toHaveLength(1);
     const [flush] = s.flushes;
-    // 1080p at 6 Mbps peak over a 20 Mbps link: a two-second fragment lands
-    // in ~0.6 s plus three first-byte waits (playlist, init, fragment) —
-    // ~1.8 s, doubled, plus one: the new rung takes over at the first
-    // boundary past ~9.6 s (10 s), cut halfway into that fragment.
+    // 1080p at 6 Mbps peak over a 20 Mbps link: ~1.8 s to fetch (three
+    // first-byte waits, then the fragment), x1.5 + 0.5 = 3.2 s for a fully
+    // seamless switch — whose first boundary (10 s) is five seconds away.
+    // The three-second deadline wins: the last boundary inside it is 8 s,
+    // cut 0.4 s into that fragment.
     expect(flush?.type).toBe("video");
-    expect(flush?.startOffset).toBe(11);
+    expect(flush?.startOffset).toBe(8.4);
     expect(flush?.endOffset).toBe(Number.POSITIVE_INFINITY);
     // Loading that ManagedMediaSource had paused is resumed for the refill.
     expect(s.hls.resumeBuffering).toHaveBeenCalled();
@@ -1229,7 +1243,7 @@ describe("seamless rung switching", () => {
     s.restore();
   });
 
-  it("waits for an old-rung fragment in flight before cutting, so it cannot land inside the new rung", () => {
+  it("drops an old-rung fragment in flight for a pick instead of waiting for it", () => {
     const s = session({
       estimateBps: 20_000_000,
       currentTime: 5,
@@ -1245,26 +1259,154 @@ describe("seamless rung switching", () => {
     s.hls.trigger("hlsFragLoading", { frag: inFlight });
 
     s.attachment.adaptiveController?.setQualityHeight(720, 720);
-    expect(s.flushes).toEqual([]);
-
-    s.setBufferEnd(32);
-    s.hls.trigger("hlsFragBuffered", { frag: inFlight });
+    // Waiting for it could cost the pick its deadline on a slow link, and it
+    // would land inside the new rung: loading restarts from the play head,
+    // without a seek, and the cut is made at once.
+    expect(s.hls.stopLoad).toHaveBeenCalledTimes(1);
+    expect(s.hls.startLoad).toHaveBeenCalledWith(5, true);
     expect(s.flushes).toHaveLength(1);
     expect(s.flushes[0]?.type).toBe("video");
     s.restore();
   });
 
-  it("keeps the whole buffer when it is shorter than the time the new rung needs", () => {
+  it("lets an automatic upgrade wait for an old-rung fragment in flight", () => {
+    const s = session({ estimateBps: 900_000, currentTime: 4, bufferEnd: 40 });
+    s.hls.bandwidthEstimate = 6_000_000;
+    for (let index = 0; index < 2; index += 1) {
+      s.advance(1000);
+      s.buffer(0, 40 + index * 2, 42 + index * 2);
+    }
+    const inFlight = {
+      type: "main",
+      sn: s.nextSn(),
+      level: 0,
+      start: 44,
+      duration: 2,
+    };
+    s.hls.trigger("hlsFragLoading", { frag: inFlight });
+    s.advance(1000);
+    s.hls.trigger("hlsFragBuffered", {
+      frag: { type: "main", sn: s.nextSn(), level: 0, start: 44, duration: 2 },
+    });
+    // The climb was decided while the old fragment was still in flight.
+    expect(drivenLevel(s.hls)).toBe(1);
+    expect(s.hls.stopLoad).not.toHaveBeenCalled();
+    expect(s.flushes).toEqual([]);
+    s.setBufferEnd(46);
+    s.hls.trigger("hlsFragBuffered", { frag: inFlight });
+    expect(s.flushes).toHaveLength(1);
+    s.restore();
+  });
+
+  it("never makes a pick wait more than three seconds for its estimate", () => {
+    // 1080p over what hls.js reads as 1 Mbps would need ~12 s per fragment.
+    // That reading is what a 144p session reports for any link, and trusting
+    // it kept every pick waiting for the whole buffer to play out. The pick
+    // takes over at the last boundary within three seconds (8 s), pausing
+    // there if the fragment is late.
     const s = session({
       estimateBps: 1_000_000,
       currentTime: 5,
-      bufferEnd: 12,
+      bufferEnd: 30,
     });
-    // 1080p over a 1 Mbps link takes ~12 s per fragment: everything buffered
-    // is needed to cover it, so nothing is cut and the rung joins at the end.
     s.attachment.adaptiveController?.setQualityHeight(1080, 1080);
     expect(s.hls.loadLevel).toBe(2);
+    expect(s.flushes).toEqual([
+      { type: "video", startOffset: 8.4, endOffset: Number.POSITIVE_INFINITY },
+    ]);
+    s.restore();
+  });
+
+  it("pauses sound with picture when a deadline takeover is late, instead of playing audio over a frozen frame", () => {
+    const s = session({
+      estimateBps: 1_000_000,
+      currentTime: 5,
+      bufferEnd: 30,
+    });
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      s.attachment.adaptiveController?.setQualityHeight(1080, 1080);
+      expect(s.flushes).toHaveLength(1); // video only, takeover at 8 s
+      // The video ran out at the cut; Chromium keeps playing the audio.
+      s.setPlaying(true);
+      s.setBufferEnd(9);
+      s.setTime(8.5);
+      vi.advanceTimersByTime(100);
+      expect(s.flushes).toHaveLength(1); // still inside the video: nothing
+      s.setTime(9.2);
+      vi.advanceTimersByTime(100);
+      // Past the end of the video: the audio ahead goes too, so both stop.
+      expect(s.flushes[1]).toEqual({
+        type: "audio",
+        startOffset: 9.2,
+        endOffset: Number.POSITIVE_INFINITY,
+      });
+      vi.advanceTimersByTime(500);
+      expect(s.flushes).toHaveLength(2); // once
+    } finally {
+      vi.useRealTimers();
+      s.restore();
+    }
+  });
+
+  it("never holds once the takeover fragment has landed", () => {
+    const s = session({
+      estimateBps: 1_000_000,
+      currentTime: 5,
+      bufferEnd: 30,
+    });
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      s.attachment.adaptiveController?.setQualityHeight(1080, 1080);
+      s.hls.trigger("hlsFragBuffered", {
+        frag: { type: "main", sn: s.nextSn(), level: 2, start: 8, duration: 2 },
+      });
+      s.setPlaying(true);
+      s.setBufferEnd(9);
+      s.setTime(9.2);
+      vi.advanceTimersByTime(200);
+      expect(s.flushes).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+      s.restore();
+    }
+  });
+
+  it("switches seamlessly, video only, when the link can fetch the pick inside the deadline", () => {
+    const s = session({
+      estimateBps: 40_000_000,
+      currentTime: 5,
+      bufferEnd: 30,
+    });
+    s.attachment.adaptiveController?.setQualityHeight(1080, 1080);
+    // 3 x 0.4 s of latency + 12 Mb at 40 Mbps = 1.5 s; x1.5 + 0.5 = 2.75 s:
+    // the first boundary past 7.75 s is 8, inside the deadline. Nothing can
+    // run dry, so the audio is left alone.
+    expect(s.flushes).toEqual([
+      { startOffset: 8.4, endOffset: Number.POSITIVE_INFINITY, type: "video" },
+    ]);
+    s.restore();
+  });
+
+  it("replaces for a mode the viewer picks, in either direction, but not for the player's own re-application", () => {
+    const s = session({
+      estimateBps: 20_000_000,
+      currentTime: 5,
+      bufferEnd: 30,
+      fragmentLevel: 2,
+    });
+    expect(drivenLevel(s.hls)).toBe(2);
+    // The periodic bias review re-applies a ceiling by itself: nothing goes.
+    s.attachment.adaptiveController?.setQualityHeight(null, 360, "low-data");
+    expect(drivenLevel(s.hls)).toBe(0);
     expect(s.flushes).toEqual([]);
+    // The viewer picks Data Saver: the 1080p ahead is replaced at once.
+    s.attachment.adaptiveController?.setQualityHeight(null, 360, "low-data", {
+      immediate: true,
+    });
+    expect(s.flushes).toHaveLength(1);
+    expect(s.flushes[0]?.type).toBe("video");
+    expect(s.flushes[0]?.startOffset).toBeLessThanOrEqual(11);
     s.restore();
   });
 
@@ -1294,7 +1436,7 @@ describe("seamless rung switching", () => {
     // The new rung takes over at the first boundary past 4 + 10 s, cut
     // halfway in; nothing nearer than that is touched, audio never.
     expect(s.flushes[0]?.type).toBe("video");
-    expect(s.flushes[0]?.startOffset).toBe(15);
+    expect(s.flushes[0]?.startOffset).toBe(14.4);
     s.restore();
   });
 
@@ -1318,7 +1460,7 @@ describe("seamless rung switching", () => {
     // Affordable on average but not with room on its peak: the climb is
     // partly a guess, so twice as much of the old buffer stays.
     expect(s.flushes).toHaveLength(1);
-    expect(s.flushes[0]?.startOffset).toBe(25);
+    expect(s.flushes[0]?.startOffset).toBe(24.4);
     s.restore();
   });
 
@@ -1372,7 +1514,7 @@ describe("the replacement cut", () => {
     hlsMock.isSupported.mockReturnValue(true);
   });
 
-  it("cuts halfway into the takeover fragment, never on the playlist grid", () => {
+  it("cuts into the takeover fragment, never on the playlist grid", () => {
     // B-frames delay every presentation timestamp by the reorder depth: the
     // fragment whose playlist slot starts at 10.010 shows its IDR at 10.093.
     // Cutting at 10.010 deleted the end of the previous GOP and every B-frame
@@ -1426,8 +1568,10 @@ describe("the replacement cut", () => {
       });
     }
     attachment.adaptiveController?.setQualityHeight(1080, 1080);
-    expect(flushes).toHaveLength(1);
-    expect(flushes[0]?.startOffset).toBeCloseTo(5 * 2.002 + 1.001, 6);
+    expect(flushes.length).toBeGreaterThanOrEqual(1);
+    // The deadline puts the takeover at the 6.006 boundary (8.008 is past
+    // 5 + 3 s); the cut is 0.4 s into it, past any B-frame delay, off the grid.
+    expect(flushes[0]?.startOffset).toBeCloseTo(3 * 2.002 + 0.4, 6);
   });
 });
 

@@ -30,6 +30,7 @@ export interface AdaptiveHlsController {
     height: number | null,
     maxHeight?: number | null,
     mode?: AutomaticQualityMode,
+    options?: QualitySelectionOptions,
   ): void;
   setAudioStream(sourceStreamIndex: number): boolean;
   /**
@@ -44,6 +45,17 @@ export interface AdaptiveHlsController {
    * by.
    */
   getBandwidthEstimateBps(): number | undefined;
+}
+
+export interface QualitySelectionOptions {
+  /**
+   * The viewer just chose this in the menu, so it should become the picture
+   * as soon as it can be fetched — replacing the media already buffered at
+   * other rungs, however much of it there is. Left unset for everything the
+   * player re-applies by itself (start-up, resizes, the periodic bias review),
+   * which must never discard what is buffered.
+   */
+  immediate?: boolean;
 }
 
 export interface HlsPlaybackEvent {
@@ -220,22 +232,52 @@ const SEEK_STALL_GRACE_MS = 5000;
 const MMS_RESUME_BUFFER_SECONDS = 2;
 
 /**
- * How a manual pick decides how much of the current buffer to keep.
+ * How much of the current buffer a replacement keeps in front of the cut.
  *
- * A manual pick replaces the media buffered ahead so the chosen rung becomes
- * the picture within seconds instead of after the whole forward buffer has
- * played out. What it must never do is replace media the new rung cannot be
- * fetched in time to cover: the play head would run into the hole and stall,
- * which is exactly the interruption this exists to avoid. So the cut is placed
- * beyond an estimate of how long the new rung's first fragment takes to land
- * (latency plus transfer at the measured throughput), multiplied by
- * `REPLACE_SAFETY_FACTOR`, plus `REPLACE_FLOOR_SECONDS` for decode and append.
+ * A replacement must never remove media the new rung cannot be fetched in
+ * time to cover: the play head would run into the hole and stall, which is
+ * exactly the interruption this exists to avoid. So the new rung takes over
+ * beyond an estimate of how long its first fragment takes to land (latency
+ * per request plus transfer at the link's measured rate), multiplied by a
+ * safety factor, plus a floor for decode and append.
+ *
+ * A choice the viewer just made is bound by a deadline instead: it is on
+ * screen within `SELECTED_DEADLINE_SECONDS` of the pick. The viewer's rule
+ * (2026-11-12): "the maximum amount of time the transition must be 3
+ * seconds; if that is going to take more than that, then after 3 seconds,
+ * pause is okay. We do not want to wait." With the generous margin a pick
+ * from 144p to 1080p took 8.5 s to appear on a clean 20 Mbps link, longer
+ * over the tunnel. So a pick uses the tight margin (`SELECTED_SAFETY_FACTOR`,
+ * `SELECTED_FLOOR_SECONDS`) when that lands inside the deadline — a seamless
+ * switch, which is what a good, steady connection gets — and otherwise takes
+ * over at the last fragment boundary inside the deadline, accepting a short
+ * pause there if the new rung's first fragment is still on its way. Nothing
+ * is taken over closer than `SELECTED_MIN_LEAD_SECONDS` to the play head,
+ * which would replace frames the decoder is already holding. Automatic
+ * replacements keep the generous margin, which their retained window dwarfs
+ * regardless.
  */
 const REPLACE_SAFETY_FACTOR = 2;
 const REPLACE_FLOOR_SECONDS = 1;
+const SELECTED_SAFETY_FACTOR = 1.5;
+const SELECTED_FLOOR_SECONDS = 0.5;
+const SELECTED_DEADLINE_SECONDS = 3;
+const SELECTED_MIN_LEAD_SECONDS = 0.5;
 
-/** How far into the takeover fragment the old rung is cut; see the cut. */
-const REPLACE_CUT_INTO_FRAGMENT = 0.5;
+/** How often, and for how long, a deadline takeover is watched for lateness. */
+const LATE_TAKEOVER_POLL_MS = 50;
+const LATE_TAKEOVER_WATCH_MS = 20_000;
+
+/**
+ * How far into the takeover fragment the old rung is cut; see the cut.
+ *
+ * Far enough past the fragment's slot to clear any B-frame reorder delay
+ * (83 ms in Chromium and 167 ms in WebKit on the packages measured), and no
+ * further: a takeover that arrives late pauses at the cut, so every tenth of
+ * a second past the takeover is old picture shown after the deadline. Cut
+ * halfway in, a late 1080p pick paused 2.7 s after the click; cut here, 2.1 s.
+ */
+const REPLACE_CUT_SECONDS = 0.4;
 
 /**
  * How much lower-rung media an automatic climb keeps before replacing.
@@ -483,7 +525,7 @@ interface Replacement {
   retainSeconds: number;
   /** Only media of a lower rung is replaced (an automatic upgrade). */
   onlyLower: boolean;
-  reason: "manual" | "upgrade";
+  reason: "manual" | "selected" | "upgrade";
 }
 
 function asMainFragment(data: unknown): MainFragmentInfo | null {
@@ -846,11 +888,13 @@ export function attachSourceToVideo(
     /** A manual pick whose buffer replacement waits for an old-rung fetch. */
     let pendingReplacement: Replacement | null = null;
     let anyMainFragmentBuffered = false;
+
     const onSeeking = () => {
       lastSeekAt = Date.now();
       // A replacement planned against the old position no longer applies;
       // the seek target is fetched from the locked rung anyway.
       pendingReplacement = null;
+      clearLateTakeoverHold();
     };
     videoElement.addEventListener("seeking", onSeeking);
 
@@ -1091,6 +1135,66 @@ export function attachSourceToVideo(
      * and only the video buffer is cut: the audio rendition is shared by every
      * rung and keeps playing from what it already has.
      */
+    /*
+     * A takeover the deadline forced can arrive after the play head reaches
+     * it, and the viewer accepted a pause for that. WebKit pauses there. Chromium
+     * does not: it rides out up to three seconds of video underflow while the
+     * audio has data, so the sound plays on over a frozen frame and the late
+     * frames are then dropped — measured, a 1080p pick on a 6 Mbps link froze
+     * from 43.0 s to 45.8 s, skipped those seconds of picture, and appeared at
+     * 7.6 s. Cutting the audio up front does not help: hls.js loads audio one
+     * fragment ahead of the video fragment it is fetching, so it is refilled
+     * past the hole within half a second.
+     *
+     * So, while such a takeover is outstanding, a play head that runs past the
+     * end of the video (no buffered range under it, still playing) has the
+     * audio ahead of it removed. Both tracks are then empty, Chromium waits —
+     * and it resumes only once video has data too, which is the pause the
+     * viewer agreed to. The shared audio rendition is fetched back unchanged.
+     * WebKit never gets here: its play head stops at the end of the video.
+     */
+    let lateTakeover: {
+      level: number;
+      takeoverAt: number;
+      armedAt: number;
+      held: boolean;
+    } | null = null;
+    let lateTakeoverTimer: ReturnType<typeof setInterval> | null = null;
+    const clearLateTakeoverHold = () => {
+      lateTakeover = null;
+      if (lateTakeoverTimer !== null) clearInterval(lateTakeoverTimer);
+      lateTakeoverTimer = null;
+    };
+    const holdForLateTakeover = () => {
+      const pending = lateTakeover;
+      if (!pending) return;
+      if (Date.now() - pending.armedAt > LATE_TAKEOVER_WATCH_MS) {
+        clearLateTakeoverHold();
+        return;
+      }
+      if (pending.held || videoElement.paused || videoElement.seeking) return;
+      const now = videoElement.currentTime;
+      if (now < pending.takeoverAt || bufferedEnd() !== null) return;
+      pending.held = true;
+      abrRecord("late-takeover-hold", {
+        level: pending.level,
+        currentTimeS: Number(now.toFixed(3)),
+      });
+      hls.trigger(Hls.Events.BUFFER_FLUSHING, {
+        startOffset: now,
+        endOffset: Number.POSITIVE_INFINITY,
+        type: "audio",
+      });
+    };
+    const armLateTakeoverHold = (level: number, takeoverAt: number) => {
+      clearLateTakeoverHold();
+      lateTakeover = { level, takeoverAt, armedAt: Date.now(), held: false };
+      lateTakeoverTimer = setInterval(
+        holdForLateTakeover,
+        LATE_TAKEOVER_POLL_MS,
+      );
+    };
+
     const replaceBufferAhead = (replacement: Replacement) => {
       const { level, retainSeconds, onlyLower } = replacement;
       pendingReplacement = null;
@@ -1103,12 +1207,31 @@ export function attachSourceToVideo(
       );
       if (!audioIsAlternate) return;
 
-      // An old-rung fragment still downloading would be appended after the
-      // cut and leave a stretch of the old rung inside the new one. Its
-      // arrival is waited for instead; it is at most one fragment away.
+      const chosenNow =
+        replacement.reason === "manual" || replacement.reason === "selected";
+      /*
+       * An old-rung fragment still downloading would be appended after the
+       * cut and leave a stretch of the old rung inside the new one, and the
+       * engine fetches nothing for the new rung until it has finished. An
+       * automatic replacement waits for it (at most one fragment). A pick
+       * cannot afford to — that wait alone can exceed its deadline on a slow
+       * link — so loading is stopped and restarted from the play head, the
+       * engine's own public way to drop what is in flight. Nothing buffered
+       * is touched by that, audio included; loading resumes from each
+       * buffer's end, now at the chosen rung.
+       */
       if (mainFragmentLoading && mainFragmentLoading.level !== level) {
-        pendingReplacement = replacement;
-        return;
+        if (!chosenNow) {
+          pendingReplacement = replacement;
+          return;
+        }
+        abrRecord("abort-in-flight", {
+          level: mainFragmentLoading.level,
+          sn: mainFragmentLoading.sn,
+        });
+        mainFragmentLoading = null;
+        hls.stopLoad();
+        hls.startLoad(videoElement.currentTime, true);
       }
 
       const rung = hls.levels[level];
@@ -1116,6 +1239,13 @@ export function attachSourceToVideo(
       const details = (rung as { details?: { targetduration?: number } })
         .details;
       const fragmentSeconds = details?.targetduration ?? 2;
+      /*
+       * hls.js's own estimate, deliberately. It reads low on small fragments,
+       * which only ever makes the margin cautious, and the deadline below
+       * bounds what that caution can cost a pick. A transfer rate measured
+       * from first byte to last was tried and read a 6 Mbps link as 3 Gbps:
+       * small fragments arrive in one burst behind their first byte.
+       */
       const bandwidth =
         hls.bandwidthEstimate > 0 ? hls.bandwidthEstimate : 1_000_000;
       const ttfbSeconds =
@@ -1127,8 +1257,10 @@ export function attachSourceToVideo(
       const fetchSeconds =
         requests * ttfbSeconds + (peak * fragmentSeconds) / bandwidth;
       const rate = Math.max(Math.abs(videoElement.playbackRate) || 1, 1);
-      const margin =
-        (fetchSeconds * REPLACE_SAFETY_FACTOR + REPLACE_FLOOR_SECONDS) * rate;
+      const keep = chosenNow
+        ? fetchSeconds * SELECTED_SAFETY_FACTOR + SELECTED_FLOOR_SECONDS
+        : fetchSeconds * REPLACE_SAFETY_FACTOR + REPLACE_FLOOR_SECONDS;
+      const margin = keep * rate;
       const horizon =
         videoElement.currentTime + Math.max(margin, retainSeconds * rate);
 
@@ -1148,20 +1280,41 @@ export function attachSourceToVideo(
        * IDR exactly: the previous GOP is untouched, nothing is left empty.
        * hls.js's own `nextLevel` cuts into the fragment for the same reason.
        */
-      let takeover: { start: number; duration: number } | null = null;
-      for (const fragment of bufferedMainFragments.values()) {
-        if (fragment.level === level) continue;
-        // An upgrade only replaces media worse than what it brings.
-        if (onlyLower && fragment.level > level) continue;
-        if (fragment.start < horizon || fragment.start >= end) continue;
-        if (takeover === null || fragment.start < takeover.start) {
-          takeover = fragment;
+      const now = videoElement.currentTime;
+      const replaceable = [...bufferedMainFragments.values()]
+        .filter(
+          (fragment) =>
+            fragment.level !== level &&
+            // An upgrade only replaces media worse than what it brings.
+            !(onlyLower && fragment.level > level) &&
+            fragment.start < end,
+        )
+        .sort((left, right) => left.start - right.start);
+      // Seamless: the first boundary the new rung can be fetched in time for.
+      let takeover: { start: number; duration: number } | null =
+        replaceable.find((fragment) => fragment.start >= horizon) ?? null;
+      let mode: "seamless" | "deadline" = "seamless";
+      if (chosenNow) {
+        const deadline = now + SELECTED_DEADLINE_SECONDS * rate;
+        const lead = now + SELECTED_MIN_LEAD_SECONDS * rate;
+        if (!takeover || takeover.start > deadline) {
+          // The deadline wins: the last boundary inside it, or failing that
+          // the nearest one at all. A pause there is the accepted price.
+          const inside = replaceable.filter(
+            (fragment) => fragment.start >= lead && fragment.start <= deadline,
+          );
+          takeover =
+            inside.at(-1) ??
+            replaceable.find((fragment) => fragment.start >= lead) ??
+            null;
+          mode = "deadline";
         }
       }
       const cut =
         takeover === null
           ? null
-          : takeover.start + takeover.duration * REPLACE_CUT_INTO_FRAGMENT;
+          : takeover.start +
+            Math.min(REPLACE_CUT_SECONDS, takeover.duration / 2);
       // Fragments of the chosen rung already buffered past the cut (fetched
       // since the pick) are kept: the cut stops where they begin.
       let cutEnd = Number.POSITIVE_INFINITY;
@@ -1186,6 +1339,7 @@ export function attachSourceToVideo(
 
       abrRecord("replace", {
         reason: replacement.reason,
+        mode,
         level,
         height: rung.height,
         takeoverAtS: Number(takeover!.start.toFixed(3)),
@@ -1195,6 +1349,7 @@ export function attachSourceToVideo(
         ),
         replacedS: Number((Math.min(end, cutEnd) - cut).toFixed(2)),
         marginS: Number(margin.toFixed(2)),
+        bandwidthBps: Math.round(bandwidth),
       });
       for (const [key, fragment] of bufferedMainFragments) {
         if (fragment.start >= cut && fragment.start < cutEnd) {
@@ -1206,6 +1361,9 @@ export function attachSourceToVideo(
         endOffset: cutEnd,
         type: "video",
       });
+      // See `holdForLateTakeover`: a takeover the deadline forced may be late.
+      if (mode === "deadline") armLateTakeoverHold(level, takeover!.start);
+      else clearLateTakeoverHold();
       // Under ManagedMediaSource the browser may have paused loading because
       // the buffer it saw was full; that buffer was just cut.
       if (!hls.bufferingEnabled) hls.resumeBuffering();
@@ -1414,7 +1572,7 @@ export function attachSourceToVideo(
       }
     };
 
-    const applyAdaptivePreference = () => {
+    const applyAdaptivePreference = (immediate = false) => {
       if (hls.levels.length === 0) return;
       // Auto is capped to what the screen can show. A derived or manual mode
       // already incorporates Auto's display-aware baseline, so its explicit
@@ -1443,6 +1601,20 @@ export function attachSourceToVideo(
         upgradeCandidate = null;
         appliedLevel = null;
         evaluateAdaptiveTarget(true);
+        /*
+         * A mode the viewer just picked (Auto, Data Saver, Higher Quality) is
+         * a request to see it, in either direction, like a manual rung: the
+         * media buffered at other rungs is replaced from as near the play head
+         * as the new rung can be fetched in time.
+         */
+        if (immediate && policyLevel !== null) {
+          replaceBufferAhead({
+            level: policyLevel,
+            retainSeconds: 0,
+            onlyLower: false,
+            reason: "selected",
+          });
+        }
         return;
       }
 
@@ -1554,6 +1726,14 @@ export function attachSourceToVideo(
             });
             persistDeliveredThroughput();
           }
+        }
+        if (
+          lateTakeover &&
+          fragment.level === lateTakeover.level &&
+          fragment.start <= lateTakeover.takeoverAt + 0.25 &&
+          fragment.start + fragment.duration > lateTakeover.takeoverAt
+        ) {
+          clearLateTakeoverHold();
         }
       }
       // Re-checks the old-rung fetch it was waiting on, and waits again if
@@ -1744,11 +1924,16 @@ export function attachSourceToVideo(
     return {
       usingHlsJs: true,
       adaptiveController: {
-        setQualityHeight: (height, maxHeight = null, mode = "auto") => {
+        setQualityHeight: (
+          height,
+          maxHeight = null,
+          mode = "auto",
+          selection = {},
+        ) => {
           lockedHeight = height;
           maximumHeight = maxHeight;
           adaptiveMode = mode;
-          applyAdaptivePreference();
+          applyAdaptivePreference(selection.immediate === true);
         },
         getBandwidthEstimateBps: () => {
           const estimate = hls.bandwidthEstimate;
@@ -1780,6 +1965,7 @@ export function attachSourceToVideo(
         // The next title (often the next episode, moments later) opens from this.
         persistDeliveredThroughput(true);
         clearInterval(rungTicker);
+        clearLateTakeoverHold();
         observer?.disconnect();
         videoElement.removeEventListener("seeking", onSeeking);
         videoElement.removeEventListener("seeking", onSeekingResume);

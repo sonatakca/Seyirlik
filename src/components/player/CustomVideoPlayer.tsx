@@ -2547,9 +2547,14 @@ export function CustomVideoPlayer({
     (
       mode: Exclude<QualityPreferenceMode, "advanced"> | "advanced",
       qualityId?: string,
-      options: { persist?: boolean } = {},
+      options: {
+        persist?: boolean;
+        /** The viewer chose this in the menu: show it as soon as possible. */
+        immediate?: boolean;
+      } = {},
     ) => {
       if (!adaptiveQualityManifest) return false;
+      const selection = { immediate: options.immediate === true };
       // Safari's native HLS engine keeps seamless ABR but exposes no JavaScript
       // API for exact or capped level selection. The choice is honoured by
       // re-planning against a manifest that advertises only the chosen rung,
@@ -2611,7 +2616,12 @@ export function CustomVideoPlayer({
         : selectModeRungs(ordered, modeSelectionContext(controller));
 
       if (mode === "advanced" && preferred) {
-        controller?.setQualityHeight(preferred.height, preferred.height);
+        controller?.setQualityHeight(
+          preferred.height,
+          preferred.height,
+          "auto",
+          selection,
+        );
         if (requiresNativeReplan) {
           applyNativeAdaptiveQualityRequest(
             adaptiveQualityRequestForMode("advanced", preferred.height),
@@ -2645,6 +2655,7 @@ export function CustomVideoPlayer({
           null,
           ceiling,
           mode === "advanced" ? "auto" : mode,
+          selection,
         );
         if (requiresNativeReplan) {
           applyNativeAdaptiveQualityRequest(
@@ -2779,7 +2790,9 @@ export function CustomVideoPlayer({
   const handleSelectQualityMode = useCallback(
     (mode: Exclude<QualityPreferenceMode, "advanced">) => {
       if (hasAdaptiveQualities) {
-        if (!applyAdaptiveQualityPreference(mode)) {
+        if (
+          !applyAdaptiveQualityPreference(mode, undefined, { immediate: true })
+        ) {
           setQualitySelectionNotice(t("player.qualityManualUnavailable"));
           return;
         }
@@ -2837,7 +2850,11 @@ export function CustomVideoPlayer({
           );
           return;
         }
-        if (!applyAdaptiveQualityPreference("advanced", qualityId)) {
+        if (
+          !applyAdaptiveQualityPreference("advanced", qualityId, {
+            immediate: true,
+          })
+        ) {
           setQualitySelectionNotice(t("player.qualityManualUnavailable"));
         }
         if (!isAdaptiveRenditionPlayback) {
