@@ -208,6 +208,64 @@ const SEEK_STALL_GRACE_MS = 5000;
  */
 const MMS_RESUME_BUFFER_SECONDS = 2;
 
+/**
+ * How a manual pick decides how much of the current buffer to keep.
+ *
+ * A manual pick replaces the media buffered ahead so the chosen rung becomes
+ * the picture within seconds instead of after the whole forward buffer has
+ * played out. What it must never do is replace media the new rung cannot be
+ * fetched in time to cover: the play head would run into the hole and stall,
+ * which is exactly the interruption this exists to avoid. So the cut is placed
+ * beyond an estimate of how long the new rung's first fragment takes to land
+ * (latency plus transfer at the measured throughput), multiplied by
+ * `REPLACE_SAFETY_FACTOR`, plus `REPLACE_FLOOR_SECONDS` for decode and append.
+ */
+const REPLACE_SAFETY_FACTOR = 2;
+const REPLACE_FLOOR_SECONDS = 1;
+
+/** How far into the takeover fragment the old rung is cut; see the cut. */
+const REPLACE_CUT_INTO_FRAGMENT = 0.5;
+
+/**
+ * How much lower-rung media an automatic climb keeps before replacing.
+ *
+ * Without replacement an automatic climb becomes visible only once everything
+ * buffered at the old rung has played, which after a dip is a long time:
+ * measured in Chromium on this ladder, the picture stayed at 480p for 88 s
+ * after the link had recovered to 30 Mbps, and at 144p for most of a minute
+ * after a collapse. So a climb replaces the forward buffer beyond a retained
+ * window — the established practice: ExoPlayer discards lower-quality chunks
+ * beyond a retained duration on an upgrade, dash.js calls it fast switching.
+ *
+ * The window is ten seconds when the measured link carries the new rung's
+ * *peak* rate with `AUTO_UPGRADE_HEADROOM` to spare, so the refill plainly
+ * outpaces playback. Otherwise the climb is partly a guess — the buffer probe
+ * climbs precisely because the estimate cannot be trusted — and twenty
+ * seconds stay behind: if the guess is wrong, the ordinary step down and the
+ * engine's abandonment have that long to act before the viewer could notice.
+ * Steps down never replace anything: what is buffered is better than what
+ * would replace it, and it is the buffer that protects the viewer from the
+ * dip.
+ */
+const AUTO_UPGRADE_HEADROOM = 1.5;
+const AUTO_UPGRADE_RETAIN_SECONDS = 10;
+const AUTO_UPGRADE_UNPROVEN_RETAIN_SECONDS = 20;
+
+/**
+ * Longest forward buffer, in seconds of media.
+ *
+ * hls.js sizes its buffer in bytes (60 MB) as well as seconds, so on a cheap
+ * rung it kept buffering far past its 30 s goal — up to its 600 s ceiling;
+ * measured, a 360p session held over a hundred seconds ahead. With switches
+ * that no longer flush, that buffer is what a viewer watches before any
+ * better rung can appear, and it is memory and data spent on the worst
+ * picture. A minute is still twice the time-based goal.
+ */
+const MAX_FORWARD_BUFFER_SECONDS = 60;
+
+/** Used when the engine has not measured a first-byte latency yet. */
+const DEFAULT_TTFB_MS = 400;
+
 /** Decisions kept for `window.__seyirlikAbr()`. */
 const ABR_LOG_SIZE = 200;
 
@@ -330,6 +388,82 @@ export function isBandwidthFalling(
   if (!(peak > 0)) return false;
 
   return latest.bps <= peak * BANDWIDTH_TREND_FALLING_RATIO;
+}
+
+type AbrControllerClass = typeof Hls.DefaultConfig.abrController;
+
+/**
+ * hls.js's own ABR controller, with the choice of rung handed to Seyirlik.
+ *
+ * This is the extension point hls.js provides for an application that owns
+ * its adaptive policy, and using it is what keeps switches seamless. The engine
+ * stays in its automatic mode, where a new rung only changes which rendition
+ * the *next* fragment is fetched from: everything already buffered plays out
+ * untouched and the new rung joins at the next fragment boundary, which the
+ * packager aligns to the frame across every rendition. Driving levels manually
+ * instead (`loadLevel`/`nextLevel`) put the engine in manual mode, where every
+ * decision flushed the buffer ahead of the play head and refetched it — a
+ * rebuffer risk on every switch, and on ManagedMediaSource a hole the browser
+ * did not always ask to refill.
+ *
+ * Only the choice moves. Throughput and latency estimation, the emergency
+ * abandonment of a fragment that will not arrive before the buffer runs dry,
+ * and the level fallback after a delivery error all stay hls.js's — and all of
+ * them only run in automatic mode, which manual driving had switched off.
+ *
+ * `readPolicyLevel` returns null until the policy has decided, and the engine's
+ * own answer is used until then. A level the engine sets itself (abandonment,
+ * error fallback) is reported through `onEngineLevel` so the policy can adopt
+ * it instead of immediately overriding the engine's emergency decision.
+ */
+export function createPolicyAbrController(
+  readPolicyLevel: () => number | null,
+  onEngineLevel: (level: number) => void,
+): AbrControllerClass {
+  const Base = Hls.DefaultConfig.abrController;
+  return class SeyirlikPolicyAbrController extends Base {
+    get nextAutoLevel(): number {
+      const level = readPolicyLevel();
+      const count = this.hls?.levels?.length ?? 0;
+      if (level !== null && level >= 0 && level < count) return level;
+      return super.nextAutoLevel;
+    }
+
+    set nextAutoLevel(level: number) {
+      super.nextAutoLevel = level;
+      const policyLevel = readPolicyLevel();
+      if (policyLevel !== null && level >= 0 && level !== policyLevel) {
+        onEngineLevel(level);
+      }
+    }
+  };
+}
+
+/** The fields of an hls.js fragment the switching logic reads. */
+interface MainFragmentInfo {
+  type?: string;
+  sn?: number | string;
+  level: number;
+  start: number;
+  duration: number;
+}
+
+/** A request to replace part of the forward video buffer with one rung. */
+interface Replacement {
+  level: number;
+  /** Seconds ahead of the play head that are kept whatever the margin. */
+  retainSeconds: number;
+  /** Only media of a lower rung is replaced (an automatic upgrade). */
+  onlyLower: boolean;
+  reason: "manual" | "upgrade";
+}
+
+function asMainFragment(data: unknown): MainFragmentInfo | null {
+  const frag = (data as { frag?: MainFragmentInfo } | undefined)?.frag;
+  if (!frag || frag.type !== "main" || typeof frag.level !== "number") {
+    return null;
+  }
+  return frag;
 }
 
 export function isHlsPlaybackUrl(
@@ -514,8 +648,20 @@ export function attachSourceToVideo(
   }
 
   if (isHls && Hls.isSupported()) {
+    /*
+     * The rung Seyirlik's policy wants while Auto is in charge, read by hls.js
+     * through the controller below every time it picks the next fragment.
+     * Declared before the engine exists because the engine builds its ABR
+     * controller in its own constructor.
+     */
+    let policyLevel: number | null = null;
+    let adoptEngineLevel: (level: number) => void = () => undefined;
     const hls = new Hls({
       enableWorker: true,
+      abrController: createPolicyAbrController(
+        () => policyLevel,
+        (level) => adoptEngineLevel(level),
+      ),
       /*
        * Deliberately off. hls.js's own cap controller writes `autoLevelCapping`
        * on a timer, and this file writes it too whenever the viewer's choice
@@ -529,6 +675,7 @@ export function attachSourceToVideo(
        * request for 144p.
        */
       capLevelToPlayerSize: false,
+      maxMaxBufferLength: MAX_FORWARD_BUFFER_SECONDS,
       lowLatencyMode: false,
       startLevel: -1,
       abrEwmaDefaultEstimate: 5_000_000,
@@ -598,8 +745,33 @@ export function attachSourceToVideo(
     let lastStallAt = 0;
     let bandwidthSamples: BandwidthSample[] = [];
     let lastSeekAt = Number.NEGATIVE_INFINITY;
+    /*
+     * Whether a fragment of the rung the policy last chose has actually been
+     * fetched. A switch only changes what is fetched next, so until one such
+     * fragment lands the estimate still describes the previous rung and says
+     * nothing about whether the new one is sustainable. Climbing again before
+     * that would be climbing on no evidence at all — under ManagedMediaSource,
+     * where loading pauses for tens of seconds with a full buffer, a timer
+     * alone would walk the whole ladder while nothing was downloaded.
+     */
+    let appliedLevelMeasured = false;
+    let levelDecidedAt = 0;
+    /** The rung the viewer locked, as last handed to the engine. */
+    let manualLevel: number | null = null;
+    /** Main-rendition fragments now buffered, by sequence number. */
+    const bufferedMainFragments = new Map<
+      string,
+      { level: number; start: number; end: number; duration: number }
+    >();
+    let mainFragmentLoading: MainFragmentInfo | null = null;
+    /** A manual pick whose buffer replacement waits for an old-rung fetch. */
+    let pendingReplacement: Replacement | null = null;
+    let anyMainFragmentBuffered = false;
     const onSeeking = () => {
       lastSeekAt = Date.now();
+      // A replacement planned against the old position no longer applies;
+      // the seek target is fetched from the locked rung anyway.
+      pendingReplacement = null;
     };
     videoElement.addEventListener("seeking", onSeeking);
 
@@ -713,6 +885,16 @@ export function attachSourceToVideo(
       return target?.index ?? pool[0]!.index;
     };
 
+    /**
+     * Hands an automatic decision to the engine without touching the buffer.
+     *
+     * The engine reads `policyLevel` when it picks the next fragment, so the
+     * new rung joins at the next fragment boundary after what is already
+     * buffered. Nothing is flushed, nothing in flight is cancelled and the
+     * play head is never moved: the viewer keeps watching the media they
+     * already have, which on a down-switch is exactly the media that protects
+     * them from the dip that caused it.
+     */
     const driveLevel = (level: number, reason: string) => {
       if (level !== appliedLevel) {
         const rung = hls.levels[level];
@@ -726,9 +908,253 @@ export function attachSourceToVideo(
           recentStallCount,
         });
       }
-      hls.loadLevel = level;
-      if (hls.nextLevel !== level) hls.nextLevel = level;
+      if (level !== policyLevel) {
+        appliedLevelMeasured = false;
+        levelDecidedAt = Date.now();
+      }
+      // The first fragment has to come from the policy's rung too, without an
+      // extra probe fragment from the bottom of the ladder.
+      if (!anyMainFragmentBuffered) hls.startLevel = level;
+      const previous = policyLevel;
+      policyLevel = level;
       appliedLevel = level;
+      /*
+       * A step down is also told to the engine's abandonment rules, which then
+       * treat a higher-rung fragment still downloading as blocking the switch.
+       * They abandon it only if it would finish after the buffer runs dry and
+       * the cheaper fragment would not; with a healthy buffer they leave it
+       * alone and it is played like everything else already paid for.
+       */
+      if (previous !== null && level < previous) hls.nextAutoLevel = level;
+
+      // A replacement still waiting for an older decision no longer applies.
+      if (pendingReplacement && pendingReplacement.level !== level) {
+        pendingReplacement = null;
+      }
+      /*
+       * See AUTO_UPGRADE_RETAIN_SECONDS: a climb does not have to wait for the
+       * whole lower-rung buffer to play out first. Never while the link is
+       * wobbling or has just stalled, and the more the climb is a guess, the
+       * more of the old buffer it keeps.
+       */
+      const estimate = hls.bandwidthEstimate;
+      const peak = hls.levels[level]?.bitrate || 0;
+      if (
+        (reason === "up" || reason === "probe-up") &&
+        previous !== null &&
+        level > previous &&
+        recentStallCount === 0 &&
+        !isBandwidthFalling(bandwidthSamples, Date.now())
+      ) {
+        const proven = peak > 0 && estimate >= peak * AUTO_UPGRADE_HEADROOM;
+        replaceBufferAhead({
+          level,
+          retainSeconds: proven
+            ? AUTO_UPGRADE_RETAIN_SECONDS
+            : AUTO_UPGRADE_UNPROVEN_RETAIN_SECONDS,
+          onlyLower: true,
+          reason: "upgrade",
+        });
+      }
+    };
+
+    /*
+     * The engine overruled the policy: it abandoned a fragment that would not
+     * arrive before the buffer ran dry, or fell back from a rung whose delivery
+     * failed. Both are emergencies the engine is better placed to see, so the
+     * policy adopts the level rather than steering straight back into the
+     * problem, and a downward one is treated like a stall for climbing.
+     */
+    adoptEngineLevel = (level: number) => {
+      if (lockedHeight !== null || level === appliedLevel) return;
+      abrRecord("engine-level", {
+        from: appliedLevel,
+        to: level,
+        height: hls.levels[level]?.height,
+        estimateBps: Math.round(hls.bandwidthEstimate || 0),
+        bufferedAheadS: Number(bufferedAhead().toFixed(1)),
+      });
+      if (appliedLevel !== null && level < appliedLevel) {
+        upswitchBlockedUntil = Date.now() + STALL_UPSWITCH_BLOCK_MS;
+        probeHoldUntil = 0;
+      }
+      upgradeCandidate = null;
+      appliedLevelMeasured = false;
+      levelDecidedAt = Date.now();
+      policyLevel = level;
+      appliedLevel = level;
+    };
+
+    /** End of the buffered range under the play head, or null if none. */
+    const bufferedEnd = (): number | null => {
+      const { buffered, currentTime } = videoElement;
+      for (let index = 0; index < buffered.length; index += 1) {
+        if (
+          buffered.start(index) <= currentTime + 0.25 &&
+          buffered.end(index) > currentTime
+        ) {
+          return buffered.end(index);
+        }
+      }
+      return null;
+    };
+
+    /**
+     * Replaces the video buffered ahead with `level`, keeping what covers the
+     * fetch (and, for an automatic upgrade, `retainSeconds` more).
+     *
+     * Used for a manual pick, which is a request to see that rung now, and for
+     * an automatic upgrade the link has ample room for (see
+     * `AUTO_UPGRADE_HEADROOM`). A step down never comes here: what is already
+     * buffered is better than what replaces it, and it is what protects the
+     * viewer from the dip. The new rung takes over at a fragment boundary —
+     * where every rung of an aligned package starts on the same IDR frame —
+     * and only the video buffer is cut: the audio rendition is shared by every
+     * rung and keeps playing from what it already has.
+     */
+    const replaceBufferAhead = (replacement: Replacement) => {
+      const { level, retainSeconds, onlyLower } = replacement;
+      pendingReplacement = null;
+      const end = bufferedEnd();
+      if (end === null) return;
+      // A muxed package would need audio cut too; only the shared-audio
+      // layout every adaptive package uses is handled.
+      const audioIsAlternate = hls.audioTracks.some(
+        (track) => Boolean((track as { url?: string }).url),
+      );
+      if (!audioIsAlternate) return;
+
+      // An old-rung fragment still downloading would be appended after the
+      // cut and leave a stretch of the old rung inside the new one. Its
+      // arrival is waited for instead; it is at most one fragment away.
+      if (mainFragmentLoading && mainFragmentLoading.level !== level) {
+        pendingReplacement = replacement;
+        return;
+      }
+
+      const rung = hls.levels[level];
+      if (!rung) return;
+      const details = (rung as { details?: { targetduration?: number } })
+        .details;
+      const fragmentSeconds = details?.targetduration ?? 2;
+      const bandwidth =
+        hls.bandwidthEstimate > 0 ? hls.bandwidthEstimate : 1_000_000;
+      const ttfbSeconds =
+        ((hls as { ttfbEstimate?: number }).ttfbEstimate || DEFAULT_TTFB_MS) /
+        1000;
+      // An unloaded rung needs its playlist and init segment first.
+      const requests = details ? 1 : 3;
+      const peak = rung.bitrate || rung.averageBitrate || 0;
+      const fetchSeconds =
+        requests * ttfbSeconds + (peak * fragmentSeconds) / bandwidth;
+      const rate = Math.max(Math.abs(videoElement.playbackRate) || 1, 1);
+      const margin =
+        (fetchSeconds * REPLACE_SAFETY_FACTOR + REPLACE_FLOOR_SECONDS) * rate;
+      const horizon =
+        videoElement.currentTime + Math.max(margin, retainSeconds * rate);
+
+      /*
+       * The first old-rung fragment that starts beyond the horizon is where
+       * the new rung takes over. The cut itself is made halfway into it, not
+       * at its start: fragment times are on the playlist's grid, while the
+       * picture is not. An encoder using B-frames delays every presentation
+       * timestamp by its reorder depth — 83 ms on the packages measured, so
+       * the video buffer begins at 0.083 and the GOP of the slot at 16.016
+       * shows its IDR at 16.099. Removing from 16.016 deleted the previous
+       * GOP's last frames together with every B-frame referencing them, and
+       * left a 125 ms hole that Chromium and WebKit both had to jump (WebKit
+       * then stopped presenting frames for 45 s). Cut mid-fragment, the old
+       * GOP's head stays in place until the new rung's fragment is appended
+       * over it, and Media Source's overlap rules replace it from the new
+       * IDR exactly: the previous GOP is untouched, nothing is left empty.
+       * hls.js's own `nextLevel` cuts into the fragment for the same reason.
+       */
+      let takeover: { start: number; duration: number } | null = null;
+      for (const fragment of bufferedMainFragments.values()) {
+        if (fragment.level === level) continue;
+        // An upgrade only replaces media worse than what it brings.
+        if (onlyLower && fragment.level > level) continue;
+        if (fragment.start < horizon || fragment.start >= end) continue;
+        if (takeover === null || fragment.start < takeover.start) {
+          takeover = fragment;
+        }
+      }
+      const cut =
+        takeover === null
+          ? null
+          : takeover.start + takeover.duration * REPLACE_CUT_INTO_FRAGMENT;
+      // Fragments of the chosen rung already buffered past the cut (fetched
+      // since the pick) are kept: the cut stops where they begin.
+      let cutEnd = Number.POSITIVE_INFINITY;
+      if (cut !== null) {
+        for (const fragment of bufferedMainFragments.values()) {
+          if (fragment.level === level && fragment.start > cut) {
+            cutEnd = Math.min(cutEnd, fragment.start);
+          }
+        }
+      }
+      if (cut === null) {
+        // Nothing beyond the safety horizon to replace: the buffer is short
+        // enough that the new rung arrives on its own almost as soon.
+        abrRecord("replace-skipped", {
+          reason: replacement.reason,
+          level,
+          marginS: Number(margin.toFixed(2)),
+          bufferedAheadS: Number(bufferedAhead().toFixed(1)),
+        });
+        return;
+      }
+
+      abrRecord("replace", {
+        reason: replacement.reason,
+        level,
+        height: rung.height,
+        takeoverAtS: Number(takeover!.start.toFixed(3)),
+        cutAtS: Number(cut.toFixed(3)),
+        keptAheadS: Number(
+          (takeover!.start - videoElement.currentTime).toFixed(2),
+        ),
+        replacedS: Number((Math.min(end, cutEnd) - cut).toFixed(2)),
+        marginS: Number(margin.toFixed(2)),
+      });
+      for (const [key, fragment] of bufferedMainFragments) {
+        if (fragment.start >= cut && fragment.start < cutEnd) {
+          bufferedMainFragments.delete(key);
+        }
+      }
+      hls.trigger(Hls.Events.BUFFER_FLUSHING, {
+        startOffset: cut,
+        endOffset: cutEnd,
+        type: "video",
+      });
+      // Under ManagedMediaSource the browser may have paused loading because
+      // the buffer it saw was full; that buffer was just cut.
+      if (!hls.bufferingEnabled) hls.resumeBuffering();
+    };
+
+    /** A manual pick: the engine's manual mode, then a safe replacement. */
+    const lockLevel = (level: number) => {
+      if (level === manualLevel) return;
+      abrRecord("level", {
+        reason: "locked",
+        from: manualLevel ?? appliedLevel,
+        to: level,
+        height: hls.levels[level]?.height,
+        estimateBps: Math.round(hls.bandwidthEstimate || 0),
+        bufferedAheadS: Number(bufferedAhead().toFixed(1)),
+      });
+      manualLevel = level;
+      levelDecidedAt = Date.now();
+      // `loadLevel` changes what is fetched next and nothing else.
+      hls.loadLevel = level;
+      if (!anyMainFragmentBuffered) hls.startLevel = level;
+      appliedLevel = level;
+      replaceBufferAhead({
+        level,
+        retainSeconds: 0,
+        onlyLower: false,
+        reason: "manual",
+      });
     };
 
     /** Seconds of continuous media buffered ahead of the play head. */
@@ -878,6 +1304,12 @@ export function attachSourceToVideo(
       }
       upgradeCandidate.level = target;
       upgradeCandidate.probe = probing;
+      /*
+       * See `appliedLevelMeasured`: the rung chosen last has to have been
+       * fetched before the next one is earned. The hold keeps running, so the
+       * climb fires on the first tick after that fragment lands.
+       */
+      if (!appliedLevelMeasured) return;
       if (now - upgradeCandidate.since >= UPSWITCH_HOLD_MS) {
         const climbTo = upgradeCandidate.level;
         const climbWasProbed = upgradeCandidate.probe;
@@ -901,11 +1333,18 @@ export function attachSourceToVideo(
 
       if (lockedHeight === null) {
         /*
-         * Back to automatic. The rung is chosen here rather than by hls.js, so
-         * returning to Auto re-decides immediately instead of handing the
-         * ladder to an ABR controller that answers 144p regardless of the
-         * link. Nothing already buffered is thrown away to get there.
+         * Back to automatic. The rung is chosen here rather than by hls.js's
+         * own ABR, so returning to Auto re-decides immediately instead of
+         * handing the ladder to a controller that answers 144p regardless of
+         * the link. Nothing already buffered is thrown away to get there:
+         * `-1` on `loadLevel` is the engine's non-destructive way back to its
+         * automatic mode, and the decision applies from the next fragment.
          */
+        if (manualLevel !== null) {
+          manualLevel = null;
+          pendingReplacement = null;
+          hls.loadLevel = -1;
+        }
         upgradeCandidate = null;
         appliedLevel = null;
         evaluateAdaptiveTarget(true);
@@ -916,16 +1355,16 @@ export function attachSourceToVideo(
       // cannot fire a switch after the viewer has taken manual control.
       upgradeCandidate = null;
 
-      // An explicit rung is a promise to the viewer, so it has to become the
-      // picture within a second or two. `loadLevel` alone only changes what is
-      // fetched next, and a title whose whole timeline is already buffered has
-      // nothing left to fetch — the click then does nothing visible for
-      // minutes, until the old rung has finished playing out. `nextLevel`
-      // replaces the buffer ahead of the play head while leaving the fragment
-      // currently on screen alone, so the change lands quickly without the
-      // black frame that flushing everything (`currentLevel`) would cause.
-      const level = levelAtOrBelowClass(lockedHeight);
-      driveLevel(level, "locked");
+      /*
+       * An explicit rung is a promise to the viewer, so it has to become the
+       * picture within seconds, not after the whole forward buffer has played
+       * out. `lockLevel` changes what is fetched next and then replaces only
+       * the part of the buffer the new rung can be fetched in time to cover.
+       * Writing `nextLevel` here used to do a cruder version of this: it also
+       * discarded everything behind the play head, cut mid-fragment, and on
+       * ManagedMediaSource left a hole the browser did not always ask to fill.
+       */
+      lockLevel(levelAtOrBelowClass(lockedHeight));
     };
 
     hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
@@ -940,6 +1379,14 @@ export function attachSourceToVideo(
     hls.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
       options.onHlsEvent?.({ name: Hls.Events.LEVEL_SWITCHED, data });
       const level = hls.levels[data.level];
+      // The play head has entered the new rung: how long the decision took to
+      // become the picture is the switch's real cost to the viewer.
+      abrRecord("switched", {
+        level: data.level,
+        height: level?.height,
+        sinceDecisionMs: levelDecidedAt ? Date.now() - levelDecidedAt : null,
+        currentTimeS: Number(videoElement.currentTime.toFixed(3)),
+      });
       if (level?.height) {
         options.onAdaptiveLevelChanged?.({
           height: level.height,
@@ -957,11 +1404,60 @@ export function attachSourceToVideo(
       });
     });
 
+    hls.on(Hls.Events.FRAG_LOADING, (_event, data) => {
+      const fragment = asMainFragment(data);
+      if (fragment) mainFragmentLoading = fragment;
+    });
+
+    hls.on(Hls.Events.FRAG_LOAD_EMERGENCY_ABORTED, (_event, data) => {
+      const fragment = asMainFragment(data);
+      if (fragment && mainFragmentLoading?.sn === fragment.sn) {
+        mainFragmentLoading = null;
+      }
+      abrRecord("abandon", {
+        level: fragment?.level,
+        bufferedAheadS: Number(bufferedAhead().toFixed(1)),
+        estimateBps: Math.round(hls.bandwidthEstimate || 0),
+      });
+    });
+
     hls.on(Hls.Events.FRAG_BUFFERED, (_event, data) => {
       options.onHlsEvent?.({ name: Hls.Events.FRAG_BUFFERED, data });
+      const fragment = asMainFragment(data);
+      if (fragment) {
+        anyMainFragmentBuffered = true;
+        if (mainFragmentLoading?.sn === fragment.sn) mainFragmentLoading = null;
+        bufferedMainFragments.set(String(fragment.sn), {
+          level: fragment.level,
+          start: fragment.start,
+          end: fragment.start + fragment.duration,
+          duration: fragment.duration,
+        });
+        if (fragment.level === appliedLevel) appliedLevelMeasured = true;
+      }
+      // Re-checks the old-rung fetch it was waiting on, and waits again if
+      // the engine has already started another one.
+      if (pendingReplacement !== null) replaceBufferAhead(pendingReplacement);
       // Each buffered fragment is a fresh throughput sample, and the only
       // regular tick available while playback is steady.
       evaluateAdaptiveTarget();
+    });
+
+    hls.on(Hls.Events.BUFFER_FLUSHED, () => {
+      // Fragments the engine evicted (back-buffer housekeeping, a seek's
+      // flush) are no longer candidates for a replacement cut.
+      const { buffered } = videoElement;
+      for (const [key, fragment] of bufferedMainFragments) {
+        const middle = (fragment.start + fragment.end) / 2;
+        let held = false;
+        for (let index = 0; index < buffered.length; index += 1) {
+          if (buffered.start(index) <= middle && buffered.end(index) >= middle) {
+            held = true;
+            break;
+          }
+        }
+        if (!held) bufferedMainFragments.delete(key);
+      }
     });
 
     hls.on(Hls.Events.BUFFER_APPENDED, (_event, data) => {
@@ -970,6 +1466,10 @@ export function attachSourceToVideo(
 
     hls.on(Hls.Events.ERROR, (_event, data) => {
       options.onHlsEvent?.({ name: Hls.Events.ERROR, data });
+      const failedFragment = asMainFragment(data);
+      if (failedFragment && mainFragmentLoading?.sn === failedFragment.sn) {
+        mainFragmentLoading = null;
+      }
 
       if (data.fatal) {
         console.error("[Seyirlik Playback] hls.js fatal error", data);
@@ -1014,14 +1514,15 @@ export function attachSourceToVideo(
            * The estimate cannot agree: it only moves when a fragment finishes,
            * and the fragment is precisely what is not finishing. Measured on
            * the iPad against a link too slow to deliver anything, the policy
-           * therefore held 1080p throughout — and because an explicitly driven
-           * level turns off hls.js's own abandon-and-retry rules, the stuck
-           * fragment was never given up either. Playback came back about a
-           * minute later, when the loader finally timed out.
+           * therefore held 1080p throughout, and with the engine in manual
+           * mode its abandon rules never ran, so the stuck fragment was not
+           * given up either: playback came back about a minute later.
            *
-           * Dropping a rung writes `nextLevel`, which abandons that fragment
-           * and asks for the cheaper rung's much smaller one instead. The
-           * ladder is then climbed back in seconds if the stall was a blip.
+           * The engine now stays in automatic mode, where those rules run, and
+           * a downward decision is handed to them (see `driveLevel`): the
+           * fragment that is not arriving is abandoned for the cheaper rung's
+           * much smaller one as soon as that is the faster way out. The ladder
+           * is then climbed back in seconds if the stall was a blip.
            */
           upswitchBlockedUntil = lastStallAt + STALL_UPSWITCH_BLOCK_MS;
           if (
@@ -1066,6 +1567,10 @@ export function attachSourceToVideo(
         maximumHeight,
         appliedLevel,
         appliedHeight: level?.height,
+        appliedLevelMeasured,
+        manualLevel,
+        pendingReplacement,
+        engineAutoLevel: hls.autoLevelEnabled,
         playingLevel: hls.currentLevel,
         decodedWidth: videoElement.videoWidth,
         decodedHeight: videoElement.videoHeight,

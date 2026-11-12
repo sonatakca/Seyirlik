@@ -17,6 +17,8 @@ const hlsMock = vi.hoisted(() => ({
     currentLevel: number;
     loadLevel: number;
     nextLevel: number;
+    nextAutoLevel: number;
+    startLevel: number;
     audioTrack: number;
     audioTracks: Array<{ name: string; url?: string }>;
     levels: Array<{ width: number; height: number; bitrate: number }>;
@@ -41,6 +43,10 @@ vi.mock("hls.js", () => {
       ERROR: "error",
       BUFFER_APPENDED: "hlsBufferAppended",
       FRAG_BUFFERED: "hlsFragBuffered",
+      FRAG_LOADING: "hlsFragLoading",
+      FRAG_LOAD_EMERGENCY_ABORTED: "hlsFragLoadEmergencyAborted",
+      BUFFER_FLUSHING: "hlsBufferFlushing",
+      BUFFER_FLUSHED: "hlsBufferFlushed",
       LEVEL_SWITCHED: "levelSwitched",
       LEVELS_UPDATED: "levelsUpdated",
       MANIFEST_PARSED: "manifestParsed",
@@ -51,6 +57,42 @@ vi.mock("hls.js", () => {
     };
 
     static isSupported = hlsMock.isSupported;
+
+    /*
+     * Stands in for hls.js's AbrController: what the engine reads when it is
+     * in automatic mode and picks the next fragment's rung. `forced` is what
+     * the engine itself last set (abandonment, error fallback).
+     */
+    static DefaultConfig = {
+      abrController: class {
+        hls: unknown;
+        forced = -1;
+        constructor(hls: unknown) {
+          this.hls = hls;
+        }
+        get nextAutoLevel() {
+          return this.forced;
+        }
+        set nextAutoLevel(level: number) {
+          this.forced = level;
+        }
+      },
+    };
+
+    abr: { nextAutoLevel: number };
+
+    /** The engine's automatic choice, through the configured controller. */
+    get nextAutoLevel() {
+      return this.abr.nextAutoLevel;
+    }
+
+    set nextAutoLevel(level: number) {
+      this.abr.nextAutoLevel = level;
+    }
+
+    get autoLevelEnabled() {
+      return this.loadLevel === -1;
+    }
 
     autoLevelCapping = -1;
     currentLevel = -1;
@@ -89,6 +131,11 @@ vi.mock("hls.js", () => {
 
     constructor(config: Record<string, unknown> = {}) {
       this.config = config;
+      const Abr = (config.abrController ??
+        HlsMock.DefaultConfig.abrController) as new (hls: unknown) => {
+        nextAutoLevel: number;
+      };
+      this.abr = new Abr(this);
       hlsMock.instances.push(this);
     }
   }
@@ -111,6 +158,14 @@ function createVideo(nativeHlsSupport: CanPlayTypeResult): HTMLVideoElement {
   );
 
   return video;
+}
+
+/**
+ * The rung the engine will fetch next: the viewer's lock in manual mode,
+ * otherwise what the ABR controller (Seyirlik's policy) answers.
+ */
+function drivenLevel(hls: { loadLevel: number; nextAutoLevel: number }) {
+  return hls.loadLevel !== -1 ? hls.loadLevel : hls.nextAutoLevel;
 }
 
 describe("videoSource", () => {
@@ -271,14 +326,15 @@ describe("videoSource", () => {
     hls.trigger("manifestParsed", {});
 
     attachment.adaptiveController?.setQualityHeight(720, 720);
+    // A lock is the engine's manual mode: it changes what is fetched next.
     expect(hls.loadLevel).toBe(1);
     expect(hls.autoLevelCapping).toBe(1);
-    // `nextLevel` replaces what is buffered ahead, so a title whose whole
-    // timeline is already downloaded still changes rung within a second or two
-    // instead of waiting minutes for the old one to play out.
-    expect(hls.nextLevel).toBe(1);
-    // The fragment on screen is left alone: flushing everything is what puts a
-    // black frame in front of the viewer.
+    // Neither of the engine's flushing switches is used: `nextLevel` also
+    // discarded everything behind the play head and cut mid-fragment, and
+    // `currentLevel` flushes everything, which puts a black frame on screen.
+    // What is replaced ahead is decided by Seyirlik (see the replacement
+    // tests below); with nothing buffered here there is nothing to replace.
+    expect(hls.nextLevel).toBe(-1);
     expect(hls.currentLevel).toBe(-1);
 
     hls.trigger("levelSwitched", { level: 1 });
@@ -292,14 +348,15 @@ describe("videoSource", () => {
     attachment.adaptiveController?.setQualityHeight(null, null);
     expect(hls.autoLevelCapping).toBe(-1);
     /*
-     * Automatic no longer means `-1`. hls.js's own ABR answered the bottom
-     * rung on a link measured at 16.8 Mbps, so Seyirlik resolves the rung and
-     * drives it; `-1` here would hand the ladder straight back to the
-     * behaviour this replaced.
+     * Back to the engine's automatic mode, which is the non-destructive one:
+     * a new rung only changes the next fragment. The rung is still Seyirlik's
+     * — hls.js's own ABR answered the bottom rung on a link measured at
+     * 16.8 Mbps — so the controller answers with the policy's choice.
      */
-    expect(hls.loadLevel).not.toBe(-1);
-    expect(hls.nextLevel).toBe(hls.loadLevel);
-    // Still no flush: the fragment on screen is left alone.
+    expect(hls.loadLevel).toBe(-1);
+    expect(hls.nextAutoLevel).not.toBe(-1);
+    // Still no flush of any kind.
+    expect(hls.nextLevel).toBe(-1);
     expect(hls.currentLevel).toBe(-1);
   });
 
@@ -411,9 +468,10 @@ describe("videoSource", () => {
     attachment.adaptiveController?.setQualityHeight(null, 720);
 
     expect(hls.autoLevelCapping).toBe(1);
-    expect(hls.loadLevel).toBeLessThanOrEqual(1);
-    expect(hls.loadLevel).not.toBe(-1);
-    expect(hls.nextLevel).toBe(hls.loadLevel);
+    expect(drivenLevel(hls)).toBeLessThanOrEqual(1);
+    expect(drivenLevel(hls)).not.toBe(-1);
+    // Decided, and nothing buffered was discarded to apply it.
+    expect(hls.nextLevel).toBe(-1);
   });
 
   it("drives the canonical Higher Quality target rather than only capping", () => {
@@ -458,8 +516,8 @@ describe("videoSource", () => {
      * a cap it never did: on the iPad the cap sat five rungs up while hls.js
      * kept choosing the bottom one, so the mode did nothing at all.
      */
-    expect(hls.loadLevel).toBe(4);
-    expect(hls.nextLevel).toBe(4);
+    expect(drivenLevel(hls)).toBe(4);
+    expect(hls.nextLevel).toBe(-1);
   });
 });
 
@@ -649,6 +707,13 @@ describe("the adaptive buffer probe", () => {
     hls.trigger("manifestParsed", {});
     attachment.adaptiveController?.setQualityHeight(null, null, "auto");
 
+    // The fragment that lands is from the rung the engine was fetching.
+    let sn = 0;
+    const nextFragment = () => {
+      sn += 1;
+      return { type: "main", sn, level: drivenLevel(hls), start: sn * 2, duration: 2 };
+    };
+
     return {
       hls,
       dateNow,
@@ -671,7 +736,7 @@ describe("the adaptive buffer probe", () => {
       tick(estimate: number) {
         clock += 2000;
         hls.bandwidthEstimate = estimate;
-        hls.trigger("hlsFragBuffered", {});
+        hls.trigger("hlsFragBuffered", { frag: nextFragment() });
       },
     };
   }
@@ -680,7 +745,7 @@ describe("the adaptive buffer probe", () => {
     // The anti-trap case: 900 kbps is what the bottom of the ladder measures,
     // not what the link can do, and the full buffer is the evidence for that.
     const session = playingInAuto(900_000);
-    expect(session.hls.loadLevel).toBe(1);
+    expect(drivenLevel(session.hls)).toBe(1);
 
     // Six seconds of healthy buffer is enough to earn the climb. The pace is
     // the point: a viewer reads a rung that arrives a minute later as the
@@ -688,8 +753,8 @@ describe("the adaptive buffer probe", () => {
     for (const estimate of [880_000, 920_000, 900_000]) session.tick(estimate);
 
     // One rung above what the estimate alone would ever have justified.
-    expect(session.hls.loadLevel).toBe(2);
-    expect(session.hls.nextLevel).toBe(2);
+    expect(drivenLevel(session.hls)).toBe(2);
+    expect(session.hls.nextLevel).toBe(-1);
     session.dateNow.mockRestore();
   });
 
@@ -698,7 +763,7 @@ describe("the adaptive buffer probe", () => {
     // direction of the estimate differs. Seen on the iPad as a climb to
     // 1280 wide at 62 s during a 350 kbps throttle, corrected 12 s later.
     const session = playingInAuto(900_000);
-    expect(session.hls.loadLevel).toBe(1);
+    expect(drivenLevel(session.hls)).toBe(1);
 
     for (const estimate of [
       800_000, 500_000, 300_000, 250_000, 250_000, 240_000,
@@ -707,8 +772,8 @@ describe("the adaptive buffer probe", () => {
     }
 
     // The rung the collapsing link justifies, and no exploratory climb above it.
-    expect(session.hls.loadLevel).toBe(0);
-    expect(session.hls.nextLevel).toBe(0);
+    expect(drivenLevel(session.hls)).toBe(0);
+    expect(session.hls.nextLevel).toBe(-1);
     session.dateNow.mockRestore();
   });
 
@@ -718,49 +783,52 @@ describe("the adaptive buffer probe", () => {
     // argue every tick and the picture flickers between two rungs.
     const session = playingInAuto(900_000);
     for (const estimate of [880_000, 920_000, 900_000]) session.tick(estimate);
-    const probed = session.hls.loadLevel;
+    const probed = drivenLevel(session.hls);
     expect(probed).toBe(2);
 
     // Same stale reading, healthy buffer, no stalls: the climb stands.
     for (let index = 0; index < 3; index += 1) session.tick(900_000);
-    expect(session.hls.loadLevel).toBeGreaterThanOrEqual(probed);
+    expect(drivenLevel(session.hls)).toBeGreaterThanOrEqual(probed);
     session.dateNow.mockRestore();
   });
 
   it("gives up a probed rung at once when the buffer stops backing it", () => {
     const session = playingInAuto(900_000);
     for (const estimate of [880_000, 920_000, 900_000]) session.tick(estimate);
-    expect(session.hls.loadLevel).toBe(2);
+    expect(drivenLevel(session.hls)).toBe(2);
 
     // The buffer was the whole case for the climb. Once it is gone the grace
     // is over, whatever the clock says.
     session.starveBuffer();
     session.tick(900_000);
-    expect(session.hls.loadLevel).toBe(1);
+    expect(drivenLevel(session.hls)).toBe(1);
     session.dateNow.mockRestore();
   });
 
   it("steps down on a starved stall instead of waiting for the estimate", () => {
     // A stall means the fragment in flight is not arriving, and the estimate
-    // cannot say so — it only moves when a fragment finishes. Driving the
-    // level explicitly also switches off hls.js's own abandon-and-retry, so
-    // nothing else will give that fragment up either. Measured on the iPad,
-    // a link that went away left the session on 1080p until the loader timed
-    // out about a minute later.
+    // cannot say so — it only moves when a fragment finishes. Measured on the
+    // iPad, a link that went away left the session on 1080p until the loader
+    // timed out about a minute later.
     const session = playingInAuto(20_000_000);
-    const started = session.hls.loadLevel;
+    const started = drivenLevel(session.hls);
     expect(started).toBeGreaterThan(0);
 
     session.starveBuffer();
     session.stall();
-    expect(session.hls.loadLevel).toBe(started - 1);
-    // `nextLevel` is what abandons the fragment that is not arriving.
-    expect(session.hls.nextLevel).toBe(started - 1);
+    expect(drivenLevel(session.hls)).toBe(started - 1);
+    // The engine's abandonment rules are told, so a fragment that is not
+    // arriving can be given up for the cheaper rung's — and nothing already
+    // buffered is flushed to get there.
+    expect(
+      (session.hls as unknown as { abr: { forced: number } }).abr.forced,
+    ).toBe(started - 1);
+    expect(session.hls.nextLevel).toBe(-1);
 
     // And the still-optimistic estimate must not climb straight back into it.
     session.tick(20_000_000);
     session.tick(20_000_000);
-    expect(session.hls.loadLevel).toBe(started - 1);
+    expect(drivenLevel(session.hls)).toBe(started - 1);
     session.dateNow.mockRestore();
   });
 
@@ -769,18 +837,18 @@ describe("the adaptive buffer probe", () => {
     // cost a rung and the climb every time a party caught up, which held a
     // session at the bottom of the ladder for as long as the party lasted.
     const session = playingInAuto(20_000_000);
-    const started = session.hls.loadLevel;
+    const started = drivenLevel(session.hls);
     expect(started).toBeGreaterThan(0);
 
     session.seek();
     session.starveBuffer();
     session.stall();
-    expect(session.hls.loadLevel).toBe(started);
+    expect(drivenLevel(session.hls)).toBe(started);
 
     // Once the seek is well behind it, a starved stall is the link's again.
     for (let index = 0; index < 3; index += 1) session.tick(20_000_000);
     session.stall();
-    expect(session.hls.loadLevel).toBe(started - 1);
+    expect(drivenLevel(session.hls)).toBe(started - 1);
     session.dateNow.mockRestore();
   });
 
@@ -813,10 +881,14 @@ describe("the adaptive buffer probe", () => {
     hls.bandwidthEstimate = 8_000_000;
     hls.trigger("manifestParsed", {});
 
+    let sn = 0;
     const tick = (estimate: number) => {
       clock += 2000;
       hls.bandwidthEstimate = estimate;
-      hls.trigger("hlsFragBuffered", {});
+      sn += 1;
+      hls.trigger("hlsFragBuffered", {
+        frag: { type: "main", sn, level: drivenLevel(hls), start: sn * 2, duration: 2 },
+      });
     };
 
     // Locked to the bottom rung while the link falls away underneath it.
@@ -827,19 +899,19 @@ describe("the adaptive buffer probe", () => {
     }
 
     attachment.adaptiveController?.setQualityHeight(null, null, "auto");
-    expect(hls.loadLevel).toBe(0);
+    expect(drivenLevel(hls)).toBe(0);
 
     // Auto is back and the buffer is deep, but the link is visibly on its way
     // down, so the probe stays where it is.
     for (let index = 0; index < 3; index += 1) tick(400_000);
-    expect(hls.loadLevel).toBe(0);
+    expect(drivenLevel(hls)).toBe(0);
 
     // Once the collapse has aged out and the reading has held steady, the
     // ordinary anti-trap climb is available again.
     let highest = 0;
     for (let index = 0; index < 10; index += 1) {
       tick(400_000);
-      highest = Math.max(highest, hls.loadLevel);
+      highest = Math.max(highest, drivenLevel(hls));
     }
     expect(highest).toBeGreaterThan(0);
     dateNow.mockRestore();
@@ -850,7 +922,7 @@ describe("the adaptive buffer probe", () => {
     for (const estimate of [800_000, 500_000, 300_000, 250_000]) {
       session.tick(estimate);
     }
-    expect(session.hls.loadLevel).toBe(0);
+    expect(drivenLevel(session.hls)).toBe(0);
 
     // Steady again at the same low reading: the direction is what changed.
     // The reading never improves here because the test pins it, so the climb
@@ -859,7 +931,7 @@ describe("the adaptive buffer probe", () => {
     let highest = 0;
     for (let index = 0; index < 8; index += 1) {
       session.tick(250_000 + (index % 2) * 10_000);
-      highest = Math.max(highest, session.hls.loadLevel);
+      highest = Math.max(highest, drivenLevel(session.hls));
     }
 
     expect(highest).toBeGreaterThan(0);
@@ -938,5 +1010,372 @@ describe("loading the browser paused under ManagedMediaSource", () => {
 
     expect(hls.resumeBuffering).not.toHaveBeenCalled();
     attachment.destroy();
+  });
+});
+
+describe("seamless rung switching", () => {
+  beforeEach(() => {
+    hlsMock.instances.length = 0;
+    hlsMock.isSupported.mockReturnValue(true);
+  });
+
+  const LADDER = [
+    { width: 640, height: 360, bitrate: 700_000 },
+    { width: 1280, height: 720, bitrate: 3_000_000 },
+    { width: 1920, height: 1080, bitrate: 6_000_000 },
+  ];
+
+  /**
+   * A session with real-looking buffer state: two-second fragments from
+   * `bufferStart` to `bufferEnd`, the play head at `currentTime`, alternate
+   * audio, and every flush the player asks hls.js for recorded.
+   */
+  function session(options: {
+    estimateBps: number;
+    currentTime?: number;
+    bufferEnd?: number;
+    fragmentLevel?: number;
+  }) {
+    setUserAgent("Mozilla/5.0 Chrome/149.0.0.0 Safari/537.36");
+    const video = createVideo("");
+    vi.spyOn(video, "getBoundingClientRect").mockReturnValue({
+      height: 1080,
+    } as DOMRect);
+    let currentTime = options.currentTime ?? 0;
+    let bufferEnd = options.bufferEnd ?? 0;
+    Object.defineProperty(video, "currentTime", {
+      configurable: true,
+      get: () => currentTime,
+    });
+    Object.defineProperty(video, "buffered", {
+      configurable: true,
+      get: () =>
+        ({
+          length: bufferEnd > 0 ? 1 : 0,
+          start: () => 0,
+          end: () => bufferEnd,
+        }) as unknown as TimeRanges,
+    });
+    let clock = 0;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => clock);
+
+    const attachment = attachSourceToVideo(
+      video,
+      "http://example.test/play/master.m3u8",
+      "application/vnd.apple.mpegurl",
+    );
+    const hls = hlsMock.instances[0];
+    if (!hls) throw new Error("hls.js was not attached");
+    hls.levels = [...LADDER];
+    hls.audioTracks = [{ name: "track-1", url: "audio/audio.m3u8" }];
+    hls.bandwidthEstimate = options.estimateBps;
+    const flushes: Array<{
+      startOffset: number;
+      endOffset: number;
+      type: string | null;
+    }> = [];
+    const listen = hls.on as unknown as (
+      event: string,
+      handler: (event: string, data: unknown) => void,
+    ) => void;
+    listen("hlsBufferFlushing", (_event, data) => {
+      flushes.push(data as (typeof flushes)[number]);
+    });
+    hls.trigger("manifestParsed", {});
+
+    let sn = 0;
+    const buffer = (level: number, from: number, to: number) => {
+      for (let start = from; start < to; start += 2) {
+        sn += 1;
+        hls.trigger("hlsFragBuffered", {
+          frag: { type: "main", sn, level, start, duration: 2 },
+        });
+      }
+    };
+    if (bufferEnd > 0) buffer(options.fragmentLevel ?? 0, 0, bufferEnd);
+
+    return {
+      hls,
+      attachment,
+      flushes,
+      buffer,
+      nextSn: () => (sn += 1),
+      setTime(seconds: number) {
+        currentTime = seconds;
+      },
+      setBufferEnd(seconds: number) {
+        bufferEnd = seconds;
+      },
+      advance(ms: number) {
+        clock += ms;
+      },
+      restore() {
+        dateNow.mockRestore();
+      },
+    };
+  }
+
+  it("keeps the engine in automatic mode and never flushes on an automatic switch", () => {
+    const s = session({ estimateBps: 20_000_000, bufferEnd: 30 });
+    expect(s.hls.loadLevel).toBe(-1);
+    const top = drivenLevel(s.hls);
+    expect(top).toBe(2);
+
+    // The link collapses: the policy steps down for what is fetched next…
+    s.hls.bandwidthEstimate = 900_000;
+    s.advance(2000);
+    s.buffer(top, 30, 32);
+    expect(drivenLevel(s.hls)).toBeLessThan(top);
+    // …and the thirty seconds already buffered are kept and played.
+    expect(s.flushes).toEqual([]);
+    expect(s.hls.nextLevel).toBe(-1);
+    expect(s.hls.currentLevel).toBe(-1);
+    expect(s.hls.loadLevel).toBe(-1);
+    s.restore();
+  });
+
+  it("does not climb again until the rung it chose has actually been fetched", () => {
+    const s = session({ estimateBps: 900_000, bufferEnd: 12 });
+    const start = drivenLevel(s.hls);
+    expect(start).toBe(0);
+
+    // A link that justifies 720p: one rung up after the hold.
+    s.hls.bandwidthEstimate = 6_000_000;
+    for (let index = 0; index < 3; index += 1) {
+      s.advance(1000);
+      s.buffer(0, 12 + index * 2, 14 + index * 2);
+    }
+    const climbed = drivenLevel(s.hls);
+    expect(climbed).toBe(1);
+
+    // The reading improves, but only fragments of the *old* rung keep landing
+    // (they were already in flight, or loading is paused with a full buffer).
+    // Nothing has measured 720p yet, so it has not earned 1080p.
+    s.hls.bandwidthEstimate = 20_000_000;
+    for (let index = 0; index < 4; index += 1) {
+      s.advance(1000);
+      s.buffer(0, 20 + index * 2, 22 + index * 2);
+    }
+    expect(drivenLevel(s.hls)).toBe(climbed);
+
+    // A fragment of the new rung lands; the climb can continue.
+    s.advance(1000);
+    s.buffer(1, 28, 30);
+    for (let index = 0; index < 3; index += 1) {
+      s.advance(1000);
+      s.buffer(1, 30 + index * 2, 32 + index * 2);
+    }
+    expect(drivenLevel(s.hls)).toBe(2);
+    s.restore();
+  });
+
+  it("adopts a level the engine forces in an emergency instead of fighting it", () => {
+    const s = session({ estimateBps: 20_000_000, bufferEnd: 12 });
+    expect(drivenLevel(s.hls)).toBe(2);
+
+    // hls.js's abandonment rules give up a fragment that will not arrive in
+    // time and pick a cheaper rung, writing it through the controller.
+    s.hls.nextAutoLevel = 0;
+    expect(drivenLevel(s.hls)).toBe(0);
+
+    // The estimate is still the optimistic one from before the collapse; the
+    // policy must not climb straight back into the rung that just failed.
+    for (let index = 0; index < 3; index += 1) {
+      s.advance(1000);
+      s.buffer(0, 12 + index * 2, 14 + index * 2);
+    }
+    expect(drivenLevel(s.hls)).toBe(0);
+    expect(s.flushes).toEqual([]);
+    s.restore();
+  });
+
+  it("replaces only what lies beyond the fetch margin on a manual pick, on a fragment boundary, video only", () => {
+    const s = session({
+      estimateBps: 20_000_000,
+      currentTime: 5,
+      bufferEnd: 30,
+      fragmentLevel: 0,
+    });
+    s.hls.bufferingEnabled = false;
+    s.attachment.adaptiveController?.setQualityHeight(1080, 1080);
+
+    expect(s.hls.loadLevel).toBe(2);
+    expect(s.flushes).toHaveLength(1);
+    const [flush] = s.flushes;
+    // 1080p at 6 Mbps peak over a 20 Mbps link: a two-second fragment lands
+    // in ~0.6 s plus three first-byte waits (playlist, init, fragment) —
+    // ~1.8 s, doubled, plus one: the new rung takes over at the first
+    // boundary past ~9.6 s (10 s), cut halfway into that fragment.
+    expect(flush?.type).toBe("video");
+    expect(flush?.startOffset).toBe(11);
+    expect(flush?.endOffset).toBe(Number.POSITIVE_INFINITY);
+    // Loading that ManagedMediaSource had paused is resumed for the refill.
+    expect(s.hls.resumeBuffering).toHaveBeenCalled();
+    // A repeated application of the same lock (a resize) does not cut again.
+    s.attachment.adaptiveController?.setQualityHeight(1080, 1080);
+    expect(s.flushes).toHaveLength(1);
+    s.restore();
+  });
+
+  it("waits for an old-rung fragment in flight before cutting, so it cannot land inside the new rung", () => {
+    const s = session({ estimateBps: 20_000_000, currentTime: 5, bufferEnd: 30 });
+    const inFlight = { type: "main", sn: s.nextSn(), level: 0, start: 30, duration: 2 };
+    s.hls.trigger("hlsFragLoading", { frag: inFlight });
+
+    s.attachment.adaptiveController?.setQualityHeight(720, 720);
+    expect(s.flushes).toEqual([]);
+
+    s.setBufferEnd(32);
+    s.hls.trigger("hlsFragBuffered", { frag: inFlight });
+    expect(s.flushes).toHaveLength(1);
+    expect(s.flushes[0]?.type).toBe("video");
+    s.restore();
+  });
+
+  it("keeps the whole buffer when it is shorter than the time the new rung needs", () => {
+    const s = session({ estimateBps: 1_000_000, currentTime: 5, bufferEnd: 12 });
+    // 1080p over a 1 Mbps link takes ~12 s per fragment: everything buffered
+    // is needed to cover it, so nothing is cut and the rung joins at the end.
+    s.attachment.adaptiveController?.setQualityHeight(1080, 1080);
+    expect(s.hls.loadLevel).toBe(2);
+    expect(s.flushes).toEqual([]);
+    s.restore();
+  });
+
+  it("never cuts a package whose audio is muxed into the video", () => {
+    const s = session({ estimateBps: 20_000_000, currentTime: 5, bufferEnd: 30 });
+    s.hls.audioTracks = [];
+    s.attachment.adaptiveController?.setQualityHeight(720, 720);
+    expect(s.hls.loadLevel).toBe(1);
+    expect(s.flushes).toEqual([]);
+    s.restore();
+  });
+
+  it("lets an automatic climb with ample headroom replace lower-rung media beyond ten seconds", () => {
+    const s = session({ estimateBps: 900_000, currentTime: 4, bufferEnd: 40 });
+    expect(drivenLevel(s.hls)).toBe(0);
+    s.hls.bandwidthEstimate = 6_000_000; // 2x the 720p peak
+    for (let index = 0; index < 3; index += 1) {
+      s.advance(1000);
+      s.buffer(0, 40 + index * 2, 42 + index * 2);
+    }
+    expect(drivenLevel(s.hls)).toBe(1);
+    expect(s.flushes).toHaveLength(1);
+    // The new rung takes over at the first boundary past 4 + 10 s, cut
+    // halfway in; nothing nearer than that is touched, audio never.
+    expect(s.flushes[0]?.type).toBe("video");
+    expect(s.flushes[0]?.startOffset).toBe(15);
+    s.restore();
+  });
+
+  it("keeps twenty seconds on a climb the link has little room for", () => {
+    const s = session({ estimateBps: 900_000, currentTime: 4, bufferEnd: 40 });
+    s.hls.levels = [
+      { width: 640, height: 360, bitrate: 700_000 },
+      { width: 1280, height: 720, bitrate: 5_000_000, averageBitrate: 2_500_000 },
+    ] as typeof s.hls.levels;
+    s.hls.bandwidthEstimate = 5_000_000; // affordable on average, not 1.5x peak
+    for (let index = 0; index < 3; index += 1) {
+      s.advance(1000);
+      s.buffer(0, 40 + index * 2, 42 + index * 2);
+    }
+    expect(drivenLevel(s.hls)).toBe(1);
+    // Affordable on average but not with room on its peak: the climb is
+    // partly a guess, so twice as much of the old buffer stays.
+    expect(s.flushes).toHaveLength(1);
+    expect(s.flushes[0]?.startOffset).toBe(25);
+    s.restore();
+  });
+
+  it("never replaces on a climb while the link is falling", () => {
+    // Seconds ago the link carried 20 Mbps; it dipped, and now reads 6 Mbps:
+    // enough for 720p, but a third of the link has just disappeared.
+    const s = session({ estimateBps: 20_000_000, currentTime: 4, bufferEnd: 40 });
+    for (let index = 0; index < 2; index += 1) {
+      s.advance(1000);
+      s.buffer(2, 40 + index * 2, 42 + index * 2);
+    }
+    s.hls.bandwidthEstimate = 900_000;
+    s.advance(1000);
+    s.buffer(2, 44, 46);
+    expect(drivenLevel(s.hls)).toBe(0);
+    s.advance(1000);
+    s.buffer(0, 46, 48);
+    s.hls.bandwidthEstimate = 6_000_000;
+    for (let index = 0; index < 3; index += 1) {
+      s.advance(1000);
+      s.buffer(0, 48 + index * 2, 50 + index * 2);
+    }
+    expect(drivenLevel(s.hls)).toBe(1);
+    expect(s.flushes).toEqual([]);
+    s.restore();
+  });
+
+  it("returns from a lock to automatic mode without flushing", () => {
+    const s = session({ estimateBps: 20_000_000, currentTime: 5, bufferEnd: 30 });
+    s.attachment.adaptiveController?.setQualityHeight(360, 360);
+    const flushesAfterLock = s.flushes.length;
+    s.attachment.adaptiveController?.setQualityHeight(null, null, "auto");
+    expect(s.hls.loadLevel).toBe(-1);
+    expect(drivenLevel(s.hls)).toBe(2);
+    expect(s.flushes).toHaveLength(flushesAfterLock);
+    s.restore();
+  });
+});
+
+describe("the replacement cut", () => {
+  beforeEach(() => {
+    hlsMock.instances.length = 0;
+    hlsMock.isSupported.mockReturnValue(true);
+  });
+
+  it("cuts halfway into the takeover fragment, never on the playlist grid", () => {
+    // B-frames delay every presentation timestamp by the reorder depth: the
+    // fragment whose playlist slot starts at 10.010 shows its IDR at 10.093.
+    // Cutting at 10.010 deleted the end of the previous GOP and every B-frame
+    // depending on it, leaving a hole to be jumped (measured in Chromium and
+    // WebKit). Cut inside the fragment, the new rung's IDR overwrites the
+    // rest of it on append and the previous GOP is untouched.
+    setUserAgent("Mozilla/5.0 Chrome/149.0.0.0 Safari/537.36");
+    const video = createVideo("");
+    Object.defineProperty(video, "currentTime", { configurable: true, get: () => 5 });
+    Object.defineProperty(video, "buffered", {
+      configurable: true,
+      get: () => ({ length: 1, start: () => 0, end: () => 30 }) as unknown as TimeRanges,
+    });
+    const attachment = attachSourceToVideo(
+      video,
+      "http://example.test/play/master.m3u8",
+      "application/vnd.apple.mpegurl",
+    );
+    const hls = hlsMock.instances[0];
+    if (!hls) throw new Error("hls.js was not attached");
+    hls.levels = [
+      { width: 640, height: 360, bitrate: 700_000 },
+      { width: 1920, height: 1080, bitrate: 6_000_000 },
+    ];
+    hls.audioTracks = [{ name: "track-1", url: "audio/audio.m3u8" }];
+    hls.bandwidthEstimate = 20_000_000;
+    const flushes: Array<{ startOffset: number }> = [];
+    (hls.on as unknown as (e: string, h: (e: string, d: unknown) => void) => void)(
+      "hlsBufferFlushing",
+      (_event, data) => flushes.push(data as { startOffset: number }),
+    );
+    hls.trigger("manifestParsed", {});
+    for (let index = 0; index < 15; index += 1) {
+      const start = index * 2.002;
+      hls.trigger("hlsFragBuffered", {
+        frag: {
+          type: "main",
+          sn: index,
+          level: 0,
+          start,
+          duration: 2.002,
+        },
+      });
+    }
+    attachment.adaptiveController?.setQualityHeight(1080, 1080);
+    expect(flushes).toHaveLength(1);
+    expect(flushes[0]?.startOffset).toBeCloseTo(5 * 2.002 + 1.001, 6);
   });
 });
