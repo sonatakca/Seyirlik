@@ -340,8 +340,20 @@ export function createPlaybackRoutes({
             videoStreams: [packaged.video],
             audioStreams: packaged.audio,
             subtitleStreams: [
-              ...packaged.subtitles.filter(subtitle => !catalogued.some(stream => stream.isExternal && stream.streamIndex === subtitle.index)),
-              ...analysis.subtitleStreams.filter(subtitle => catalogued.some(stream => stream.isExternal && stream.streamIndex === subtitle.index)),
+              ...packaged.subtitles.filter(
+                (subtitle) =>
+                  !catalogued.some(
+                    (stream) =>
+                      stream.isExternal &&
+                      stream.streamIndex === subtitle.index,
+                  ),
+              ),
+              ...analysis.subtitleStreams.filter((subtitle) =>
+                catalogued.some(
+                  (stream) =>
+                    stream.isExternal && stream.streamIndex === subtitle.index,
+                ),
+              ),
             ],
           }
         : analysis,
