@@ -34,10 +34,13 @@ import type {
 import { getCachedSession } from "../../lib/authStorage";
 import { useShowPlaybackDetails } from "../../lib/playbackDetailsVisibility";
 import {
+  formatRuntime,
   formatTemplate,
   getDisplayTitle,
   getItemSubtitle,
 } from "../../lib/format";
+import { isTypingTarget } from "../../lib/keyboardShortcuts";
+import { usePlayerUi } from "../../lib/playerUi";
 import { getMediaOwnerRouteForItem } from "../../lib/routes";
 import { getEpisodeDisplayMetadata } from "../../lib/episodeMetadataPreferences";
 import {
@@ -58,6 +61,18 @@ import type {
   PlaybackSourceSettings,
 } from "../../lib/types";
 import { PlayerControls } from "./PlayerControls";
+import { PlayerQueuePanel } from "./PlayerQueuePanel";
+import { PlayerSettingsPanel } from "./PlayerSettingsPanel";
+import { SahneChrome } from "./sahne/SahneChrome";
+import {
+  rectFor,
+  sahneLayout,
+  SAHNE_LOBBY_IDLE_MS,
+  SAHNE_RADIUS,
+  stageClip,
+  stageTransform,
+  type SahneMode,
+} from "./sahne/sahneGeometry";
 import { PlayerErrorOverlay } from "./PlayerErrorOverlay";
 import { PlayerOverlay } from "./PlayerOverlay";
 import { PlaybackInfoButton } from "./PlaybackInfoButton";
@@ -451,6 +466,22 @@ export function CustomVideoPlayer({
   const [isSubtitleEditMode, setIsSubtitleEditMode] = useState(false);
   const [areControlsManuallyHidden, setAreControlsManuallyHidden] =
     useState(false);
+  /*
+   * Sahne, the stage player: chosen per device, never on a phone, where a
+   * picture stepped back into a room would be too small to watch.
+   */
+  const [playerUi] = usePlayerUi();
+  const isSahne =
+    playerUi === "sahne" &&
+    !(
+      Math.min(viewport.width, viewport.height) < 640 &&
+      Math.max(viewport.width, viewport.height) < 1024
+    );
+  const [isSahneLobbyOpen, setIsSahneLobbyOpen] = useState(false);
+  /** Opened by itself after a quiet pause, so playing again closes it. */
+  const sahneLobbyAutoRef = useRef(false);
+  /** A press that only closed a panel must not also step the room back. */
+  const sahnePanelAtPressRef = useRef(false);
   const [isViewModeEnabled, setIsViewModeEnabled] = useState(false);
   const [isViewModeCursorVisible, setIsViewModeCursorVisible] = useState(true);
   const [checkpointSeconds, setCheckpointSeconds] = useState<number | null>(
@@ -501,7 +532,11 @@ export function CustomVideoPlayer({
   );
 
   const controlsShouldStayVisible =
-    isSettingsOpen || isQueueOpen || isPlaybackInfoOpen || isPartyWatchOpen;
+    isSettingsOpen ||
+    isQueueOpen ||
+    isPlaybackInfoOpen ||
+    isPartyWatchOpen ||
+    (isSahne && isSahneLobbyOpen);
 
   const {
     areControlsVisible,
@@ -625,6 +660,40 @@ export function CustomVideoPlayer({
     setIsViewModeEnabled(false);
     revealPlayerChrome();
   }, [clearViewModeCursorHideTimer, revealPlayerChrome]);
+
+  const setSahneLobby = useCallback((open: boolean, auto = false) => {
+    sahneLobbyAutoRef.current = open && auto;
+    setIsSahneLobbyOpen(open);
+  }, []);
+
+  /*
+   * Sahne steps back one level at a time, at once: lobby, then controls, then
+   * the picture alone. The pointer is ignored for a third of a second after,
+   * so the hand settling from the click does not call the controls straight
+   * back; after that any movement, a single pixel, brings them.
+   */
+  const sahneStepBack = useCallback(() => {
+    if (isSahneLobbyOpen) {
+      setSahneLobby(false);
+      return;
+    }
+    setIsSettingsOpen(false);
+    setIsQueueOpen(false);
+    setIsPlaybackInfoOpen(false);
+    setIsPartyWatchOpen(false);
+    setAreControlsManuallyHidden(true);
+    releaseControlsHover();
+    suppressMouseMoveUntilRef.current = Date.now() + 320;
+  }, [isSahneLobbyOpen, releaseControlsHover, setSahneLobby]);
+
+  useEffect(() => {
+    if (!isSahne) setSahneLobby(false);
+  }, [isSahne, setSahneLobby]);
+
+  // Playing again closes a lobby that opened by itself.
+  useEffect(() => {
+    if (progress.isPlaying && sahneLobbyAutoRef.current) setSahneLobby(false);
+  }, [progress.isPlaying, setSahneLobby]);
 
   const toggleCheckpointMode = useCallback(() => {
     if (checkpointSeconds === null) {
@@ -1405,7 +1474,11 @@ export function CustomVideoPlayer({
       return null;
     }
 
-    const containerBounds = container.getBoundingClientRect();
+    // Inside Sahne's stage the box is scaled with the picture; the preview is
+    // drawn in the same scaled box, so it needs the unscaled size.
+    const containerBounds = isSahne
+      ? { width: container.offsetWidth, height: container.offsetHeight }
+      : container.getBoundingClientRect();
     const videoAspect =
       loadedVideoAspectRatio ??
       getVideoAspectRatioFromElement(video) ??
@@ -1444,6 +1517,7 @@ export function CustomVideoPlayer({
     videoFit,
     viewport.height,
     viewport.width,
+    isSahne,
   ]);
 
   useEffect(() => {
@@ -5113,6 +5187,25 @@ export function CustomVideoPlayer({
         return;
       }
 
+      if (isSahne) {
+        // The press closed a panel; that was the whole step.
+        if (sahnePanelAtPressRef.current) return;
+        if (target?.closest("[data-sahne-lobby-content]")) return;
+        if (
+          event.pointerType !== "touch" &&
+          target?.closest("[data-sahne-picture]")
+        ) {
+          partyWatch.togglePlay();
+          return;
+        }
+        if (shouldShowPlayerChrome || isSahneLobbyOpen) {
+          sahneStepBack();
+        } else {
+          revealPlayerChrome();
+        }
+        return;
+      }
+
       if (shouldShowPlayerChrome) {
         setIsSettingsOpen(false);
         setIsQueueOpen(false);
@@ -5130,9 +5223,12 @@ export function CustomVideoPlayer({
       isDraggingSubtitle,
       isResizingSubtitle,
       isViewModeEnabled,
+      isSahne,
+      isSahneLobbyOpen,
       partyWatch,
       releaseControlsHover,
       revealPlayerChrome,
+      sahneStepBack,
       shouldShowPlayerChrome,
     ],
   );
@@ -5314,16 +5410,298 @@ export function CustomVideoPlayer({
       )
     : "";
 
+  /*
+   * Sahne: the room around the picture. The picture's own layer (both decks,
+   * the held frame, the seek preview and the subtitles) is moved and clipped
+   * as one; the furniture is SahneChrome.
+   */
+  const sahneAspect =
+    videoFit === "fill"
+      ? viewport.width / Math.max(viewport.height, 1)
+      : (previewAspectRatio ?? 16 / 9);
+  const sahneGeometry = useMemo(
+    () => sahneLayout(viewport.width, viewport.height, sahneAspect),
+    [sahneAspect, viewport.height, viewport.width],
+  );
+  const sahneMode: SahneMode =
+    !isSahne || isViewModeEnabled || isSubtitleEditMode || error
+      ? "full"
+      : isSahneLobbyOpen
+        ? "lobby"
+        : shouldRenderPlayerChrome
+          ? "controls"
+          : "full";
+  const sahneStage = stageTransform(
+    sahneGeometry.full,
+    rectFor(sahneGeometry, sahneMode),
+  );
+  const sahneStageStyle = isSahne
+    ? {
+        transformOrigin: "0 0",
+        transform: `translate(${sahneStage.x}px, ${sahneStage.y}px) scale(${sahneStage.scale})`,
+        clipPath: stageClip(
+          sahneGeometry.full,
+          viewport.width,
+          viewport.height,
+          sahneStage.scale,
+          sahneMode === "full" ? 0 : SAHNE_RADIUS,
+        ),
+        transition: shouldReduceMotion
+          ? undefined
+          : "transform 0.72s cubic-bezier(0.16, 1, 0.3, 1), clip-path 0.72s cubic-bezier(0.16, 1, 0.3, 1)",
+      }
+    : undefined;
+
+  // Left paused and alone for a while, the film opens its lobby.
+  const isSahneLobbyArmed =
+    isSahne &&
+    !progress.isPlaying &&
+    shouldRenderPlayerChrome &&
+    !isSahneLobbyOpen &&
+    !isSettingsOpen &&
+    !isQueueOpen &&
+    !isPartyWatchOpen &&
+    !isPlaybackInfoOpen &&
+    !error &&
+    !isTimelinePreparing;
+  useEffect(() => {
+    if (!isSahneLobbyArmed) return undefined;
+    const open = () => setSahneLobby(true, true);
+    let timer = window.setTimeout(open, SAHNE_LOBBY_IDLE_MS);
+    const restart = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(open, SAHNE_LOBBY_IDLE_MS);
+    };
+    const events = ["pointermove", "pointerdown", "keydown", "wheel"] as const;
+    events.forEach((name) =>
+      window.addEventListener(name, restart, { passive: true }),
+    );
+    return () => {
+      window.clearTimeout(timer);
+      events.forEach((name) => window.removeEventListener(name, restart));
+    };
+  }, [isSahneLobbyArmed, setSahneLobby]);
+
+  // Escape steps back a level; L opens and closes the lobby.
+  useEffect(() => {
+    if (!isSahne) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        isTypingTarget(event.target) ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        isViewModeEnabled ||
+        isSubtitleEditMode
+      ) {
+        return;
+      }
+      if (event.key === "Escape") {
+        if (
+          isSettingsOpen ||
+          isQueueOpen ||
+          isPartyWatchOpen ||
+          isPlaybackInfoOpen
+        ) {
+          setIsSettingsOpen(false);
+          setIsQueueOpen(false);
+          setIsPartyWatchOpen(false);
+          setIsPlaybackInfoOpen(false);
+          return;
+        }
+        if (shouldShowPlayerChrome || isSahneLobbyOpen) sahneStepBack();
+      } else if (event.key.toLowerCase() === "l") {
+        event.preventDefault();
+        setSahneLobby(!isSahneLobbyOpen);
+        if (!isSahneLobbyOpen) revealPlayerChrome();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    isPartyWatchOpen,
+    isPlaybackInfoOpen,
+    isQueueOpen,
+    isSahne,
+    isSahneLobbyOpen,
+    isSettingsOpen,
+    isSubtitleEditMode,
+    isViewModeEnabled,
+    revealPlayerChrome,
+    sahneStepBack,
+    setSahneLobby,
+    shouldShowPlayerChrome,
+  ]);
+
+  const playbackQueueLabel = playbackQueue
+    ? playbackQueue.kind === "series"
+      ? t("player.queueEpisodes")
+      : t("player.queueCollection")
+    : t("player.playbackQueue");
+  const sahneFacts = [
+    typeof item.ProductionYear === "number" ? String(item.ProductionYear) : null,
+    formatRuntime(item.RunTimeTicks, mediaFormatLabels),
+    item.OfficialRating?.replace(/^[A-Z]{2}-/, "") ?? null,
+    ...(item.Genres ?? []).slice(0, 2),
+  ].filter((fact): fact is string => Boolean(fact));
+  const sahneOverview = isEpisodeItem
+    ? (episodeMetadata?.overview ?? itemMetadata.overview ?? null)
+    : (itemMetadata.overview ?? null);
+
+  const topActions = (
+    <div
+      className="seyirlik-player-top-actions relative flex flex-col items-end gap-3"
+      data-party-watch-root
+    >
+      <div className="seyirlik-player-top-actions-row flex items-center gap-2">
+        {showPlaybackDetails ? (
+          <PlaybackInfoButton
+            source={sourceWithLiveTranscodingReasons}
+            onClick={() => {
+              setIsPlaybackInfoOpen(true);
+              setIsQueueOpen(false);
+            }}
+          />
+        ) : null}
+
+        <Tooltip
+          content={t("player.enterViewMode")}
+          group="top-right"
+        >
+          <button
+            type="button"
+            onClick={enterViewMode}
+            className="relative flex h-11 w-11 items-center justify-center rounded-full text-white/85 transition-[backdrop-filter] hover:bg-white/[0.12] hover:backdrop-blur-lg hover:duration-1000 duration-[500ms] hover:text-white focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+            aria-label={t("player.enterViewMode")}
+          >
+            <EyeOff size={18} />
+          </button>
+        </Tooltip>
+
+        {/* Watching together and saving a frame both need the
+            server, which a stored copy plays without. */}
+        {isOfflineSource ? null : (
+          <Tooltip content={t("party.title")} group="top-right">
+            <button
+              type="button"
+              onClick={() => {
+                setIsPartyWatchOpen((current) => !current);
+                setIsSettingsOpen(false);
+                setIsQueueOpen(false);
+                revealPlayerChrome();
+              }}
+              className="relative flex h-11 w-11 items-center justify-center rounded-full text-white/85 transition-[backdrop-filter] hover:bg-white/[0.12] hover:backdrop-blur-lg hover:duration-1000 duration-[500ms] hover:text-white focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+              aria-label={t("party.title")}
+            >
+              <Users size={18} fill={isInParty ? "#fff" : "none"} />
+
+              <span
+                className="pointer-events-none absolute inset-0"
+                aria-hidden="true"
+              >
+                {isInParty ? (
+                  Array.from({
+                    length: visiblePartyWatchDotCount,
+                  }).map((_, index) => {
+                    const dotPosition =
+                      PARTY_WATCH_DOT_POSITIONS[index] ??
+                      PARTY_WATCH_DOT_POSITIONS[0];
+
+                    return (
+                      <span
+                        key={`${dotPosition}-${index}`}
+                        className={`absolute ${dotPosition} h-1.5 w-1.5 rounded-full border border-white/85 bg-white/85 shadow-accent-dot`}
+                      />
+                    );
+                  })
+                ) : (
+                  <span className="absolute right-[0.35rem] top-[0.50rem] h-1.5 w-1.5 rounded-full border border-white/85 bg-transparent" />
+                )}
+              </span>
+            </button>
+          </Tooltip>
+        )}
+
+        <Tooltip content={checkpointButtonLabel} group="top-right">
+          <button
+            type="button"
+            onClick={toggleCheckpointMode}
+            className={`relative flex h-11 w-11 items-center justify-center rounded-full transition-[backdrop-filter] hover:backdrop-blur-lg hover:duration-1000 duration-[500ms] ease focus:outline-none focus:ring-2 focus:ring-[var(--accent)] ${
+              checkpointSeconds !== null
+                ? " text-[var(--accent)] ring-0 ring-[var(--accent)]/45 hover:bg-white/[0.12]"
+                : "text-white/85 hover:bg-white/[0.12] hover:text-white"
+            }`}
+            aria-label={checkpointButtonLabel}
+            aria-pressed={checkpointSeconds !== null}
+          >
+            <Bookmark
+              size={18}
+              fill={
+                checkpointSeconds !== null ? "currentColor" : "none"
+              }
+            />
+          </button>
+        </Tooltip>
+
+        {isOfflineSource ? null : (
+          <Tooltip content={t("player.saveFrame")} group="top-right">
+            <button
+              type="button"
+              onClick={() => {
+                void handleSaveFrame();
+              }}
+              className="relative flex h-11 w-11 items-center justify-center rounded-full text-white/85 transition-[backdrop-filter] hover:bg-white/[0.12] hover:backdrop-blur-lg hover:duration-1000 duration-[500ms] hover:text-white focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+              aria-label={t("player.saveFrame")}
+              aria-busy={isSavingFrame}
+            >
+              <Camera
+                size={18}
+                className={
+                  isSavingFrame ? "animate-pulse" : undefined
+                }
+              />
+            </button>
+          </Tooltip>
+        )}
+      </div>
+
+      {isPartyWatchOpen ? (
+        <div
+          className="seyirlik-party-panel-anchor absolute right-0 top-full mt-3"
+          data-party-watch-root
+        >
+          {party ? (
+            <PartyWatchPanel
+              party={party}
+              currentPlayback={currentPartyPlayback}
+            />
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+
   return (
     <div
       ref={containerRef}
       className={`seyirlik-player-shell fixed inset-0 select-none ${
         // eslint-disable-next-line no-constant-condition -- deliberately off
         isCompactPhonePlayer && false ? "seyirlik-player-shell--phone" : "" //TODO - false for now
-      } z-50 min-h-0 overflow-hidden bg-black text-white ${
-        shouldShowPlayerCursor ? "cursor-default" : "cursor-none"
+      } z-50 min-h-0 overflow-hidden ${isSahne ? "bg-[#050607]" : "bg-black"} text-white ${
+        shouldShowPlayerCursor
+          ? isSahne && sahneMode !== "full"
+            ? "cursor-pointer"
+            : "cursor-default"
+          : "cursor-none"
       }`}
       onMouseMove={handlePlayerMouseMove}
+      onPointerDownCapture={() => {
+        sahnePanelAtPressRef.current =
+          isSettingsOpen ||
+          isQueueOpen ||
+          isPartyWatchOpen ||
+          isPlaybackInfoOpen;
+      }}
       onPointerUpCapture={releaseTouchFocusAndControlsHover}
       onPointerCancelCapture={releaseTouchFocusAndControlsHover}
       onPointerUp={(event) => {
@@ -5349,6 +5727,16 @@ export function CustomVideoPlayer({
         dissolve, and because both layers hold a real picture it never fades
         through the black background behind them.
       */}
+      {/*
+        Sahne's stage. In the classic player this box has no style and
+        changes nothing; in Sahne it moves and clips everything that is the
+        picture as one, so the room can stand around it.
+      */}
+      <div
+        className={isSahne ? "absolute inset-0 z-[2]" : "absolute inset-0"}
+        style={sahneStageStyle}
+        data-sahne-picture={isSahne ? "" : undefined}
+      >
       <div ref={pictureBoxRef} className={pictureBoxClass}>
         {(["a", "b"] as const).map((deckId) => {
           const isActiveDeck = deckId === deck.activeDeckId;
@@ -5508,7 +5896,7 @@ export function CustomVideoPlayer({
         ) : null}
       </AnimatePresence>
 
-      {!isViewModeEnabled ? (
+      {!isViewModeEnabled && !isSahne ? (
         <>
           <div
             aria-hidden="true"
@@ -5644,6 +6032,8 @@ export function CustomVideoPlayer({
         </div>
       ) : null}
 
+      </div>
+
       {isSubtitleEditMode ? (
         <button
           type="button"
@@ -5673,138 +6063,8 @@ export function CustomVideoPlayer({
             onControlsHoverStart={keepControlsVisible}
             onControlsHoverEnd={releaseControlsHover}
             seekFeedback={seekFeedback}
-            topRightControls={
-              <div
-                className="seyirlik-player-top-actions relative flex flex-col items-end gap-3"
-                data-party-watch-root
-              >
-                <div className="seyirlik-player-top-actions-row flex items-center gap-2">
-                  {showPlaybackDetails ? (
-                    <PlaybackInfoButton
-                      source={sourceWithLiveTranscodingReasons}
-                      onClick={() => {
-                        setIsPlaybackInfoOpen(true);
-                        setIsQueueOpen(false);
-                      }}
-                    />
-                  ) : null}
-
-                  <Tooltip
-                    content={t("player.enterViewMode")}
-                    group="top-right"
-                  >
-                    <button
-                      type="button"
-                      onClick={enterViewMode}
-                      className="relative flex h-11 w-11 items-center justify-center rounded-full text-white/85 transition-[backdrop-filter] hover:bg-white/[0.12] hover:backdrop-blur-lg hover:duration-1000 duration-[500ms] hover:text-white focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                      aria-label={t("player.enterViewMode")}
-                    >
-                      <EyeOff size={18} />
-                    </button>
-                  </Tooltip>
-
-                  {/* Watching together and saving a frame both need the
-                      server, which a stored copy plays without. */}
-                  {isOfflineSource ? null : (
-                    <Tooltip content={t("party.title")} group="top-right">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsPartyWatchOpen((current) => !current);
-                          setIsSettingsOpen(false);
-                          setIsQueueOpen(false);
-                          revealPlayerChrome();
-                        }}
-                        className="relative flex h-11 w-11 items-center justify-center rounded-full text-white/85 transition-[backdrop-filter] hover:bg-white/[0.12] hover:backdrop-blur-lg hover:duration-1000 duration-[500ms] hover:text-white focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                        aria-label={t("party.title")}
-                      >
-                        <Users size={18} fill={isInParty ? "#fff" : "none"} />
-
-                        <span
-                          className="pointer-events-none absolute inset-0"
-                          aria-hidden="true"
-                        >
-                          {isInParty ? (
-                            Array.from({
-                              length: visiblePartyWatchDotCount,
-                            }).map((_, index) => {
-                              const dotPosition =
-                                PARTY_WATCH_DOT_POSITIONS[index] ??
-                                PARTY_WATCH_DOT_POSITIONS[0];
-
-                              return (
-                                <span
-                                  key={`${dotPosition}-${index}`}
-                                  className={`absolute ${dotPosition} h-1.5 w-1.5 rounded-full border border-white/85 bg-white/85 shadow-accent-dot`}
-                                />
-                              );
-                            })
-                          ) : (
-                            <span className="absolute right-[0.35rem] top-[0.50rem] h-1.5 w-1.5 rounded-full border border-white/85 bg-transparent" />
-                          )}
-                        </span>
-                      </button>
-                    </Tooltip>
-                  )}
-
-                  <Tooltip content={checkpointButtonLabel} group="top-right">
-                    <button
-                      type="button"
-                      onClick={toggleCheckpointMode}
-                      className={`relative flex h-11 w-11 items-center justify-center rounded-full transition-[backdrop-filter] hover:backdrop-blur-lg hover:duration-1000 duration-[500ms] ease focus:outline-none focus:ring-2 focus:ring-[var(--accent)] ${
-                        checkpointSeconds !== null
-                          ? " text-[var(--accent)] ring-0 ring-[var(--accent)]/45 hover:bg-white/[0.12]"
-                          : "text-white/85 hover:bg-white/[0.12] hover:text-white"
-                      }`}
-                      aria-label={checkpointButtonLabel}
-                      aria-pressed={checkpointSeconds !== null}
-                    >
-                      <Bookmark
-                        size={18}
-                        fill={
-                          checkpointSeconds !== null ? "currentColor" : "none"
-                        }
-                      />
-                    </button>
-                  </Tooltip>
-
-                  {isOfflineSource ? null : (
-                    <Tooltip content={t("player.saveFrame")} group="top-right">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          void handleSaveFrame();
-                        }}
-                        className="relative flex h-11 w-11 items-center justify-center rounded-full text-white/85 transition-[backdrop-filter] hover:bg-white/[0.12] hover:backdrop-blur-lg hover:duration-1000 duration-[500ms] hover:text-white focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-                        aria-label={t("player.saveFrame")}
-                        aria-busy={isSavingFrame}
-                      >
-                        <Camera
-                          size={18}
-                          className={
-                            isSavingFrame ? "animate-pulse" : undefined
-                          }
-                        />
-                      </button>
-                    </Tooltip>
-                  )}
-                </div>
-
-                {isPartyWatchOpen ? (
-                  <div
-                    className="seyirlik-party-panel-anchor absolute right-0 top-full mt-3"
-                    data-party-watch-root
-                  >
-                    {party ? (
-                      <PartyWatchPanel
-                        party={party}
-                        currentPlayback={currentPartyPlayback}
-                      />
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-            }
+            topRightControls={topActions}
+            chrome={isSahne ? "sahne" : "classic"}
           />
 
           <SkipSegmentButton
@@ -5837,6 +6097,112 @@ export function CustomVideoPlayer({
             <PartyWatchStatus party={party} playback={partyWatch} />
           ) : null}
 
+          {isSahne ? (
+            <SahneChrome
+              mode={sahneMode}
+              layout={sahneGeometry}
+              lobbyOpen={isSahneLobbyOpen}
+              onToggleLobby={() => {
+                setSahneLobby(!isSahneLobbyOpen);
+                revealPlayerChrome();
+              }}
+              getVideo={() => videoRef.current}
+              backTo={backTo ?? getMediaOwnerRouteForItem(item)}
+              title={playerHeaderTitle}
+              titleLogoUrl={titleLogoUrl}
+              episodeLabel={playerEpisodeLabel}
+              episodeName={playerEpisodeName}
+              topActions={topActions}
+              isPlaying={progress.isPlaying}
+              playWaiting={partyWatch.isStartPending}
+              currentTime={progress.currentTime}
+              duration={progress.duration}
+              bufferedEnd={progress.bufferedEnd}
+              volume={progress.volume}
+              muted={progress.muted}
+              itemId={item.Id}
+              mediaSourceId={activeSource.mediaSourceId}
+              checkpointSeconds={checkpointSeconds}
+              previewAspectRatio={previewAspectRatio}
+              seekPreviewLoading={isSeekLoadingShown}
+              onTogglePlay={partyWatch.togglePlay}
+              onSeek={handleSeekCommit}
+              onSeekPreview={handleSeekPreview}
+              onSeekPreviewCancel={cancelSeekPreview}
+              onSeekBy={handleSeekBy}
+              onToggleMute={progress.toggleMute}
+              onVolumeChange={progress.setVolume}
+              canFullscreen={canCustomFullscreen}
+              isFullscreen={isCustomFullscreen}
+              onToggleFullscreen={toggleFullscreen}
+              canNativeFullscreen={canNativeFullscreen}
+              onEnterNativeFullscreen={handleEnterNativeFullscreen}
+              canPictureInPicture={canPictureInPicture}
+              isPictureInPicture={isPictureInPicture}
+              onTogglePictureInPicture={handleTogglePictureInPicture}
+              queueLabel={playbackQueueLabel}
+              playbackQueue={playbackQueue}
+              queueOpen={isQueueOpen}
+              onOpenQueue={() => {
+                setIsQueueOpen((current) => !current);
+                setIsSettingsOpen(false);
+                setIsPartyWatchOpen(false);
+                revealPlayerChrome();
+              }}
+              queuePanel={
+                playbackQueue ? (
+                  <PlayerQueuePanel
+                    queue={playbackQueue}
+                    onPlayItem={(queueItem) =>
+                      onPlayQueueItem ? handlePlayQueueItem(queueItem.Id) : undefined
+                    }
+                  />
+                ) : null
+              }
+              settingsOpen={isSettingsOpen}
+              onOpenSettings={() => {
+                setIsSettingsOpen((current) => !current);
+                setIsQueueOpen(false);
+                setIsPartyWatchOpen(false);
+                revealPlayerChrome();
+              }}
+              settingsPanel={
+                <PlayerSettingsPanel
+                  source={sourceWithLiveTranscodingReasons}
+                  qualityOptions={qualityOptions}
+                  selectedQualityId={selectedQualityId}
+                  selectedAudioStreamIndex={activeAudioStreamIndex}
+                  selectedSubtitleStreamIndex={selectedSubtitleStreamIndex}
+                  subtitleDelaySeconds={subtitleDelaySeconds}
+                  canSwitchAudio={canSwitchAudio}
+                  {...(settingsNoticeText
+                    ? { audioNoticeText: settingsNoticeText }
+                    : {})}
+                  canSwitchSubtitles={canSwitchSubtitles}
+                  completeFileQuality={completeFileQualityControls}
+                  onSelectAutoQuality={handleSelectAutoQuality}
+                  onSelectQuality={handleSelectQuality}
+                  onSelectAudioStream={handleSelectAudioStream}
+                  onSelectSubtitleStream={handleSelectSubtitleStream}
+                  onSubtitleDelayChange={setSubtitleDelaySeconds}
+                  onStartSubtitleEdit={startSubtitleEditMode}
+                />
+              }
+              onControlsHoverStart={keepControlsVisible}
+              onControlsHoverEnd={releaseControlsHover}
+              facts={sahneFacts}
+              overview={sahneOverview}
+              onPlayQueueItem={onPlayQueueItem ? handlePlayQueueItem : undefined}
+              source={sourceWithLiveTranscodingReasons}
+              selectedAudioStreamIndex={activeAudioStreamIndex}
+              selectedSubtitleStreamIndex={selectedSubtitleStreamIndex}
+              canSwitchAudio={canSwitchAudio}
+              canSwitchSubtitles={canSwitchSubtitles}
+              completeFileQuality={completeFileQualityControls}
+              onSelectAudioStream={handleSelectAudioStream}
+              onSelectSubtitleStream={handleSelectSubtitleStream}
+            />
+          ) : (
           <PlayerControls
             visible={shouldRenderPlayerChrome}
             isPlaying={progress.isPlaying}
@@ -5907,6 +6273,7 @@ export function CustomVideoPlayer({
             onSubtitleDelayChange={setSubtitleDelaySeconds}
             onStartSubtitleEdit={startSubtitleEditMode}
           />
+          )}
         </>
       ) : null}
 

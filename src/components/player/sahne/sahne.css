@@ -1,0 +1,470 @@
+/*
+ * Sahne: the picture stands in a room and the controls stand in the room
+ * beside it, never on it. The picture's own layer is moved by the player
+ * (transform and clip only); this file places the furniture around it.
+ */
+.sahne {
+  --sahne-move: 0.72s cubic-bezier(0.16, 1, 0.3, 1);
+  --sahne-fade: 0.3s linear;
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  font-weight: 600;
+}
+
+.sahne-caps {
+  font-size: 0.6875rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  line-height: 1.15;
+  text-transform: uppercase;
+  color: rgba(226, 232, 240, 0.52);
+}
+
+/* The light: the picture's colours, blurred, fading out long before its edge. */
+.sahne-glow {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: -1;
+  width: 48px;
+  height: 20px;
+  transform-origin: 0 0;
+  filter: blur(12px) saturate(1.6);
+  -webkit-mask-image: radial-gradient(
+    ellipse 50% 50% at 50% 50%,
+    #000 34%,
+    rgba(0, 0, 0, 0.5) 62%,
+    transparent 100%
+  );
+  mask-image: radial-gradient(
+    ellipse 50% 50% at 50% 50%,
+    #000 34%,
+    rgba(0, 0, 0, 0.5) 62%,
+    transparent 100%
+  );
+  opacity: 0;
+  transition:
+    transform var(--sahne-move),
+    opacity 0.9s linear;
+}
+.sahne:is([data-sahne-mode="controls"], [data-sahne-mode="lobby"]) .sahne-glow {
+  opacity: 0.4;
+}
+.sahne[data-sahne-mode="lobby"] .sahne-glow {
+  opacity: 0.46;
+}
+
+/* Everything that stands in the room. */
+.sahne-ui {
+  opacity: 0;
+  transition:
+    opacity var(--sahne-fade),
+    transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.sahne-ui[data-sahne-shown] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sahne-icon {
+  color: rgba(248, 250, 252, 0.82);
+  transition:
+    background-color 0.2s,
+    color 0.2s,
+    transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.sahne-icon:hover,
+.sahne-icon[aria-pressed="true"] {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+.sahne-icon:active {
+  transform: scale(0.94);
+}
+.sahne-icon:focus-visible,
+.sahne-play:focus-visible,
+.sahne-pill:focus-visible,
+.sahne-chip:focus-visible,
+.sahne-clock:focus-visible,
+.sahne-q:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The bar above the picture. */
+.sahne-top {
+  position: absolute;
+  top: 0;
+  left: var(--sahne-g);
+  right: var(--sahne-g);
+  height: 72px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  transform: translateY(-8px);
+}
+.sahne-top[data-sahne-shown] {
+  transform: none;
+}
+.sahne-where {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 18px;
+}
+.sahne-top-logo {
+  height: 34px;
+  width: auto;
+  max-width: min(16rem, 30vw);
+  object-fit: contain;
+  object-position: left;
+  filter: drop-shadow(0 6px 16px rgba(0, 0, 0, 0.7));
+}
+.sahne-top-title {
+  margin: 0;
+  max-width: min(18rem, 34vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 1rem;
+  font-weight: 800;
+}
+.sahne-top-episode {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+}
+.sahne-top-episode b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+.sahne[data-sahne-mode="lobby"] .sahne-where {
+  opacity: 0;
+  transition: opacity var(--sahne-fade);
+}
+.sahne-where {
+  transition: opacity var(--sahne-fade);
+}
+.sahne-top-actions {
+  margin-left: auto;
+  margin-right: -10px;
+  display: flex;
+  align-items: center;
+}
+
+/* The deck: the picture's base, exactly as wide as the picture. */
+.sahne-deck {
+  position: absolute;
+  left: var(--sahne-ux);
+  top: calc(var(--sahne-uy) + var(--sahne-uh) + 10px);
+  width: var(--sahne-uw);
+  transition:
+    opacity var(--sahne-fade),
+    left var(--sahne-move),
+    top var(--sahne-move),
+    width var(--sahne-move);
+}
+.sahne-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 4px -10px 0;
+}
+.sahne-play {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  flex: none;
+  place-items: center;
+  margin-right: 6px;
+  border-radius: 9999px;
+  background: #fff;
+  color: #08090a;
+  transition:
+    transform 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 0.2s;
+}
+.sahne-play:hover {
+  transform: scale(1.06);
+}
+.sahne-play:active {
+  transform: scale(0.95);
+}
+.sahne-clock {
+  margin-left: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.sahne-clock:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.sahne-clock b {
+  font-weight: 800;
+}
+.sahne-clock span,
+.sahne-ends {
+  color: rgba(226, 232, 240, 0.52);
+}
+.sahne-ends {
+  margin-left: 6px;
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.sahne-row-end {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+.sahne-pill {
+  display: inline-flex;
+  height: 40px;
+  align-items: center;
+  gap: 8px;
+  margin-right: 6px;
+  padding: 0 16px 0 13px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  font-size: 0.8125rem;
+  font-weight: 800;
+  white-space: nowrap;
+  transition:
+    background-color 0.2s,
+    color 0.2s,
+    transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.sahne-pill:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+.sahne-pill:active {
+  transform: scale(0.97);
+}
+.sahne-pill--on {
+  background: #fff;
+  color: #08090a;
+  box-shadow: none;
+}
+.sahne-pill--on:hover {
+  background: #fff;
+}
+
+/* The lobby: the title's details beside the picture, the choices under it. */
+.sahne-lobby {
+  opacity: 0;
+  transform: translateY(14px);
+  transition:
+    opacity 0.25s linear,
+    transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.sahne-lobby[data-sahne-shown] {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+  transition-delay: 0.12s;
+  cursor: default;
+}
+.sahne-info {
+  position: absolute;
+  left: calc(var(--sahne-lx) + var(--sahne-lw) + 2.75rem);
+  right: var(--sahne-g);
+  top: var(--sahne-ly);
+  bottom: 1.25rem;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+.sahne-info-logo {
+  height: clamp(56px, 9vh, 92px);
+  width: auto;
+  max-width: 100%;
+  align-self: flex-start;
+  object-fit: contain;
+  object-position: left;
+  filter: drop-shadow(0 10px 28px rgba(0, 0, 0, 0.75));
+}
+.sahne-info-title {
+  margin: 0;
+  font-size: clamp(1.5rem, 2.4vw, 2.25rem);
+  font-weight: 900;
+  font-stretch: 78%;
+  line-height: 1;
+}
+.sahne-facts {
+  margin: 16px 0 0;
+  color: rgba(226, 232, 240, 0.72);
+  font-size: 0.8125rem;
+}
+.sahne-facts span + span::before {
+  content: "·";
+  margin: 0 0.5em;
+  color: rgba(226, 232, 240, 0.52);
+}
+.sahne-now {
+  margin-top: 22px;
+}
+.sahne-now h1 {
+  margin: 5px 0 0;
+  font-size: clamp(1.5rem, 2.2vw, 2rem);
+  font-weight: 900;
+  font-stretch: 78%;
+  line-height: 1.05;
+}
+.sahne-overview {
+  display: -webkit-box;
+  max-width: 46ch;
+  margin: 14px 0 0;
+  overflow: hidden;
+  color: rgba(226, 232, 240, 0.72);
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.5;
+  text-wrap: pretty;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+.sahne-queue {
+  margin-top: auto;
+  padding-top: 18px;
+}
+.sahne-queue-list {
+  display: grid;
+  gap: 2px;
+  margin: 8px -10px 0;
+}
+.sahne-q {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: 14px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  text-align: left;
+  transition: background-color 0.2s;
+}
+.sahne-q:not(:disabled):hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+.sahne-q:disabled {
+  cursor: default;
+}
+.sahne-q-art {
+  grid-row: 1 / 3;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.065);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.sahne-q-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.sahne-q-title {
+  align-self: end;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+.sahne-q-meta {
+  align-self: start;
+  color: rgba(226, 232, 240, 0.52);
+  font-size: 0.75rem;
+}
+.sahne-q--now .sahne-q-meta {
+  color: var(--accent);
+}
+
+.sahne-prefs {
+  position: absolute;
+  left: var(--sahne-lx);
+  width: var(--sahne-lw);
+  top: calc(var(--sahne-ly) + var(--sahne-lh) + 126px);
+  bottom: 1rem;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-content: start;
+  gap: 16px 40px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.sahne-pref > .sahne-caps {
+  display: block;
+  margin-bottom: 8px;
+}
+.sahne-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sahne-chips--sub {
+  margin-top: 6px;
+}
+.sahne-chip {
+  display: inline-flex;
+  height: 34px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 14px;
+  border-radius: 9999px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  color: rgba(226, 232, 240, 0.72);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  white-space: nowrap;
+  transition:
+    background-color 0.2s,
+    color 0.2s;
+}
+.sahne-chip:not(:disabled):hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+.sahne-chip:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.sahne-chip--on,
+.sahne-chip--on:disabled {
+  background: #fff;
+  box-shadow: none;
+  color: #08090a;
+  opacity: 1;
+}
+.sahne-chip--on:not(:disabled):hover {
+  background: #fff;
+  color: #08090a;
+}
+
+@media (max-height: 680px) {
+  .sahne-overview {
+    -webkit-line-clamp: 2;
+  }
+}
+@media (max-width: 900px) {
+  .sahne-ends,
+  .sahne-top-episode {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sahne,
+  .sahne * {
+    transition-duration: 0.01ms !important;
+  }
+}

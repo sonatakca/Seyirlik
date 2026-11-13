@@ -18,6 +18,7 @@ import { isOfflineSupported } from "../lib/offline/offlineLibrary";
 import { ROUTE_COLOR_TRANSITION_FORCE_EVENT } from "./RouteColorTransition";
 import tapuLogo from "../assets/tapu-logo.webp";
 import type { Language } from "../i18n/translations";
+import { PLAYER_UIS, usePlayerUi } from "../lib/playerUi";
 
 const ITEM =
   "flex w-full items-center gap-3 rounded-full px-3 py-2 text-left text-sm font-bold text-white/72 transition-[background-color,color] duration-150 ease-out hover:bg-white/[0.09] hover:text-white focus-visible:bg-white/[0.09] focus-visible:text-white focus-visible:outline-none";
@@ -51,6 +52,7 @@ export function AccountMenu({
   const location = useLocation();
   const session = getCachedSession();
   const { t, language, setLanguage } = useLanguage();
+  const [playerUi, setPlayerUi] = usePlayerUi();
   const shouldReduceMotion = useReducedMotion();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -270,6 +272,49 @@ export function AccountMenu({
                       }`}
                     />
                     {option.name}
+                  </button>
+                );
+              })}
+            </div>
+            {/* Which player this device watches in. Classic until chosen. */}
+            <p
+              aria-hidden="true"
+              className="mx-4 mb-1 mt-2 text-[0.6875rem] font-black uppercase leading-none tracking-[0.12em] text-white/45"
+            >
+              {t("player.ui")}
+            </p>
+            <div
+              role="group"
+              aria-label={t("player.ui")}
+              className="relative mx-1 mb-1 grid grid-cols-2 rounded-full bg-white/[0.05] p-1"
+            >
+              <span
+                aria-hidden="true"
+                className="absolute bottom-1 left-1 top-1 w-[calc(50%-0.25rem)] rounded-full bg-white/[0.12] shadow-[0_1px_3px_rgba(0,0,0,0.4)] transition-transform duration-300 ease-[cubic-bezier(0.37,0,0.63,1)] motion-reduce:transition-none"
+                style={{
+                  transform:
+                    playerUi === PLAYER_UIS[0]
+                      ? "translateX(0)"
+                      : "translateX(100%)",
+                }}
+              />
+              {PLAYER_UIS.map((option) => {
+                const isCurrent = option === playerUi;
+
+                return (
+                  <button
+                    key={option}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={isCurrent}
+                    onClick={() => setPlayerUi(option)}
+                    className={`relative flex items-center justify-center rounded-full px-3 py-1.5 text-[0.8125rem] font-bold transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
+                      isCurrent
+                        ? "text-white"
+                        : "text-white/55 hover:text-white/85"
+                    }`}
+                  >
+                    {t(option === "sahne" ? "player.ui.sahne" : "player.ui.classic")}
                   </button>
                 );
               })}

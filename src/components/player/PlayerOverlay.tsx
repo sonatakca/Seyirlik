@@ -41,6 +41,12 @@ interface PlayerOverlayProps {
     backward: SeekFeedbackItem;
     forward: SeekFeedbackItem;
   };
+  /**
+   * `sahne` draws its own bar and play button in the room around the picture,
+   * so it keeps from this overlay only the notice, the seek feedback and the
+   * centre while it is busy (loading, or waiting for the party).
+   */
+  chrome?: "classic" | "sahne";
 }
 
 const PLAY_PAUSE_ICON_SWAP_DURATION_MS = 111;
@@ -99,6 +105,7 @@ export function PlayerOverlay({
   onControlsHoverStart,
   onControlsHoverEnd,
   seekFeedback,
+  chrome = "classic",
 }: PlayerOverlayProps) {
   const { t } = useLanguage();
   const shouldReduceMotion = useReducedMotion();
@@ -172,6 +179,7 @@ export function PlayerOverlay({
   return (
     <>
       <div
+        style={chrome === "sahne" ? { display: "none" } : undefined}
         className={`seyirlik-player-chrome seyirlik-player-top-chrome pointer-events-none absolute inset-x-0 top-0 z-30 px-[max(0.65rem,env(safe-area-inset-left))] pb-8 pt-[max(0.55rem,env(safe-area-inset-top))] sm:px-[max(1rem,env(safe-area-inset-left))] sm:pb-16 sm:pt-[max(1rem,env(safe-area-inset-top))] ${
           visible
             ? "seyirlik-player-chrome--visible"
@@ -356,7 +364,9 @@ export function PlayerOverlay({
             ? "h-28 w-28 sm:h-36 sm:w-36"
             : "h-16 w-16 hover:scale-110 sm:h-20 sm:w-20"
         } ${
-          visible || !isPlaying || isPlayPausePending || isPlayPauseLoading
+          (chrome === "sahne"
+            ? isPlayPausePending || isPlayPauseLoading
+            : visible || !isPlaying || isPlayPausePending || isPlayPauseLoading)
             ? "seyirlik-player-center-toggle--visible scale-100 opacity-100"
             : "seyirlik-player-center-toggle--hidden pointer-events-none scale-0 opacity-0"
         }`}

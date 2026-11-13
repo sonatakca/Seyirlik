@@ -24,19 +24,18 @@ import {
   COUNTRY_NAME_FLAG_CODES,
   LANGUAGE_FLAG_COUNTRY_CODES,
 } from "../../lib/flagCountryCodes";
-import { isVisibleSubtitleLanguage } from "../../lib/subtitleLanguages";
 import { getPlaybackModeLabel } from "../../lib/playbackDiagnostics";
 import { useLanguage } from "../../i18n/LanguageContext";
-import type { TranslationKey } from "../../i18n/translations";
 import { SwapText } from "../SwapText";
 import { qualityBadgeForLabel, type QualityBadge } from "./qualityBadge";
 import { AnimatedWidth } from "../AnimatedWidth";
-import type {
-  AutomaticQualityMode,
-  CompleteFileQualityControls,
-} from "./types";
+import type { CompleteFileQualityControls } from "./types";
 
 import { streamLabels } from "./streamLabels";
+import {
+  AUTOMATIC_QUALITY_MODES,
+  getSelectableStreams,
+} from "./settingsChoices";
 
 const HIDE_QUALITY_SETTINGS = false;
 const HIDE_AUDIO_SETTINGS = false;
@@ -66,45 +65,6 @@ interface PlayerSettingsPanelProps {
   onSubtitleDelayChange: (seconds: number) => void;
   onStartSubtitleEdit?: () => void;
   compact?: boolean;
-}
-
-function getStreamsOfType(
-  source: PlaybackSourceCandidate,
-  type: "Audio" | "Subtitle",
-): MediaStream[] {
-  return (
-    source.mediaSource.MediaStreams?.filter(
-      (stream) =>
-        stream.Type?.toLowerCase() === type.toLowerCase() &&
-        (type !== "Subtitle" || isVisibleSubtitleLanguage(stream.Language)),
-    ) ?? []
-  );
-}
-
-function getUniqueStreams(streams: MediaStream[]): MediaStream[] {
-  const seenKeys = new Set<string>();
-
-  return streams.filter((stream, index) => {
-    const key =
-      stream.Index !== undefined
-        ? `index-${stream.Index}`
-        : [
-            stream.DisplayTitle,
-            stream.Title,
-            stream.Language,
-            stream.Codec,
-            stream.IsExternal,
-            stream.IsDefault,
-            index,
-          ].join("-");
-
-    if (seenKeys.has(key)) {
-      return false;
-    }
-
-    seenKeys.add(key);
-    return true;
-  });
 }
 
 function formatTemplate(
@@ -336,27 +296,6 @@ function SettingsButton({
   );
 }
 
-const AUTOMATIC_QUALITY_MODES: Array<{
-  mode: AutomaticQualityMode;
-  labelKey: TranslationKey;
-  descriptionKey: TranslationKey;
-}> = [
-  {
-    mode: "low-data",
-    labelKey: "player.qualityLowData",
-    descriptionKey: "player.qualityLowDataDescription",
-  },
-  {
-    mode: "auto",
-    labelKey: "settings.auto",
-    descriptionKey: "player.qualityFileAutoDescription",
-  },
-  {
-    mode: "higher-resolution",
-    labelKey: "player.qualityHigherResolution",
-    descriptionKey: "player.qualityHigherResolutionDescription",
-  },
-];
 
 /**
  * The four top-level complete-file quality modes. Advanced opens a submenu that
@@ -548,10 +487,8 @@ export function PlayerSettingsPanel({
   compact = false,
 }: PlayerSettingsPanelProps) {
   const { t, language = "en" } = useLanguage();
-  const audioStreams = getUniqueStreams(getStreamsOfType(source, "Audio"));
-  const subtitleStreams = getUniqueStreams(
-    getStreamsOfType(source, "Subtitle"),
-  );
+  const audioStreams = getSelectableStreams(source, "Audio");
+  const subtitleStreams = getSelectableStreams(source, "Subtitle");
   const audioLabels = streamLabels(audioStreams, "audio", language, t);
   const subtitleLabels = streamLabels(subtitleStreams, "subtitle", language, t);
   // A stored copy is one rung, kept as it was downloaded: there is no
