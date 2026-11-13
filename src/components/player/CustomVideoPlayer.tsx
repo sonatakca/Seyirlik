@@ -809,6 +809,15 @@ export function CustomVideoPlayer({
   const [autoAnchorHeight, setAutoAnchorHeight] = useState<number | undefined>(
     undefined,
   );
+  /**
+   * What the adaptive engine's own policy says Auto would pick from the link
+   * right now (see `getAutoTargetHeight`), refreshed whenever the picture's
+   * rung changes or the menu opens. The rung on screen can be a one-fragment
+   * rescue or a seek's first fetch, so it is a poor anchor for the modes.
+   */
+  const [policyAnchorHeight, setPolicyAnchorHeight] = useState<
+    number | undefined
+  >(undefined);
   const [activeAdaptiveHeight, setActiveAdaptiveHeight] = useState<
     number | null
   >(null);
@@ -2599,14 +2608,20 @@ export function CustomVideoPlayer({
        * rather than about the mode being applied. Deriving it from the rung on
        * screen made each bias move its own target.
        */
+      /*
+       * Where the engine has a policy, it answers directly: the rung on screen
+       * can be a one-fragment rescue or a seek's first fetch (144p on a fast
+       * link, measured on production), and a mode picked then was capped by it.
+       */
       const anchorHeight =
-        fileQualityMode === "auto"
+        controller?.getAutoTargetHeight?.() ??
+        (fileQualityMode === "auto"
           ? (findEffectiveAdaptiveRung(
               ordered,
               activeAdaptiveWidth ?? decodedFrameWidth,
               activeAdaptiveHeight,
             )?.height ?? autoAnchorHeight)
-          : autoAnchorHeight;
+          : autoAnchorHeight);
       const {
         anchor,
         lowData: lowest,
@@ -2687,6 +2702,12 @@ export function CustomVideoPlayer({
       persistQualityPreference,
     ],
   );
+
+  useEffect(() => {
+    const next =
+      activeAttachmentRef.current?.adaptiveController?.getAutoTargetHeight?.();
+    setPolicyAnchorHeight((current) => (current === next ? current : next));
+  }, [activeAdaptiveHeight, adaptiveQualityManifest, isSettingsOpen]);
 
   /*
    * Learned only under Auto. While a bias is applied the decoded rung is the
@@ -3203,9 +3224,10 @@ export function CustomVideoPlayer({
        * to use another.
        */
       const labelAnchorHeight =
-        fileQualityMode === "auto"
+        policyAnchorHeight ??
+        (fileQualityMode === "auto"
           ? (effective?.height ?? autoAnchorHeight)
-          : autoAnchorHeight;
+          : autoAnchorHeight);
       const displayedModeRungs =
         labelAnchorHeight !== undefined
           ? selectModeRungsFromAutoHeight(ordered, labelAnchorHeight)
@@ -3303,6 +3325,7 @@ export function CustomVideoPlayer({
     activeAdaptiveHeight,
     activeAdaptiveWidth,
     autoAnchorHeight,
+    policyAnchorHeight,
     decodedFrameWidth,
     measuredContainerHeight,
     adaptiveLockedQualityId,

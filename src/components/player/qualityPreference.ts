@@ -424,6 +424,14 @@ export function canonicalRungClass(width: number, height: number): number {
  * its two bounded canonical neighbours, nothing more. Transport belongs to the
  * caller — this answers only "which rung", so the native and hls.js paths can
  * share one policy instead of each growing its own.
+ *
+ * Higher Quality waives Auto's safety margin, not the measurement: its step up
+ * is taken only when the measured link carries that rung's average bitrate,
+ * and otherwise it settles on the best rung between Auto's and the step that
+ * does fit — never below Auto's. A step the link cannot carry is not "more
+ * data for a sharper picture"; measured on production (12 Mbps, House of the
+ * Dragon), Higher Quality's 1440p (10.2 Mbps average) drained the buffer and
+ * the engine's emergency rescues showed 144p for fifty seconds.
  */
 export function selectAdaptiveTargetRung<T extends RungLike>(
   qualities: readonly T[],
@@ -432,7 +440,23 @@ export function selectAdaptiveTargetRung<T extends RungLike>(
 ): T | undefined {
   const { anchor, lowData, higher } = selectModeRungs(qualities, context);
   if (mode === "low-data") return lowData ?? anchor;
-  if (mode === "higher-resolution") return higher ?? anchor;
+  if (mode === "higher-resolution") {
+    const wanted = higher ?? anchor;
+    const link = context.bandwidthBps;
+    if (!wanted || !anchor || link === undefined) return wanted;
+    const fits = (rung: T) => !rung.bitrate || rung.bitrate <= link;
+    if (fits(wanted)) return wanted;
+    return (
+      ascendingRungs(qualities)
+        .filter(
+          (rung) =>
+            rung.height > anchor.height &&
+            rung.height < wanted.height &&
+            fits(rung),
+        )
+        .at(-1) ?? anchor
+    );
+  }
   return anchor;
 }
 

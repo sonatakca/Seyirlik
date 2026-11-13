@@ -796,14 +796,41 @@ describe("selectAdaptiveTargetRung", () => {
     ).toBe(2160);
   });
 
-  it("never lets Higher Quality sit below 720p", () => {
-    // Auto is pinned to the floor here, but Higher Quality still has a floor
-    // of its own.
-    const context = { bandwidthBps: 120_000 };
-    expect(selectAdaptiveTargetRung(full, "auto", context)?.height).toBe(144);
+  it("keeps Higher Quality's 720p floor when the link carries 720p", () => {
+    // 3 Mbps measured: Auto's two-thirds budget buys 480p (1.92 Mbps); 720p
+    // costs 2.88 Mbps, which the link itself carries.
+    const context = { bandwidthBps: 3_000_000 };
+    expect(selectAdaptiveTargetRung(full, "auto", context)?.height).toBe(480);
     expect(
       selectAdaptiveTargetRung(full, "higher-resolution", context)?.height,
     ).toBe(720);
+  });
+
+  it("does not step Higher Quality onto a rung the link cannot carry", () => {
+    // 120 kbps measured: no floor is worth a rung that cannot be delivered.
+    expect(
+      selectAdaptiveTargetRung(full, "higher-resolution", {
+        bandwidthBps: 120_000,
+      })?.height,
+    ).toBe(144);
+    // A sparse ladder whose step up is two classes away: 2160p (8.64 Mbps)
+    // does not fit 7 Mbps, 1440p (5.76) does, so Higher settles between.
+    const sparse = ladder([480, 720, 1080, 1440, 2160], (h) =>
+      h === 1080 ? 3_000_000 : h * 4000,
+    );
+    expect(
+      selectAdaptiveTargetRung(sparse, "higher-resolution", {
+        bandwidthBps: 7_000_000,
+      })?.height,
+    ).toBeLessThanOrEqual(1440);
+    expect(
+      selectAdaptiveTargetRung(sparse, "higher-resolution", {
+        bandwidthBps: 7_000_000,
+      })?.height,
+    ).toBeGreaterThanOrEqual(
+      selectAdaptiveTargetRung(sparse, "auto", { bandwidthBps: 7_000_000 })!
+        .height,
+    );
   });
 
   it("never lets Low Data exceed 1080p", () => {

@@ -70,8 +70,19 @@ vi.mock("hls.js", () => {
       abrController: class {
         hls: unknown;
         forced = -1;
+        /** Stands in for the engine's bandwidth estimator and its resets. */
+        bwEstimator = {};
+        resets: Array<number | undefined> = [];
+        /** Stands in for the engine's emergency-abandonment check. */
+        abandonChecks = 0;
+        _abandonRulesCheck = () => {
+          this.abandonChecks += 1;
+        };
         constructor(hls: unknown) {
           this.hls = hls;
+        }
+        resetEstimator(value?: number) {
+          this.resets.push(value);
         }
         get nextAutoLevel() {
           return this.forced;
@@ -727,10 +738,18 @@ describe("the adaptive buffer probe", () => {
 
     return {
       hls,
+      attachment,
       dateNow,
       /** The forward buffer collapses to nothing worth arguing about. */
       starveBuffer() {
         bufferedAhead = 2;
+      },
+      /** The buffer is healthy again. */
+      refillBuffer() {
+        bufferedAhead = 12;
+      },
+      advance(ms: number) {
+        clock += ms;
       },
       /** The viewer (or a party catching up) moves the play head. */
       seek() {
@@ -934,20 +953,78 @@ describe("the adaptive buffer probe", () => {
     dateNow.mockRestore();
   });
 
+  it("leaves a rung the probe climbed to and lost alone for a while", () => {
+    // Production at 4 Mbps: probe up, drain, fall, probe up again, every
+    // fourteen seconds. A rung that has just failed the probe is not retried
+    // at once.
+    const session = playingInAuto(900_000);
+    for (const estimate of [880_000, 920_000, 900_000]) session.tick(estimate);
+    expect(drivenLevel(session.hls)).toBe(2);
+
+    session.starveBuffer();
+    session.tick(900_000);
+    expect(drivenLevel(session.hls)).toBe(1);
+
+    session.refillBuffer();
+    for (let index = 0; index < 6; index += 1) session.tick(900_000);
+    expect(drivenLevel(session.hls)).toBe(1);
+
+    // Thirty seconds on, the rung may be tried again.
+    session.advance(30_000);
+    let highest = 1;
+    for (let index = 0; index < 4; index += 1) {
+      session.tick(900_000);
+      highest = Math.max(highest, drivenLevel(session.hls));
+    }
+    expect(highest).toBe(2);
+    session.dateNow.mockRestore();
+  });
+
+  it("applies a mode the viewer picks even while a probe's grace is running", () => {
+    // The grace protects the probe's guess, not a choice the viewer made.
+    // Production: Data Saver picked during a probe's grace took over with the
+    // probe's 1440p on a 12 Mbps link, which the engine abandoned to 144p.
+    const session = playingInAuto(900_000);
+    for (const estimate of [880_000, 920_000, 900_000]) session.tick(estimate);
+    expect(drivenLevel(session.hls)).toBe(2);
+
+    // 900 kbps: Auto's budget buys 240p, so Data Saver is the rung below it.
+    session.attachment.adaptiveController?.setQualityHeight(
+      null,
+      null,
+      "low-data",
+      { immediate: true },
+    );
+    expect(drivenLevel(session.hls)).toBe(0);
+    session.dateNow.mockRestore();
+  });
+
+  it("keeps a running probe when the player merely re-applies the mode", () => {
+    // Resizes and the player's periodic review re-apply the same mode; that
+    // is not the viewer asking for anything, and must not undo the probe.
+    const session = playingInAuto(900_000);
+    for (const estimate of [880_000, 920_000, 900_000]) session.tick(estimate);
+    expect(drivenLevel(session.hls)).toBe(2);
+    session.attachment.adaptiveController?.setQualityHeight(null, null, "auto");
+    session.tick(900_000);
+    expect(drivenLevel(session.hls)).toBe(2);
+    session.dateNow.mockRestore();
+  });
+
   it("resumes climbing once a collapsed link has steadied again", () => {
     const session = playingInAuto(900_000);
-    for (const estimate of [800_000, 500_000, 300_000, 250_000]) {
+    for (const estimate of [800_000, 600_000, 450_000, 400_000]) {
       session.tick(estimate);
     }
     expect(drivenLevel(session.hls)).toBe(0);
 
     // Steady again at the same low reading: the direction is what changed.
-    // The reading never improves here because the test pins it, so the climb
-    // is given up again and retried; what matters is that it is attempted at
-    // all, which is what a falling reading forbids.
+    // 400 kbps carries 240p's 350 kbps but not inside Auto's margin, which is
+    // the probe's case; what matters is that it is attempted at all, which is
+    // what a falling reading forbids.
     let highest = 0;
     for (let index = 0; index < 8; index += 1) {
-      session.tick(250_000 + (index % 2) * 10_000);
+      session.tick(400_000 + (index % 2) * 10_000);
       highest = Math.max(highest, drivenLevel(session.hls));
     }
 
@@ -1125,6 +1202,11 @@ describe("seamless rung switching", () => {
       setTime(seconds: number) {
         currentTime = seconds;
       },
+      /** The viewer moves the play head. */
+      seek(seconds: number) {
+        currentTime = seconds;
+        video.dispatchEvent(new Event("seeking"));
+      },
       setPlaying(playing: boolean) {
         paused = !playing;
       },
@@ -1194,23 +1276,81 @@ describe("seamless rung switching", () => {
     s.restore();
   });
 
-  it("adopts a level the engine forces in an emergency instead of fighting it", () => {
+  it("follows an engine emergency for one fragment, then decides again", () => {
     const s = session({ estimateBps: 20_000_000, bufferEnd: 12 });
     expect(drivenLevel(s.hls)).toBe(2);
+    // Past the opening seconds, whose rescues are not counted (see the
+    // region test below).
+    s.advance(6000);
 
     // hls.js's abandonment rules give up a fragment that will not arrive in
-    // time and pick a cheaper rung, writing it through the controller.
+    // time and pick a cheaper rung, writing it through the controller. That
+    // fragment is fetched at the engine's rung. One abandonment writes it
+    // twice — the rung it first chose, then the cheapest that can make it —
+    // and that is one rescue, not two.
+    s.hls.nextAutoLevel = 1;
     s.hls.nextAutoLevel = 0;
     expect(drivenLevel(s.hls)).toBe(0);
 
-    // The estimate is still the optimistic one from before the collapse; the
-    // policy must not climb straight back into the rung that just failed.
+    // Once it has landed the policy decides again from the link. Production
+    // adopted the engine's 144p as the rung after one slow first read of a
+    // region, and took over a minute to climb back on a 40 Mbps link.
+    s.advance(1000);
+    s.buffer(0, 12, 14);
+    expect(drivenLevel(s.hls)).toBe(2);
+    expect(s.flushes).toEqual([]);
+
+    // A second emergency inside the window is not a one-off: the policy comes
+    // back one rung lower than the rung that needed rescuing.
+    s.advance(1000);
+    s.hls.nextAutoLevel = 0;
+    expect(drivenLevel(s.hls)).toBe(0);
+    s.advance(1000);
+    s.buffer(0, 14, 16);
+    expect(drivenLevel(s.hls)).toBe(1);
+
+    // A third is a link that really cannot carry it: the engine's rung is
+    // adopted, and the climb waits like it does after a stall.
+    s.advance(1000);
+    s.hls.nextAutoLevel = 0;
     for (let index = 0; index < 3; index += 1) {
       s.advance(1000);
-      s.buffer(0, 12 + index * 2, 14 + index * 2);
+      s.buffer(0, 16 + index * 2, 18 + index * 2);
     }
     expect(drivenLevel(s.hls)).toBe(0);
-    expect(s.flushes).toEqual([]);
+    s.restore();
+  });
+
+  it("does not let an emergency abandonment reset the estimate to the rung it fled to", () => {
+    const s = session({ estimateBps: 20_000_000, bufferEnd: 12 });
+    expect(drivenLevel(s.hls)).toBe(2);
+    const abr = (
+      s.hls as unknown as {
+        abr: {
+          resets: Array<number | undefined>;
+          resetEstimator(value?: number): void;
+        };
+      }
+    ).abr;
+
+    // The abandonment's reset carries the price of the rung it switched to.
+    // Production logged exactly that (561937 bps, the bottom rung) as the
+    // estimate on a 40 Mbps link; every decision after it started from 144p.
+    abr.resetEstimator(561_937);
+    expect(abr.resets).toEqual([]);
+    expect(
+      (
+        window as unknown as {
+          __seyirlikAbr: () => { log: Array<{ event: string }> };
+        }
+      )
+        .__seyirlikAbr()
+        .log.some((entry) => entry.event === "estimate-reset-refused"),
+    ).toBe(true);
+
+    // A reset without a value is the engine starting over, and is kept.
+    abr.resetEstimator();
+    expect(abr.resets).toEqual([undefined]);
     s.restore();
   });
 
@@ -1423,7 +1563,7 @@ describe("seamless rung switching", () => {
     s.restore();
   });
 
-  it("lets an automatic climb with ample headroom replace lower-rung media beyond ten seconds", () => {
+  it("lets an automatic climb with ample headroom replace lower-rung media beyond four seconds", () => {
     const s = session({ estimateBps: 900_000, currentTime: 4, bufferEnd: 40 });
     expect(drivenLevel(s.hls)).toBe(0);
     s.hls.bandwidthEstimate = 6_000_000; // 2x the 720p peak
@@ -1433,14 +1573,16 @@ describe("seamless rung switching", () => {
     }
     expect(drivenLevel(s.hls)).toBe(1);
     expect(s.flushes).toHaveLength(1);
-    // The new rung takes over at the first boundary past 4 + 10 s, cut
-    // halfway in; nothing nearer than that is touched, audio never.
+    // Four seconds are retained, which the fetch margin (latency plus the
+    // new rung's first fragment, doubled) already exceeds here: the new rung
+    // takes over at the first boundary past that margin, cut 0.4 s in;
+    // nothing nearer than that is touched, audio never.
     expect(s.flushes[0]?.type).toBe("video");
-    expect(s.flushes[0]?.startOffset).toBe(14.4);
+    expect(s.flushes[0]?.startOffset).toBe(10.4);
     s.restore();
   });
 
-  it("keeps twenty seconds on a climb the link has little room for", () => {
+  it("keeps sixteen seconds on a climb the link has little room for", () => {
     const s = session({ estimateBps: 900_000, currentTime: 4, bufferEnd: 40 });
     s.hls.levels = [
       { width: 640, height: 360, bitrate: 700_000 },
@@ -1458,9 +1600,9 @@ describe("seamless rung switching", () => {
     }
     expect(drivenLevel(s.hls)).toBe(1);
     // Affordable on average but not with room on its peak: the climb is
-    // partly a guess, so twice as much of the old buffer stays.
+    // partly a guess, so sixteen seconds of the old buffer stay.
     expect(s.flushes).toHaveLength(1);
-    expect(s.flushes[0]?.startOffset).toBe(24.4);
+    expect(s.flushes[0]?.startOffset).toBe(20.4);
     s.restore();
   });
 
@@ -1504,6 +1646,143 @@ describe("seamless rung switching", () => {
     expect(s.hls.loadLevel).toBe(-1);
     expect(drivenLevel(s.hls)).toBe(2);
     expect(s.flushes).toHaveLength(flushesAfterLock);
+    s.restore();
+  });
+
+  it("refetches a seek target buffered at a lower rung than the one now wanted", () => {
+    // Production: 360p locked for half a minute, then Auto at 2160p, then a
+    // seek back into that half minute played 360p for thirty seconds.
+    const s = session({
+      estimateBps: 20_000_000,
+      currentTime: 30,
+      bufferEnd: 40,
+      fragmentLevel: 0,
+    });
+    expect(drivenLevel(s.hls)).toBe(2);
+    s.flushes.length = 0;
+
+    s.seek(11);
+    // The lower-rung stretch from the fragment under the target onwards.
+    expect(s.flushes).toEqual([
+      { startOffset: 10, endOffset: 40, type: "video" },
+    ]);
+    s.restore();
+  });
+
+  it("keeps a seek back instant over media already at the wanted rung", () => {
+    const s = session({
+      estimateBps: 20_000_000,
+      currentTime: 30,
+      bufferEnd: 40,
+      fragmentLevel: 2,
+    });
+    expect(drivenLevel(s.hls)).toBe(2);
+    s.flushes.length = 0;
+    s.seek(11);
+    expect(s.flushes).toEqual([]);
+    s.restore();
+  });
+
+  it("restores a forward-buffer cap the engine lowered and never raised again", () => {
+    const s = session({ estimateBps: 20_000_000, bufferEnd: 12 });
+    const config = s.hls.config as { maxMaxBufferLength: number };
+    expect(config.maxMaxBufferLength).toBe(60);
+
+    // hls.js halves it on a fragment still tracked as appending, which a
+    // replacement cutting the buffer mid-flight produces.
+    config.maxMaxBufferLength = 7.5;
+    s.buffer(2, 12, 14);
+    expect(config.maxMaxBufferLength).toBe(7.5);
+
+    // A real quota problem lowers it again within a fragment; a spurious one
+    // is not left to starve the session.
+    s.advance(16_000);
+    s.buffer(2, 14, 16);
+    expect(config.maxMaxBufferLength).toBe(60);
+    s.restore();
+  });
+
+  it("keeps at most thirty seconds behind the play head", () => {
+    session({ estimateBps: 20_000_000 }).restore();
+    expect(
+      (hlsMock.instances[0]!.config as { backBufferLength?: number })
+        .backBufferLength,
+    ).toBe(30);
+  });
+
+  it("reports what Auto would choose, not what a mode or the screen shows", () => {
+    const s = session({ estimateBps: 20_000_000, bufferEnd: 12 });
+    s.attachment.adaptiveController?.setQualityHeight(null, 720, "low-data", {
+      immediate: true,
+    });
+    expect(drivenLevel(s.hls)).toBeLessThan(2);
+    expect(s.attachment.adaptiveController?.getAutoTargetHeight?.()).toBe(1080);
+    s.restore();
+  });
+
+  it("lets the engine abandon a fragment only when the buffer is actually short", () => {
+    // Harness, cold first reads: a 1080p fragment abandoned for 144p with
+    // fifteen seconds buffered, two seconds of the bottom rung mid-playback.
+    const s = session({
+      estimateBps: 20_000_000,
+      currentTime: 0,
+      bufferEnd: 15,
+    });
+    const abr = (
+      s.hls as unknown as {
+        abr: { abandonChecks: number; _abandonRulesCheck: () => void };
+      }
+    ).abr;
+    abr._abandonRulesCheck();
+    expect(abr.abandonChecks).toBe(0);
+
+    // Four seconds left: the engine's own rule decides.
+    s.setTime(11);
+    abr._abandonRulesCheck();
+    expect(abr.abandonChecks).toBe(1);
+    s.restore();
+  });
+
+  it("does not count rescues from before a seek against the region after it", () => {
+    const s = session({
+      estimateBps: 20_000_000,
+      currentTime: 0,
+      bufferEnd: 4,
+    });
+    expect(drivenLevel(s.hls)).toBe(2);
+    s.advance(6000);
+    // Two rescues while playing.
+    for (const start of [4, 6]) {
+      s.advance(1000);
+      s.hls.nextAutoLevel = 0;
+      s.buffer(0, start, start + 2);
+    }
+    expect(drivenLevel(s.hls)).toBe(1);
+    // A seek to a cold region: its first rescue is a rescue, not an adoption.
+    s.seek(200);
+    s.advance(1000);
+    s.hls.nextAutoLevel = 0;
+    s.buffer(0, 200, 202);
+    expect(drivenLevel(s.hls)).toBeGreaterThan(0);
+    s.restore();
+  });
+
+  it("does not count the rescues of a region's first seconds", () => {
+    // Harness, cold first reads: three rescues straight after a seek reached
+    // the limit, and the engine filled a minute of 144p.
+    const s = session({
+      estimateBps: 20_000_000,
+      currentTime: 0,
+      bufferEnd: 4,
+    });
+    s.advance(6000);
+    s.seek(200);
+    for (const start of [200, 202, 204]) {
+      s.advance(500);
+      s.hls.nextAutoLevel = 0;
+      s.buffer(0, start, start + 2);
+    }
+    expect(drivenLevel(s.hls)).toBeGreaterThan(0);
     s.restore();
   });
 });

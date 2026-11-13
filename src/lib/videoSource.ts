@@ -45,6 +45,15 @@ export interface AdaptiveHlsController {
    * by.
    */
   getBandwidthEstimateBps(): number | undefined;
+  /**
+   * The rung class Auto would choose from the measured link right now,
+   * ignoring any mode's ceiling — the anchor Data Saver and Higher Quality are
+   * the neighbours of. The rung on screen is not that: after an emergency
+   * fetch or a seek it can be 144p for a moment on a fast link, and a mode
+   * picked then was capped by it (Data Saver at 144p, Higher Quality at 720p,
+   * measured on production).
+   */
+  getAutoTargetHeight?(): number | undefined;
 }
 
 export interface QualitySelectionOptions {
@@ -290,19 +299,95 @@ const REPLACE_CUT_SECONDS = 0.4;
  * window — the established practice: ExoPlayer discards lower-quality chunks
  * beyond a retained duration on an upgrade, dash.js calls it fast switching.
  *
- * The window is ten seconds when the measured link carries the new rung's
+ * The window is four seconds when the measured link carries the new rung's
  * *peak* rate with `AUTO_UPGRADE_HEADROOM` to spare, so the refill plainly
  * outpaces playback. Otherwise the climb is partly a guess — the buffer probe
- * climbs precisely because the estimate cannot be trusted — and twenty
+ * climbs precisely because the estimate cannot be trusted — and sixteen
  * seconds stay behind: if the guess is wrong, the ordinary step down and the
  * engine's abandonment have that long to act before the viewer could notice.
- * Steps down never replace anything: what is buffered is better than what
- * would replace it, and it is the buffer that protects the viewer from the
- * dip.
+ * It has to stay above `PROBE_BUFFER_SECONDS`, which is the buffer the probe's
+ * grace is judged by: at ten, the probe's own replacement left the buffer
+ * under it and the grace ended a second after the climb. Steps
+ * down never replace anything: what is buffered is better than what would
+ * replace it, and it is the buffer that protects the viewer from the dip.
+ *
+ * Both were longer (ten and twenty seconds). Measured on production
+ * (2026-11-13, House of the Dragon over the tunnel at 40+ Mbps), the proven
+ * ten seconds kept 144p on screen for twenty to thirty seconds after every
+ * drop, because each rung of the walk back up kept its own ten: the viewer
+ * read that as Auto playing 144p on a link that carried 2160p.
  */
 const AUTO_UPGRADE_HEADROOM = 1.5;
-const AUTO_UPGRADE_RETAIN_SECONDS = 10;
-const AUTO_UPGRADE_UNPROVEN_RETAIN_SECONDS = 20;
+const AUTO_UPGRADE_RETAIN_SECONDS = 4;
+const AUTO_UPGRADE_UNPROVEN_RETAIN_SECONDS = 16;
+
+/**
+ * How much already-played media hls.js keeps behind the play head.
+ *
+ * Its default is unlimited. Measured on production in Chromium, a session
+ * held 425 s behind the play head and 1.8 s ahead of it: the media element's
+ * buffer is one quota for both directions, and the past had taken it. Thirty
+ * seconds still covers the ordinary "go back a bit" (the player's own skip is
+ * five) and keeps seeking back from showing a stale lower rung for minutes.
+ */
+const BACK_BUFFER_SECONDS = 30;
+
+/**
+ * How long hls.js's forward-buffer cap stays lowered before it is restored.
+ *
+ * hls.js halves `maxMaxBufferLength` whenever it meets a fragment it still
+ * tracks as appending, or the media buffer reports itself full, and never
+ * raises it again. Replacements cut the video buffer while fragments are in
+ * flight, which produces exactly that state, so a session that had seen a few
+ * quality picks was left loading two seconds ahead for good — every hiccup a
+ * stall, every stall another 40% off the budget. A real quota problem lowers
+ * it again within a fragment; a spurious one no longer lasts the session.
+ */
+const FORWARD_BUFFER_RESTORE_AFTER_MS = 15_000;
+
+/**
+ * Emergency abandonments that are treated as one-fragment rescues.
+ *
+ * When a fragment will not arrive before the buffer runs out, hls.js fetches
+ * the gap at the cheapest rung that can make it — 144p when the buffer is
+ * nearly empty. That is the right answer for those two seconds, and the wrong
+ * one for the session: production showed every cold first read of a region
+ * (a seek, an open) adopted as the rung and climbed back from over a minute.
+ * So a rescue covers the fragment it was for, and the policy then decides
+ * again from the link. Repeated rescues are evidence of a real problem, and
+ * past this many inside the window the engine's rung is adopted as before.
+ */
+const RESCUES_BEFORE_ADOPTING = 2;
+const RESCUE_WINDOW_MS = 30_000;
+
+/**
+ * Below this much forward buffer the engine may abandon a fragment; above it,
+ * it may not.
+ *
+ * hls.js abandons when its estimate of the fragment's finish time exceeds the
+ * buffer, and that estimate leans on the first-byte latency it has seen —
+ * which a cold first read of a region from the Drive mount inflates for one
+ * request. Measured in the harness with fifteen seconds buffered, a 1080p
+ * fragment was abandoned for 144p mid-playback: two seconds of the bottom rung
+ * dropped into the middle of the top one. With six seconds or more in hand a
+ * two-second fragment is not about to cause a stall; if it really is stuck the
+ * buffer drains to this floor and the engine's rule applies then, choosing a
+ * rung that fits the buffer it actually has rather than the bottom one.
+ */
+const ABANDON_BUFFER_FLOOR_SECONDS = 6;
+
+/**
+ * How long a rung the probe climbed to and lost is left alone.
+ *
+ * Measured on production at 4 Mbps the probe climbed 480p -> 720p -> 1080p
+ * and fell back every fourteen seconds for as long as the session ran, which
+ * drained the buffer and twice ended in an abandonment to 144p. Each failure
+ * doubles the wait, up to the cap.
+ */
+const PROBE_BACKOFF_MS = 30_000;
+const PROBE_BACKOFF_MAX_MS = 240_000;
+/** A step down this soon after a probe climb counts as the probe failing. */
+const PROBE_FAILURE_WINDOW_MS = 30_000;
 
 /**
  * Longest forward buffer, in seconds of media.
@@ -376,14 +461,19 @@ if (typeof window !== "undefined") {
 /**
  * How much better than measured the probe is allowed to assume the link is.
  *
- * Three, against the policy's two-thirds safety margin, comes to a simple
- * rule: the probe may take a rung costing up to twice what the link has been
- * measured to carry — but only while the buffer says that measurement is the
- * thing that is wrong. Rungs sit between one and a half and two and a half
- * times apart in bitrate, so this reliably reaches the next one and rarely
- * more; the one-rung-per-turn clamp handles the ladders where it would.
+ * One and a half, against the policy's two-thirds safety margin, comes to a
+ * simple rule: the probe may take a rung whose average costs no more than the
+ * link has been measured to carry — the margin is waived, not the
+ * measurement — and only while the buffer says the margin is what is wrong.
+ *
+ * It was three (a rung costing up to twice the measured link). Measured on
+ * production at 4, 6 and 12 Mbps that always reached one rung the link could
+ * not carry, so the session lived in a sawtooth of probe, drain and fall:
+ * nine picture changes in thirty-six seconds at 6 Mbps. The trap the probe
+ * was built for — a low rung's small fragments reading the link low — is
+ * still escaped one affordable rung at a time.
  */
-const PROBE_BANDWIDTH_OPTIMISM = 3;
+const PROBE_BANDWIDTH_OPTIMISM = 1.5;
 
 /**
  * How long a rung the probe has just taken is protected from the estimate.
@@ -485,13 +575,56 @@ type AbrControllerClass = typeof Hls.DefaultConfig.abrController;
  * own answer is used until then. A level the engine sets itself (abandonment,
  * error fallback) is reported through `onEngineLevel` so the policy can adopt
  * it instead of immediately overriding the engine's emergency decision.
+ *
+ * One engine habit is refused: an emergency abandonment also *resets the
+ * bandwidth estimate* to the price of the rung it fled to. Production logged
+ * it as an estimate of exactly 561937 bps — the bottom rung's BANDWIDTH — on
+ * a 40 Mbps link, after one slow first read from the Drive mount. Every later
+ * decision then started from 144p's price and climbed back on 144p's small,
+ * latency-bound fragments. The abandonment has already sampled the slow
+ * transfer into the estimate, which is the honest part of the evidence; the
+ * reset only throws the history away. `onEstimateResetRefused` reports it.
  */
 export function createPolicyAbrController(
   readPolicyLevel: () => number | null,
   onEngineLevel: (level: number) => void,
+  onEstimateResetRefused: (bps: number) => void = () => undefined,
+  readBufferedAhead: () => number = () => 0,
 ): AbrControllerClass {
   const Base = Hls.DefaultConfig.abrController;
   return class SeyirlikPolicyAbrController extends Base {
+    constructor(...args: ConstructorParameters<AbrControllerClass>) {
+      super(...args);
+      /*
+       * See ABANDON_BUFFER_FLOOR_SECONDS. The engine schedules this check on a
+       * timer and calls it when a level loads, always through the property,
+       * so wrapping it here covers both.
+       */
+      const self = this as unknown as {
+        _abandonRulesCheck?: ((...rest: unknown[]) => void) | null;
+      };
+      const check = self._abandonRulesCheck;
+      if (typeof check === "function") {
+        self._abandonRulesCheck = (...rest: unknown[]) => {
+          if (readBufferedAhead() >= ABANDON_BUFFER_FLOOR_SECONDS) return;
+          check(...rest);
+        };
+      }
+    }
+    resetEstimator(abrEwmaDefaultEstimate?: number): void {
+      // With a value it is the abandonment's reset (or a caller writing
+      // `bandwidthEstimate`, which nothing here does). Without one it is the
+      // engine starting over for a new source, which is kept.
+      const hasHistory = Boolean(
+        (this as unknown as { bwEstimator?: unknown }).bwEstimator,
+      );
+      if (abrEwmaDefaultEstimate && hasHistory && readPolicyLevel() !== null) {
+        onEstimateResetRefused(abrEwmaDefaultEstimate);
+        return;
+      }
+      super.resetEstimator(abrEwmaDefaultEstimate as number);
+    }
+
     get nextAutoLevel(): number {
       const level = readPolicyLevel();
       const count = this.hls?.levels?.length ?? 0;
@@ -755,7 +888,10 @@ export function attachSourceToVideo(
       abrController: createPolicyAbrController(
         () => policyLevel,
         (level) => adoptEngineLevel(level),
+        (bps) => abrRecord("estimate-reset-refused", { bps: Math.round(bps) }),
+        () => bufferedAhead(),
       ),
+      backBufferLength: BACK_BUFFER_SECONDS,
       /*
        * Deliberately off. hls.js's own cap controller writes `autoLevelCapping`
        * on a timer, and this file writes it too whenever the viewer's choice
@@ -841,6 +977,19 @@ export function attachSourceToVideo(
       probe: boolean;
     } | null = null;
     let probeHoldUntil = 0;
+    /** The rung the probe last climbed to, and when; see PROBE_BACKOFF_MS. */
+    let lastProbe: { level: number; at: number } | null = null;
+    const probeBackoff = new Map<number, { until: number; delayMs: number }>();
+    /**
+     * An emergency fragment the engine fetched at a cheaper rung, and the rung
+     * the policy was on before it; see RESCUES_BEFORE_ADOPTING.
+     */
+    let rescue: { from: number; level: number } | null = null;
+    let rescueTimes: number[] = [];
+    /** When the play head last arrived somewhere new: the attach, or a seek. */
+    let regionStartedAt = Date.now();
+    /** When the forward-buffer cap was first seen lowered; see FORWARD_BUFFER_RESTORE_AFTER_MS. */
+    let forwardCapLoweredAt: number | null = null;
     let upswitchBlockedUntil = 0;
     let lastEvaluationAt = 0;
     let recentStallCount = 0;
@@ -895,8 +1044,76 @@ export function attachSourceToVideo(
       // the seek target is fetched from the locked rung anyway.
       pendingReplacement = null;
       clearLateTakeoverHold();
+      // A new region has its own cold first reads; rescues before the seek say
+      // nothing about it, and counting them adopted the first rescue after it.
+      rescueTimes = [];
+      regionStartedAt = Date.now();
+      refreshLowerRungAtSeek();
     };
     videoElement.addEventListener("seeking", onSeeking);
+
+    /**
+     * A seek into media buffered at a lower rung than the one now wanted
+     * refetches it at the wanted rung.
+     *
+     * Media already buffered is otherwise played as it is, whatever it was
+     * fetched at. Measured on production: 360p locked for half a minute, then
+     * Auto (2160p on a 47 Mbps link), then a seek back into that half minute —
+     * and 360p played for thirty seconds. The viewer's current choice is what
+     * they expect to see, and a seek already accepts a moment of waiting, so
+     * the stale stretch is cut from the fragment under the target onwards and
+     * the engine fetches it again at the current rung. Only video is cut; the
+     * shared audio rendition is the same at every rung. Media at the wanted
+     * rung or better is kept, so a seek back over what was just watched stays
+     * instant.
+     */
+    const refreshLowerRungAtSeek = () => {
+      const wanted = lockedHeight !== null ? manualLevel : policyLevel;
+      if (wanted === null || wanted < 0) return;
+      const target = videoElement.currentTime;
+      const fragments = [...bufferedMainFragments.entries()].sort(
+        (left, right) => left[1].start - right[1].start,
+      );
+      /*
+       * The fragment under the target, or failing that the first one after
+       * it: the target itself may already have been trimmed from the back
+       * buffer, in which case the engine fetches the gap at the wanted rung and
+       * then runs straight into the stale stretch that follows (measured: the
+       * gap at 1080p, then sixteen seconds of 360p). Anything the forward
+       * buffer would reach counts.
+       */
+      const firstIndex = fragments.findIndex(
+        ([, fragment]) =>
+          fragment.end > target &&
+          fragment.start <= target + MAX_FORWARD_BUFFER_SECONDS,
+      );
+      if (firstIndex < 0 || fragments[firstIndex]![1].level >= wanted) return;
+      // The contiguous stretch of lower-rung media from the target onwards.
+      let end = fragments[firstIndex]![1].end;
+      let last = firstIndex;
+      for (let index = firstIndex + 1; index < fragments.length; index += 1) {
+        const fragment = fragments[index]![1];
+        if (fragment.level >= wanted || fragment.start > end + 0.1) break;
+        end = fragment.end;
+        last = index;
+      }
+      const start = fragments[firstIndex]![1].start;
+      for (let index = firstIndex; index <= last; index += 1) {
+        bufferedMainFragments.delete(fragments[index]![0]);
+      }
+      abrRecord("seek-refresh", {
+        level: wanted,
+        fromLevel: fragments[firstIndex]![1].level,
+        startS: Number(start.toFixed(3)),
+        endS: Number(end.toFixed(3)),
+      });
+      hls.trigger(Hls.Events.BUFFER_FLUSHING, {
+        startOffset: start,
+        endOffset: end,
+        type: "video",
+      });
+      if (!hls.bufferingEnabled) hls.resumeBuffering();
+    };
 
     const levelAtOrBelow = (height: number | null): number => {
       if (height === null) return -1;
@@ -979,14 +1196,18 @@ export function attachSourceToVideo(
      * hls.js still measures throughput and manages buffering; only the choice
      * of rung moves here.
      */
-    const chooseAdaptiveLevel = (bandwidthOptimism = 1): number => {
+    const chooseAdaptiveLevel = (
+      bandwidthOptimism = 1,
+      mode: AutomaticQualityMode = adaptiveMode,
+      ceiling: number | null = maximumHeight,
+    ): number => {
       const rungs = adaptiveRungs();
       if (rungs.length === 0) return -1;
 
       const eligible =
-        maximumHeight === null
+        ceiling === null
           ? rungs
-          : rungs.filter((rung) => rung.height <= maximumHeight!);
+          : rungs.filter((rung) => rung.height <= ceiling);
       // Every rung is above the ceiling, so the cheapest honours it best.
       const pool = eligible.length > 0 ? eligible : [rungs[0]!];
 
@@ -997,7 +1218,7 @@ export function attachSourceToVideo(
         estimate > 0
           ? estimate
           : undefined;
-      const target = selectAdaptiveTargetRung(pool, adaptiveMode, {
+      const target = selectAdaptiveTargetRung(pool, mode, {
         bandwidthBps:
           measured === undefined ? undefined : measured * bandwidthOptimism,
         displayHeight: videoElement.getBoundingClientRect().height || undefined,
@@ -1041,6 +1262,9 @@ export function attachSourceToVideo(
       const previous = policyLevel;
       policyLevel = level;
       appliedLevel = level;
+      if (reason === "probe-up") lastProbe = { level, at: Date.now() };
+      else if (previous !== null && level < previous)
+        noteProbeFailure(previous);
       /*
        * A step down is also told to the engine's abandonment rules, which then
        * treat a higher-rung fragment still downloading as blocking the switch.
@@ -1081,31 +1305,106 @@ export function attachSourceToVideo(
       }
     };
 
+    /** See PROBE_BACKOFF_MS: a rung the probe climbed to and promptly lost. */
+    const noteProbeFailure = (level: number) => {
+      const now = Date.now();
+      if (
+        !lastProbe ||
+        lastProbe.level !== level ||
+        now - lastProbe.at > PROBE_FAILURE_WINDOW_MS
+      ) {
+        return;
+      }
+      lastProbe = null;
+      const previous = probeBackoff.get(level);
+      const delayMs = previous
+        ? Math.min(previous.delayMs * 2, PROBE_BACKOFF_MAX_MS)
+        : PROBE_BACKOFF_MS;
+      probeBackoff.set(level, { until: now + delayMs, delayMs });
+      abrRecord("probe-backoff", {
+        level,
+        height: hls.levels[level]?.height,
+        delayMs,
+      });
+    };
+
     /*
      * The engine overruled the policy: it abandoned a fragment that would not
      * arrive before the buffer ran dry, or fell back from a rung whose delivery
      * failed. Both are emergencies the engine is better placed to see, so the
-     * policy adopts the level rather than steering straight back into the
-     * problem, and a downward one is treated like a stall for climbing.
+     * policy follows the level rather than steering straight back into the
+     * problem.
+     *
+     * A step down is followed for the fragment it was for and no longer (see
+     * RESCUES_BEFORE_ADOPTING): once that fragment has landed the policy
+     * decides again from the link (`endRescue`). Rescues that keep coming are
+     * adopted as the rung, and treated like a stall for climbing, as before.
      */
     adoptEngineLevel = (level: number) => {
       if (lockedHeight !== null || level === appliedLevel) return;
+      const now = Date.now();
+      const downward = appliedLevel !== null && level < appliedLevel;
+      rescueTimes = rescueTimes.filter((at) => now - at <= RESCUE_WINDOW_MS);
+      /*
+       * Like a stall (SEEK_STALL_GRACE_MS), a rescue in the first seconds of a
+       * region is the region's cold first reads, not the link: measured in the
+       * harness, three in a row right after a seek reached the limit and the
+       * engine then filled a minute of 144p. They are rescued and not counted.
+       */
+      const regionStarting = now - regionStartedAt < SEEK_STALL_GRACE_MS;
+      // One abandonment writes the level twice (the rung it first chose, then
+      // the cheapest that can make it), which is one rescue, not two.
+      const asRescue =
+        downward &&
+        (rescue !== null || rescueTimes.length < RESCUES_BEFORE_ADOPTING);
       abrRecord("engine-level", {
         from: appliedLevel,
         to: level,
         height: hls.levels[level]?.height,
         estimateBps: Math.round(hls.bandwidthEstimate || 0),
         bufferedAheadS: Number(bufferedAhead().toFixed(1)),
+        rescue: asRescue,
       });
-      if (appliedLevel !== null && level < appliedLevel) {
-        upswitchBlockedUntil = Date.now() + STALL_UPSWITCH_BLOCK_MS;
+      if (downward) {
+        noteProbeFailure(appliedLevel!);
         probeHoldUntil = 0;
+        if (asRescue) {
+          // A second step down inside the same rescue keeps its origin.
+          if (!rescue && !regionStarting) rescueTimes.push(now);
+          rescue = { from: rescue?.from ?? appliedLevel!, level };
+        } else {
+          rescue = null;
+          upswitchBlockedUntil = now + STALL_UPSWITCH_BLOCK_MS;
+        }
+      } else {
+        rescue = null;
       }
       upgradeCandidate = null;
       appliedLevelMeasured = false;
-      levelDecidedAt = Date.now();
+      levelDecidedAt = now;
       policyLevel = level;
       appliedLevel = level;
+    };
+
+    /**
+     * The rescue fragment has landed: decide again from the link, no higher
+     * than the rung the policy was on before it. hls.js has already sampled the
+     * slow transfer that caused the abandonment into its estimate, so a link
+     * that really fell is followed down by the ordinary rule; a slow first read
+     * of a region costs the one fragment.
+     */
+    const endRescue = () => {
+      const pending = rescue;
+      if (!pending) return;
+      rescue = null;
+      // A second rescue inside the window has not been a one-off: come back
+      // one rung lower than the rung that needed it.
+      const ceiling = rescueTimes.length > 1 ? pending.from - 1 : pending.from;
+      const back = Math.min(chooseAdaptiveLevel(), ceiling);
+      if (back > (appliedLevel ?? -1)) {
+        upgradeCandidate = null;
+        driveLevel(back, "rescue-over");
+      }
     };
 
     /** End of the buffered range under the play head, or null if none. */
@@ -1504,9 +1803,18 @@ export function attachSourceToVideo(
          * session cycled 1080p -> 1440p -> 2160p -> 1080p indefinitely.
          */
         const optimistic = chooseAdaptiveLevel(PROBE_BANDWIDTH_OPTIMISM);
-        if (optimistic > current) {
+        const backoff = probeBackoff.get(current + 1);
+        if (optimistic > current && !(backoff && now < backoff.until)) {
           target = Math.min(optimistic, current + 1);
           probing = true;
+        } else if (optimistic >= current) {
+          /*
+           * The rung in hand is one the probe would take now: the link carries
+           * its average and the buffer is full. Stepping down only to probe
+           * back up a few seconds later is the sawtooth the probe's own rule
+           * exists to prevent, so it is kept for as long as the buffer agrees.
+           */
+          target = current;
         }
       }
 
@@ -1600,6 +1908,20 @@ export function attachSourceToVideo(
         }
         upgradeCandidate = null;
         appliedLevel = null;
+        /*
+         * A probe's grace protects a guess the policy made from the buffer; it
+         * says nothing about a mode the viewer has just asked for. Left in
+         * place it made this evaluation return early, and the pick below then
+         * replaced the buffer with the probe's rung — measured on production,
+         * Data Saver took over with 1440p on a 12 Mbps link, which the engine
+         * abandoned to 144p for most of a minute. Only for the viewer's own
+         * pick: resizes and the player's periodic re-apply come through here
+         * too, and must leave a running probe alone.
+         */
+        if (immediate) {
+          probeHoldUntil = 0;
+          rescue = null;
+        }
         evaluateAdaptiveTarget(true);
         /*
          * A mode the viewer just picked (Auto, Data Saver, Higher Quality) is
@@ -1735,6 +2057,8 @@ export function attachSourceToVideo(
         ) {
           clearLateTakeoverHold();
         }
+        if (rescue && fragment.level <= rescue.level) endRescue();
+        restoreForwardBufferCap();
       }
       // Re-checks the old-rung fetch it was waiting on, and waits again if
       // the engine has already started another one.
@@ -1748,6 +2072,25 @@ export function attachSourceToVideo(
           measuredFragments >= STARTUP_CONFIRMING_FRAGMENTS,
       );
     });
+
+    /** See FORWARD_BUFFER_RESTORE_AFTER_MS. */
+    const restoreForwardBufferCap = () => {
+      const cap = hls.config?.maxMaxBufferLength;
+      if (typeof cap !== "number" || cap >= MAX_FORWARD_BUFFER_SECONDS) {
+        forwardCapLoweredAt = null;
+        return;
+      }
+      const now = Date.now();
+      if (forwardCapLoweredAt === null) {
+        forwardCapLoweredAt = now;
+        abrRecord("forward-buffer-lowered", { capS: Number(cap.toFixed(1)) });
+        return;
+      }
+      if (now - forwardCapLoweredAt < FORWARD_BUFFER_RESTORE_AFTER_MS) return;
+      abrRecord("forward-buffer-restored", { fromS: Number(cap.toFixed(1)) });
+      hls.config.maxMaxBufferLength = MAX_FORWARD_BUFFER_SECONDS;
+      forwardCapLoweredAt = null;
+    };
 
     hls.on(Hls.Events.BUFFER_FLUSHED, () => {
       // Fragments the engine evicted (back-buffer housekeeping, a seek's
@@ -1884,12 +2227,21 @@ export function attachSourceToVideo(
         decodedWidth: videoElement.videoWidth,
         decodedHeight: videoElement.videoHeight,
         estimateBps: Math.round(hls.bandwidthEstimate || 0),
+        forwardBufferCapS: hls.config?.maxMaxBufferLength,
+        rescue,
+        probeBackoff: Object.fromEntries(
+          [...probeBackoff].map(([level, entry]) => [
+            level,
+            Math.max(0, entry.until - Date.now()),
+          ]),
+        ),
         opening,
         measuredFragments,
         deliveredBps: Math.round(deliveredThroughput.estimateBps() ?? 0),
         bufferedAheadS: Number(bufferedAhead().toFixed(1)),
         recentStallCount,
         upswitchBlockedForMs: Math.max(0, upswitchBlockedUntil - Date.now()),
+        probeHoldForMs: Math.max(0, probeHoldUntil - Date.now()),
         pendingClimb: upgradeCandidate,
         ladder: hls.levels.map((rung, index) => ({
           index,
@@ -1934,6 +2286,17 @@ export function attachSourceToVideo(
           maximumHeight = maxHeight;
           adaptiveMode = mode;
           applyAdaptivePreference(selection.immediate === true);
+        },
+        getAutoTargetHeight: () => {
+          // What Auto would pick from the link right now, without any mode's
+          // ceiling: the anchor the menu's Data Saver and Higher Quality are
+          // one step either side of.
+          if (hls.levels.length === 0) return undefined;
+          const level = chooseAdaptiveLevel(1, "auto", requestedMaxHeight);
+          const rung = hls.levels[level];
+          return rung
+            ? canonicalRungClass(rung.width ?? 0, rung.height ?? 0)
+            : undefined;
         },
         getBandwidthEstimateBps: () => {
           const estimate = hls.bandwidthEstimate;
