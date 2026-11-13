@@ -8,7 +8,8 @@ import {
 import { useLanguage } from "../../../i18n/LanguageContext";
 import { describePartyNotice } from "../../../features/partyWatch/partyNotices";
 import { formatTemplate } from "../../../lib/format";
-import { DISC_COLOURS, type PartyDisc, type SahneParty } from "./sahneParty";
+import { PARTY_COLOURS } from "../../../features/partyWatch/partyColours";
+import type { PartyDisc, SahneParty } from "./sahneParty";
 
 const SINE = "cubic-bezier(0.37, 0, 0.63, 1)";
 const SINE_IN = "cubic-bezier(0.12, 0, 0.39, 0)";
@@ -238,7 +239,7 @@ export function SahnePartyStack({ party }: { party: SahneParty }) {
     >
       {party.connection === "joining" ? (
         <span className="sahne-party-dots" aria-label={t("party.status.joining")}>
-          {DISC_COLOURS.slice(0, 3).map((colour) => (
+          {PARTY_COLOURS.slice(0, 3).map((colour) => (
             <i key={colour.color} style={{ "--c": colour.color } as CSSProperties} />
           ))}
         </span>

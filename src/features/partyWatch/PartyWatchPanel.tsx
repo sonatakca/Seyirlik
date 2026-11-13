@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Check, Copy, Link2, Loader2, LogOut, Plus, X } from "lucide-react";
 import { useLanguage } from "../../i18n/LanguageContext";
 import type { TranslationKey } from "../../i18n/translations";
+import { partyColours } from "./partyColours";
 import type { PartyEndReason } from "./partySession";
 import type { PartyParticipant } from "./partyWatchTypes";
 import type { PartyStart, PartyWatch } from "./usePartyWatch";
@@ -50,6 +51,8 @@ export function PartyWatchPanel({
   );
   const state = party.state;
   const snapshot = state?.snapshot ?? null;
+  // Everyone in their user's colour, the same on every member's screen.
+  const colours = partyColours(snapshot?.participants ?? []);
   const connection = state?.connection ?? null;
   const inParty = party.groupId !== null && connection !== "ended";
 
@@ -153,6 +156,7 @@ export function PartyWatchPanel({
             >
               {(snapshot?.participants ?? []).map((participant) => {
                 const isSelf = participant.id === state?.selfId;
+                const colour = colours.get(participant.userId);
                 const note = memberNote(participant);
                 const dim = participant.presence !== "connected";
                 return (
@@ -164,11 +168,11 @@ export function PartyWatchPanel({
                   >
                     <span
                       aria-hidden="true"
-                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-black ${
-                        isSelf
-                          ? "bg-white text-black"
-                          : "bg-white/[0.1] text-white"
-                      }`}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-black"
+                      style={{
+                        background: colour?.color ?? "rgba(255,255,255,0.1)",
+                        color: colour?.ink ?? "#fff",
+                      }}
                     >
                       {initialOf(participant.displayName)}
                     </span>

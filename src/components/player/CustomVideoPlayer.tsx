@@ -5560,11 +5560,7 @@ export function CustomVideoPlayer({
     shouldShowPlayerChrome,
   ]);
 
-  const sahneParty = useSahneParty(
-    party?.state ?? null,
-    getCachedSession()?.displayName?.trim() || t("party.you"),
-    language,
-  );
+  const sahneParty = useSahneParty(party?.state ?? null, language);
   /*
    * Sahne shows one thing in the middle of the picture: the loading mark,
    * whatever is loading — the stream, a jump, or the party holding for
