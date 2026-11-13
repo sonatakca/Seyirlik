@@ -1218,9 +1218,20 @@ export function attachSourceToVideo(
         estimate > 0
           ? estimate
           : undefined;
-      const target = selectAdaptiveTargetRung(pool, mode, {
+      /*
+       * A Data Saver ceiling from the menu is already Data Saver's rung — one
+       * class under Auto's — so within it the policy answers as Auto would.
+       * Taking Data Saver's step again inside the ceiling put it two classes
+       * under Auto (production: 360p with Auto at 720p, 480p with Auto at
+       * 1080p). Higher Quality's ceiling is its step too, but stepping up
+       * inside a ceiling cannot pass it, so it needs no such care.
+       */
+      const effectiveMode =
+        mode === "low-data" && ceiling !== null ? "auto" : mode;
+      const target = selectAdaptiveTargetRung(pool, effectiveMode, {
         bandwidthBps:
           measured === undefined ? undefined : measured * bandwidthOptimism,
+        linkBps: measured,
         displayHeight: videoElement.getBoundingClientRect().height || undefined,
         devicePixelRatio:
           typeof window === "undefined" ? undefined : window.devicePixelRatio,

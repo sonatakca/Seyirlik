@@ -253,6 +253,13 @@ const UNMEASURED_ANCHOR_CEILING = 1080;
 export interface ModeSelectionContext {
   /** Measured link throughput in bits/second, if anything has measured it. */
   bandwidthBps?: number;
+  /**
+   * The measured link itself, when `bandwidthBps` has been scaled up by a
+   * probe's optimism. Higher Quality's step must fit the link, not the probe's
+   * guess about it: production at 12 Mbps swung between 1080p and 1440p once a
+   * minute while the probe's allowance passed a rung the link could not carry.
+   */
+  linkBps?: number;
   displayHeight?: number;
   devicePixelRatio?: number;
   saveData?: boolean;
@@ -442,7 +449,7 @@ export function selectAdaptiveTargetRung<T extends RungLike>(
   if (mode === "low-data") return lowData ?? anchor;
   if (mode === "higher-resolution") {
     const wanted = higher ?? anchor;
-    const link = context.bandwidthBps;
+    const link = context.linkBps ?? context.bandwidthBps;
     if (!wanted || !anchor || link === undefined) return wanted;
     const fits = (rung: T) => !rung.bitrate || rung.bitrate <= link;
     if (fits(wanted)) return wanted;

@@ -1785,6 +1785,18 @@ describe("seamless rung switching", () => {
     expect(drivenLevel(s.hls)).toBeGreaterThan(0);
     s.restore();
   });
+
+  it("treats a Data Saver ceiling as Data Saver's rung, not a place to step down from", () => {
+    // Production: the menu passed 480p (one class under Auto's 720p) and the
+    // policy stepped down again inside it, to 360p.
+    const s = session({ estimateBps: 20_000_000, bufferEnd: 12 });
+    expect(drivenLevel(s.hls)).toBe(2);
+    s.attachment.adaptiveController?.setQualityHeight(null, 720, "low-data", {
+      immediate: true,
+    });
+    expect(drivenLevel(s.hls)).toBe(1);
+    s.restore();
+  });
 });
 
 describe("the replacement cut", () => {

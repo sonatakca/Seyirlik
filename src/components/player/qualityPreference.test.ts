@@ -806,6 +806,16 @@ describe("selectAdaptiveTargetRung", () => {
     ).toBe(720);
   });
 
+  it("judges Higher Quality's step by the link, not a probe's allowance", () => {
+    // A probe scales the bandwidth it passes; the step must still fit the link.
+    expect(
+      selectAdaptiveTargetRung(full, "higher-resolution", {
+        bandwidthBps: 12_000_000,
+        linkBps: 8_000_000,
+      })?.height,
+    ).toBe(1440);
+  });
+
   it("does not step Higher Quality onto a rung the link cannot carry", () => {
     // 120 kbps measured: no floor is worth a rung that cannot be delivered.
     expect(
