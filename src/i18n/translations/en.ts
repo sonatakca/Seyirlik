@@ -793,6 +793,10 @@ export const en = {
   "player.endsAt": "Ends {time}",
   "player.minutesLeft": "{minutes} min left",
   "player.allSettings": "All settings",
+  "player.party.droppedTitle": "You dropped out of the party",
+  "player.party.droppedBody":
+    "The party carries on without you. Rejoin to watch together again; to watch on your own, reload the page.",
+  "player.party.rejoin": "Rejoin the party",
   "player.mute": "Mute",
   "player.unmute": "Unmute",
   "player.volume": "Volume",

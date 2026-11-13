@@ -37,7 +37,11 @@ import { Tooltip } from "../../ui/Tooltip";
 import { formatTime } from "../PlayerControls";
 import { SeekBar } from "../SeekBar";
 import { VolumeControl } from "../VolumeControl";
+import type { PartyLocalState } from "../../../features/partyWatch/usePartyPlayback";
 import { rectFor, type SahneLayout, type SahneMode } from "./sahneGeometry";
+import type { SahneParty } from "./sahneParty";
+import { SahnePartyStack } from "./SahnePartyStack";
+import { SahnePartyStage } from "./SahnePartyStage";
 import "./sahne.css";
 
 export interface SahneChromeProps {
@@ -94,6 +98,13 @@ export interface SahneChromeProps {
   facts: string[];
   overview: string | null;
   onPlayQueueItem?: (itemId: string) => void;
+
+  /** The party, when there is one: its people, news and the viewer's place in it. */
+  party: SahneParty;
+  partyLocalState: PartyLocalState | null;
+  onPartyRejoin: () => void;
+  /** Brings the controls back, for news that is drawn on them (a jump). */
+  onShowControls: () => void;
 }
 
 const ICON = "flex h-11 w-11 shrink-0 items-center justify-center rounded-full";
@@ -266,6 +277,17 @@ export function SahneChrome(props: SahneChromeProps) {
       data-sahne-lobby={lobbyOpen ? "" : undefined}
       style={rootStyle}
     >
+      <SahnePartyStage
+        party={props.party}
+        picture={rectFor(layout, mode)}
+        bar={{ x: ui.x, y: ui.y + ui.h + 10 + 14, w: ui.w }}
+        currentTime={currentTime}
+        duration={duration}
+        localState={props.partyLocalState}
+        onRejoin={props.onPartyRejoin}
+        onShowControls={props.onShowControls}
+      />
+
       <header
         className="sahne-ui sahne-top"
         data-sahne-shown={shown ? "" : undefined}
@@ -297,7 +319,10 @@ export function SahneChrome(props: SahneChromeProps) {
             </p>
           ) : null}
         </div>
-        <div className="sahne-top-actions">{topActions}</div>
+        <div className="sahne-top-actions">
+          <SahnePartyStack party={props.party} />
+          {topActions}
+        </div>
       </header>
 
       <section
@@ -544,6 +569,7 @@ export function SahneChrome(props: SahneChromeProps) {
                   tabIndex={isLobby ? 0 : -1}
                   data-strip-current={isCurrent ? "" : undefined}
                   disabled={isCurrent || !props.onPlayQueueItem}
+                  aria-current={isCurrent ? "true" : undefined}
                   onClick={() => props.onPlayQueueItem?.(stripItem.Id)}
                   className={`sahne-card${isCurrent ? " sahne-card--now" : ""}`}
                 >
@@ -551,9 +577,7 @@ export function SahneChrome(props: SahneChromeProps) {
                     {still ? <img src={still} alt="" loading="lazy" /> : null}
                   </span>
                   <span className="sahne-card-meta">
-                    {isCurrent
-                      ? t("player.nowPlaying")
-                      : stripNumber(stripItem, language)}
+                    {stripNumber(stripItem, language)}
                   </span>
                   <span className="sahne-card-title">
                     {stripTitle(stripItem, language)}

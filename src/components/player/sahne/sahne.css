@@ -137,6 +137,9 @@
 /* The bar above the picture. */
 .sahne-top {
   position: absolute;
+  /* Above the lobby, so the panels the bar opens (the party, details) are
+     never covered by the lobby's own columns. */
+  z-index: 3;
   top: 0;
   left: var(--sahne-g);
   right: var(--sahne-g);
@@ -175,8 +178,9 @@
 .sahne-top-episode {
   display: flex;
   min-width: 0;
-  align-items: baseline;
-  gap: 10px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
   margin: 0;
 }
 .sahne-top-episode b {
@@ -203,6 +207,7 @@
 /* The deck: the picture's base, exactly as wide as the picture. */
 .sahne-deck {
   position: absolute;
+  z-index: 2;
   left: var(--sahne-ux);
   top: calc(var(--sahne-uy) + var(--sahne-uh) + 10px);
   width: var(--sahne-uw);
@@ -388,7 +393,8 @@
 }
 .sahne-strip-row {
   display: flex;
-  gap: 14px;
+  gap: 6px;
+  margin-left: -8px;
   padding: 2px var(--sahne-g) 6px 0;
   overflow-x: auto;
   scrollbar-width: none;
@@ -402,9 +408,15 @@
 .sahne-card {
   display: grid;
   flex: none;
-  width: 236px;
+  width: 252px;
   gap: 2px;
+  padding: 8px;
+  border-radius: 16px;
   text-align: left;
+  transition: background-color 0.2s;
+}
+.sahne-card--now {
+  background: rgba(255, 255, 255, 0.1);
 }
 .sahne-card:disabled {
   cursor: default;
@@ -430,9 +442,7 @@
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.28);
   transform: translateY(-2px);
 }
-.sahne-card--now .sahne-card-still {
-  box-shadow: 0 0 0 2px var(--accent);
-}
+
 .sahne-card-meta {
   color: rgba(226, 232, 240, 0.52);
   font-size: 0.6875rem;
@@ -441,7 +451,7 @@
   text-transform: uppercase;
 }
 .sahne-card--now .sahne-card-meta {
-  color: var(--accent);
+  color: rgba(226, 232, 240, 0.72);
 }
 .sahne-card-title {
   overflow: hidden;
@@ -472,5 +482,322 @@
   .sahne,
   .sahne * {
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---------- The party ---------- */
+
+/* The people, beside the top buttons: a disc each, overlapping, rimmed in
+   the room's colour so they read as separate. */
+.sahne-party {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 44px;
+  margin-right: 12px;
+  padding-left: 8px;
+}
+.sahne-disc {
+  position: relative;
+  display: grid;
+  flex: none;
+  margin-left: -8px;
+  border-radius: 9999px;
+  transition: transform 0.5s cubic-bezier(0.37, 0, 0.63, 1);
+}
+.sahne-disc-face {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 9999px;
+  background: var(--c);
+  color: var(--ink-on, #0a0b0c);
+  box-shadow: 0 0 0 2px #050607, 0 4px 10px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+}
+.sahne-disc-veil {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: #050607;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.4s cubic-bezier(0.37, 0, 0.63, 1);
+}
+.sahne-disc-ring {
+  position: absolute;
+  inset: -6px;
+  width: 42px;
+  height: 42px;
+  pointer-events: none;
+  animation: sahne-in 0.3s cubic-bezier(0.61, 1, 0.88, 1) both;
+}
+.sahne-spin {
+  transform-origin: 50% 50%;
+  animation: sahne-turn 1.1s linear infinite;
+}
+@keyframes sahne-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes sahne-in {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+}
+/* Waiting for someone: the others step back. */
+.sahne-party[data-waiting] .sahne-disc:not([data-waiting]) .sahne-disc-veil {
+  opacity: 0.55;
+}
+/* A lost connection: the stack comes a little apart and dims until it is back. */
+.sahne-party[data-connection="reconnecting"] .sahne-disc {
+  transform: translateX(var(--spread));
+}
+.sahne-party[data-connection="reconnecting"] .sahne-disc-veil {
+  opacity: 0.45;
+}
+/* Joining: three dots step in turn, then grow into the people. */
+.sahne-party-dots {
+  display: flex;
+  gap: 6px;
+  margin-right: 4px;
+}
+.sahne-party-dots i {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: var(--c);
+  animation: sahne-step 0.76s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+}
+.sahne-party-dots i:nth-child(2) {
+  animation-delay: 0.14s;
+}
+.sahne-party-dots i:nth-child(3) {
+  animation-delay: 0.28s;
+}
+@keyframes sahne-step {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-5px);
+  }
+}
+/* The line under the stack. */
+.sahne-party-caption {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: -8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: sahne-drop 0.34s cubic-bezier(0.61, 1, 0.88, 1) both;
+}
+.sahne-party-caption--caps {
+  right: auto;
+  left: 50%;
+  translate: -50% 0;
+  font-size: 0.6875rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(226, 232, 240, 0.72);
+}
+.sahne-party-caption--note {
+  height: 40px;
+  padding: 0 16px 0 5px;
+  border-radius: 9999px;
+  background: rgba(12, 13, 14, 0.86);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12), 0 14px 40px rgba(0, 0, 0, 0.55);
+  font-size: 0.84375rem;
+  font-weight: 700;
+}
+.sahne-party-caption--note:not(:has(.sahne-disc-face)) {
+  padding-left: 16px;
+}
+.sahne-party-caption .sahne-disc-face {
+  box-shadow: none;
+}
+@keyframes sahne-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+  }
+}
+
+/* Someone else's pause or play, in the middle of the picture, signed. */
+.sahne-party-badge {
+  position: absolute;
+  width: 96px;
+  height: 96px;
+  margin: -48px 0 0 -48px;
+  pointer-events: none;
+  animation: sahne-badge 1.5s cubic-bezier(0.37, 0, 0.63, 1) both;
+}
+.sahne-party-badge-glyph {
+  display: grid;
+  width: 96px;
+  height: 96px;
+  place-items: center;
+  border-radius: 9999px;
+  background: rgba(12, 13, 14, 0.62);
+  color: #fff;
+}
+.sahne-party-badge-who {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  border-radius: 9999px;
+  box-shadow: 0 0 0 3px rgba(12, 13, 14, 0.9);
+}
+.sahne-party-badge-who .sahne-disc-face {
+  box-shadow: none;
+}
+@keyframes sahne-badge {
+  0% {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  16% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  78% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+
+/* Someone's jump on the seek bar. */
+.sahne-jump {
+  position: absolute;
+  left: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  transition: opacity 0.3s linear;
+}
+/* It lives on the seek bar; if the controls go, it goes with them. */
+.sahne[data-sahne-mode="full"] .sahne-jump {
+  opacity: 0;
+}
+.sahne-jump-trail {
+  position: absolute;
+  top: -3px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--c);
+}
+.sahne-jump-end {
+  position: absolute;
+  top: -7px;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  border-radius: 9999px;
+  background: var(--c);
+  box-shadow: 0 0 0 3px #050607, 0 3px 8px rgba(0, 0, 0, 0.5);
+}
+.sahne-jump-tag {
+  position: absolute;
+  left: 0;
+  bottom: 14px;
+  padding: 4px 9px;
+  border-radius: 9999px;
+  background: var(--c);
+  color: var(--ink-on, #0a0b0c);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+  font-size: 0.75rem;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Out of step with the party: a card over the dimmed picture, one way back. */
+.sahne-party-dim {
+  position: absolute;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  animation: sahne-fade 0.42s cubic-bezier(0.37, 0, 0.63, 1) both;
+}
+.sahne-party-card {
+  position: absolute;
+  display: grid;
+  width: min(26rem, calc(100vw - 2rem));
+  justify-items: center;
+  gap: 12px;
+  padding: 26px 30px 24px;
+  border-radius: 16px;
+  background: rgba(12, 13, 14, 0.9);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12), 0 24px 70px rgba(0, 0, 0, 0.6);
+  text-align: center;
+  translate: -50% -50%;
+  pointer-events: auto;
+  cursor: default;
+  animation: sahne-card 0.38s cubic-bezier(0.61, 1, 0.88, 1) both;
+}
+.sahne-party-card-people {
+  display: flex;
+  padding-left: 10px;
+}
+.sahne-party-card-people .sahne-disc-face {
+  margin-left: -10px;
+  box-shadow: 0 0 0 3px rgba(12, 13, 14, 0.95);
+}
+.sahne-party-card h2 {
+  margin: 4px 0 0;
+  font-size: 1.125rem;
+  font-weight: 900;
+}
+.sahne-party-card p {
+  margin: 0;
+  color: rgba(226, 232, 240, 0.72);
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+.sahne-party-card button {
+  height: 42px;
+  margin-top: 6px;
+  padding: 0 22px;
+  border-radius: 9999px;
+  background: #fff;
+  color: #08090a;
+  font-size: 0.875rem;
+  font-weight: 800;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.sahne-party-card button:hover {
+  transform: scale(1.03);
+}
+.sahne-party-card button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+@keyframes sahne-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes sahne-card {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.94);
   }
 }

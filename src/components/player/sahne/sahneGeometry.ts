@@ -31,7 +31,7 @@ export const SAHNE_TOP = 72;
 export const SAHNE_DECK = 132;
 /** What the lobby keeps under the picture: the deck and the settings rows. */
 const LOBBY_TOP = 80;
-const LOBBY_FOOT = 330;
+const LOBBY_FOOT = 344;
 const LOBBY_PICTURE_SHARE = 0.6;
 /** How long a paused film is left alone before its lobby opens by itself. */
 export const SAHNE_LOBBY_IDLE_MS = 4000;

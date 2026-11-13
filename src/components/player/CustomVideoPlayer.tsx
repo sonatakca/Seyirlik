@@ -65,6 +65,7 @@ import { PlayerQueuePanel } from "./PlayerQueuePanel";
 import { PlayerSettingsPanel } from "./PlayerSettingsPanel";
 import { SahneChrome } from "./sahne/SahneChrome";
 import { SahneGlow } from "./sahne/SahneGlow";
+import { useSahneParty } from "./sahne/sahneParty";
 import {
   rectFor,
   sahneLayout,
@@ -5541,6 +5542,23 @@ export function CustomVideoPlayer({
     shouldShowPlayerChrome,
   ]);
 
+  const sahneParty = useSahneParty(
+    party?.state ?? null,
+    getCachedSession()?.displayName?.trim() || t("party.you"),
+    language,
+  );
+  /*
+   * Sahne shows one thing in the middle of the picture: the loading mark,
+   * whatever is loading — the stream, a jump, or the party holding for
+   * someone or starting together. It never shows play or pause there.
+   */
+  const isSahneLoading =
+    isCenterPlayPauseLoading ||
+    partyWatch.isStartPending ||
+    partyWatch.localState === "syncing" ||
+    partyWatch.localState === "catching-up" ||
+    Boolean(party?.state?.snapshot?.hold);
+
   const playbackQueueLabel = playbackQueue
     ? playbackQueue.kind === "series"
       ? t("player.queueEpisodes")
@@ -5600,12 +5618,15 @@ export function CustomVideoPlayer({
               }}
               className="relative flex h-11 w-11 items-center justify-center rounded-full text-white/85 transition-[backdrop-filter] hover:bg-white/[0.12] hover:backdrop-blur-lg hover:duration-1000 duration-[500ms] hover:text-white focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
               aria-label={t("party.title")}
+              data-party-button
             >
               <Users size={18} fill={isInParty ? "#fff" : "none"} />
 
+              {/* Sahne shows the people as a stack beside the button instead. */}
               <span
                 className="pointer-events-none absolute inset-0"
                 aria-hidden="true"
+                hidden={isSahne}
               >
                 {isInParty ? (
                   Array.from({
@@ -6111,14 +6132,18 @@ export function CustomVideoPlayer({
             backTo={backTo ?? getMediaOwnerRouteForItem(item)}
             visible={shouldRenderPlayerChrome || isTimelinePreparing}
             isPlaying={progress.isPlaying}
-            isPlayPausePending={partyWatch.isStartPending}
-            isPlayPauseLoading={isCenterPlayPauseLoading}
+            isPlayPausePending={isSahne ? false : partyWatch.isStartPending}
+            isPlayPauseLoading={
+              isSahne ? isSahneLoading : isCenterPlayPauseLoading
+            }
             notice={notice}
             onTogglePlay={partyWatch.togglePlay}
             onControlsHoverStart={keepControlsVisible}
             onControlsHoverEnd={releaseControlsHover}
             seekFeedback={seekFeedback}
-            topRightControls={topActions}
+            // Sahne draws the same actions in its own bar; mounting them here too
+            // put a second party button and panel in the page.
+            topRightControls={isSahne ? undefined : topActions}
             chrome={isSahne ? "sahne" : "classic"}
           />
 
@@ -6148,7 +6173,7 @@ export function CustomVideoPlayer({
             ) : null}
           </AnimatePresence>
 
-          {party ? (
+          {party && !isSahne ? (
             <PartyWatchStatus party={party} playback={partyWatch} />
           ) : null}
 
@@ -6247,6 +6272,10 @@ export function CustomVideoPlayer({
               facts={sahneFacts}
               overview={sahneOverview}
               onPlayQueueItem={onPlayQueueItem ? handlePlayQueueItem : undefined}
+              party={sahneParty}
+              partyLocalState={isInParty ? partyWatch.localState : null}
+              onPartyRejoin={partyWatch.resumeWithParty}
+              onShowControls={revealPlayerChrome}
             />
           ) : (
           <PlayerControls
@@ -6351,7 +6380,7 @@ export function CustomVideoPlayer({
         </div>
       ) : null}
 
-      {!isViewModeEnabled && displayedPartyEventMessage ? (
+      {!isViewModeEnabled && !isSahne && displayedPartyEventMessage ? (
         <div className="pointer-events-none absolute bottom-[calc(max(1rem,env(safe-area-inset-bottom))+5.8rem)] left-[max(1rem,env(safe-area-inset-left))] z-40">
           <div
             className={`rounded-full border-[var(--accent)]/35 bg-black/72 px-3 py-1.5 text-xs font-bold text-white/[0.88] shadow-player-controls backdrop-blur-xl will-change-transform ${

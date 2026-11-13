@@ -789,6 +789,10 @@ export const tr = {
   "player.endsAt": "Bitiş {time}",
   "player.minutesLeft": "{minutes} dk kaldı",
   "player.allSettings": "Tüm ayarlar",
+  "player.party.droppedTitle": "Partiden koptun",
+  "player.party.droppedBody":
+    "Parti sensiz devam ediyor. Birlikte izlemek için yeniden katıl; tek başına izlemek istersen sayfayı yenile.",
+  "player.party.rejoin": "Partiye yeniden katıl",
   "player.mute": "Sesi kapat",
   "player.unmute": "Sesi aç",
   "player.volume": "Ses düzeyi",
