@@ -404,7 +404,10 @@ export function PlayerOverlay({
             >
               <LoadingRing size={80} stroke={2.5} />
             </motion.span>
-          ) : (
+          ) : chrome === "sahne" ? null : (
+            // Sahne keeps only the loading mark here: play and pause live on
+            // its deck, and drawing them here, even while the mark fades out,
+            // put a button on the picture.
             <motion.span
               key="play-pause"
               data-testid="player-play-pause-state"

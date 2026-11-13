@@ -73,3 +73,40 @@ export function usePlayerUi(): [PlayerUi, (ui: PlayerUi) => void] {
   const setUi = useCallback((next: PlayerUi) => storePlayerUi(next), []);
   return [ui, setUi];
 }
+
+/*
+ * Choosing another episode in Sahne's lobby goes to a new page, and the page
+ * mounts a new player. The lobby is carried across: the choice is noted here
+ * with the picture's shape, the wait draws the next episode where the lobby
+ * picture stands, and the new player opens straight into its lobby.
+ *
+ * The note lives in memory only. It crosses the move inside the app and
+ * never a reload, so nothing has to consume it: the page briefly hands the
+ * outgoing player the new episode, and consuming it there once left the new
+ * player nothing to find.
+ */
+/** Long enough for the next episode to load, short enough not to linger. */
+const CARRY_TTL_MS = 20_000;
+
+export interface SahneLobbyCarry {
+  itemId: string;
+  aspect: number;
+  at: number;
+}
+
+let carry: SahneLobbyCarry | null = null;
+
+export function carrySahneLobby(itemId: string, aspect: number): void {
+  carry = { itemId, aspect, at: Date.now() };
+}
+
+export function peekSahneLobbyCarry(itemId: string): SahneLobbyCarry | null {
+  if (!carry || carry.itemId !== itemId) return null;
+  if (Date.now() - carry.at > CARRY_TTL_MS) return null;
+  return carry;
+}
+
+/** Forget the carry, as when the viewer leaves the lobby. */
+export function dropSahneLobbyCarry(): void {
+  carry = null;
+}

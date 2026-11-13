@@ -40,7 +40,12 @@ import {
   getItemSubtitle,
 } from "../../lib/format";
 import { isTypingTarget } from "../../lib/keyboardShortcuts";
-import { usePlayerUi } from "../../lib/playerUi";
+import {
+  carrySahneLobby,
+  dropSahneLobbyCarry,
+  peekSahneLobbyCarry,
+  usePlayerUi,
+} from "../../lib/playerUi";
 import { getMediaOwnerRouteForItem } from "../../lib/routes";
 import { getEpisodeDisplayMetadata } from "../../lib/episodeMetadataPreferences";
 import {
@@ -478,7 +483,18 @@ export function CustomVideoPlayer({
       Math.min(viewport.width, viewport.height) < 640 &&
       Math.max(viewport.width, viewport.height) < 1024
     );
-  const [isSahneLobbyOpen, setIsSahneLobbyOpen] = useState(false);
+  // Chosen from the previous episode's lobby, this one opens in its lobby.
+  const [isSahneLobbyOpen, setIsSahneLobbyOpen] = useState(
+    () => playerUi === "sahne" && peekSahneLobbyCarry(item.Id) !== null,
+  );
+  // The same, when the page hands this player a new episode in place.
+  const [sahneLobbyItemId, setSahneLobbyItemId] = useState(item.Id);
+  if (sahneLobbyItemId !== item.Id) {
+    setSahneLobbyItemId(item.Id);
+    if (playerUi === "sahne" && peekSahneLobbyCarry(item.Id)) {
+      setIsSahneLobbyOpen(true);
+    }
+  }
   /** Opened by itself after a quiet pause, so playing again closes it. */
   const sahneLobbyAutoRef = useRef(false);
   /** A press that only closed a panel must not also step the room back. */
@@ -664,6 +680,8 @@ export function CustomVideoPlayer({
 
   const setSahneLobby = useCallback((open: boolean, auto = false) => {
     sahneLobbyAutoRef.current = open && auto;
+    // Leaving the lobby is leaving it for the next episode too.
+    if (!open) dropSahneLobbyCarry();
     setIsSahneLobbyOpen(open);
   }, []);
 
@@ -5552,12 +5570,10 @@ export function CustomVideoPlayer({
    * whatever is loading — the stream, a jump, or the party holding for
    * someone or starting together. It never shows play or pause there.
    */
-  const isSahneLoading =
-    isCenterPlayPauseLoading ||
-    partyWatch.isStartPending ||
-    partyWatch.localState === "syncing" ||
-    partyWatch.localState === "catching-up" ||
-    Boolean(party?.state?.snapshot?.hold);
+  // `isStartPending` is the party's own "about to play" (holding for someone,
+  // syncing, catching up), and only ever true inside a party. Its raw local
+  // state rests at "syncing" outside one, which once kept this mark turning.
+  const isSahneLoading = isCenterPlayPauseLoading || partyWatch.isStartPending;
 
   const playbackQueueLabel = playbackQueue
     ? playbackQueue.kind === "series"
@@ -6271,7 +6287,16 @@ export function CustomVideoPlayer({
               onControlsHoverEnd={releaseControlsHover}
               facts={sahneFacts}
               overview={sahneOverview}
-              onPlayQueueItem={onPlayQueueItem ? handlePlayQueueItem : undefined}
+              onPlayQueueItem={
+                onPlayQueueItem
+                  ? (nextItemId: string) => {
+                      // Chosen from the lobby: the next episode opens in its lobby too.
+                      sahneLobbyAutoRef.current = false;
+                      carrySahneLobby(nextItemId, sahneAspect);
+                      handlePlayQueueItem(nextItemId);
+                    }
+                  : undefined
+              }
               party={sahneParty}
               partyLocalState={isInParty ? partyWatch.localState : null}
               onPartyRejoin={partyWatch.resumeWithParty}

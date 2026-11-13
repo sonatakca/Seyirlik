@@ -789,6 +789,7 @@ export const tr = {
   "player.endsAt": "Bitiş {time}",
   "player.minutesLeft": "{minutes} dk kaldı",
   "player.allSettings": "Tüm ayarlar",
+  "player.moreControls": "Diğer kontroller",
   "player.party.droppedTitle": "Partiden koptun",
   "player.party.droppedBody":
     "Parti sensiz devam ediyor. Birlikte izlemek için yeniden katıl; tek başına izlemek istersen sayfayı yenile.",

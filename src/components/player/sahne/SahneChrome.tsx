@@ -9,6 +9,7 @@ import {
 import { Link } from "react-router-dom";
 import {
   ChevronLeft,
+  Ellipsis,
   GalleryVerticalEnd,
   Loader2,
   Maximize,
@@ -21,6 +22,8 @@ import {
   RotateCw,
   Settings,
   TvMinimalPlay,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import { useLanguage } from "../../../i18n/LanguageContext";
 import type { Language } from "../../../i18n/translations";
@@ -38,6 +41,7 @@ import { formatTime } from "../PlayerControls";
 import { SeekBar } from "../SeekBar";
 import { VolumeControl } from "../VolumeControl";
 import type { PartyLocalState } from "../../../features/partyWatch/usePartyPlayback";
+import { fitDeck, type DeckPart } from "./sahneDeckFit";
 import { rectFor, type SahneLayout, type SahneMode } from "./sahneGeometry";
 import type { SahneParty } from "./sahneParty";
 import { SahnePartyStack } from "./SahnePartyStack";
@@ -189,6 +193,32 @@ function stripNumber(item: MediaItem, language: string): string {
   return item.ProductionYear ? String(item.ProductionYear) : "";
 }
 
+/** One row of the more menu: an icon and what it does. */
+function MoreRow({
+  icon,
+  label,
+  onClick,
+  pressed,
+}: {
+  icon: ReactNode;
+  label: string;
+  onClick: () => void;
+  pressed?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      aria-pressed={pressed}
+      onClick={onClick}
+      className="sahne-more-row"
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
+  );
+}
+
 export function SahneChrome(props: SahneChromeProps) {
   const {
     mode,
@@ -218,6 +248,8 @@ export function SahneChrome(props: SahneChromeProps) {
   const [showRemaining, setShowRemaining] = useState(false);
   const [isVolumeOpen, setIsVolumeOpen] = useState(false);
   const stripRef = useRef<HTMLDivElement | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement | null>(null);
   // The clock the end time is read from, refreshed while the room shows.
   const [now, setNow] = useState(() => Date.now());
 
@@ -233,6 +265,20 @@ export function SahneChrome(props: SahneChromeProps) {
   // fades where it stands instead of travelling with the picture.
   const ui = rectFor(layout, lobbyOpen ? "lobby" : "controls");
   const lobby = layout.lobby;
+  // What of the deck fits the deck's width; the rest goes to the more menu.
+  const fit = fitDeck({
+    width: ui.w + 20,
+    // Sized for the longest the time can get, so the row does not shuffle
+    // as the clock passes 9:59.
+    current: `-${formatTime(duration)}`,
+    total: ` / ${formatTime(duration)}`,
+    salonWidth: t("player.lobby").length * 8 + 61,
+    hasQueue: Boolean(props.playbackQueue),
+    canPip: Boolean(props.canPictureInPicture && props.onTogglePictureInPicture),
+    canNative: Boolean(props.canNativeFullscreen && props.onEnterNativeFullscreen),
+    canFullscreen: props.canFullscreen,
+  });
+  const hides = (part: DeckPart) => fit.hidden.has(part);
 
   const remaining = Math.max(duration - currentTime, 0);
   const endsAt = new Date(now + remaining * 1000);
@@ -257,6 +303,23 @@ export function SahneChrome(props: SahneChromeProps) {
     "--sahne-lh": `${lobby.h}px`,
     "--sahne-g": `${layout.gutter}px`,
   } as CSSProperties;
+  useEffect(() => {
+    if (!moreOpen) return undefined;
+    const close = (event: PointerEvent) => {
+      if (!moreRef.current?.contains(event.target as Node)) setMoreOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMoreOpen(false);
+    };
+    document.addEventListener("pointerdown", close, true);
+    document.addEventListener("keydown", escape, true);
+    return () => {
+      document.removeEventListener("pointerdown", close, true);
+      document.removeEventListener("keydown", escape, true);
+    };
+  }, [moreOpen]);
+  const isMoreOpen = moreOpen && fit.more && shown;
+
   const items = props.playbackQueue ? stripItems(props.playbackQueue) : [];
   const currentId = props.playbackQueue?.currentItemId;
   const isLobby = mode === "lobby";
@@ -388,28 +451,34 @@ export function SahneChrome(props: SahneChromeProps) {
               )}
             </button>
           </Tooltip>
-          <IconButton
-            label={t("player.rewind5")}
-            tooltipShortcut="←"
-            onClick={() => onSeekBy(-5)}
-          >
-            <RotateCcw size={21} />
-          </IconButton>
-          <IconButton
-            label={t("player.forward5")}
-            tooltipShortcut="→"
-            onClick={() => onSeekBy(5)}
-          >
-            <RotateCw size={21} />
-          </IconButton>
-          <VolumeControl
-            volume={volume}
-            muted={muted}
-            isExpanded={isVolumeOpen}
-            onToggleMute={onToggleMute}
-            onVolumeChange={onVolumeChange}
-            onRequestExpand={() => setIsVolumeOpen(true)}
-          />
+          {hides("seek") ? null : (
+            <>
+              <IconButton
+                label={t("player.rewind5")}
+                tooltipShortcut="←"
+                onClick={() => onSeekBy(-5)}
+              >
+                <RotateCcw size={21} />
+              </IconButton>
+              <IconButton
+                label={t("player.forward5")}
+                tooltipShortcut="→"
+                onClick={() => onSeekBy(5)}
+              >
+                <RotateCw size={21} />
+              </IconButton>
+            </>
+          )}
+          {hides("volume") ? null : (
+            <VolumeControl
+              volume={volume}
+              muted={muted}
+              isExpanded={isVolumeOpen && !hides("volumeSlider")}
+              onToggleMute={onToggleMute}
+              onVolumeChange={onVolumeChange}
+              onRequestExpand={() => setIsVolumeOpen(true)}
+            />
+          )}
           <Tooltip
             content={
               showRemaining
@@ -434,30 +503,40 @@ export function SahneChrome(props: SahneChromeProps) {
                   ? `-${formatTime(remaining)}`
                   : formatTime(currentTime)}
               </b>
-              <span> / {formatTime(duration)}</span>
+              {hides("duration") ? null : <span> / {formatTime(duration)}</span>}
             </button>
           </Tooltip>
-          {duration > 0 ? (
+          {duration > 0 && !hides("ends") ? (
             <span className="sahne-ends">{endsLabel}</span>
           ) : null}
           {props.seekPreviewLoading ? (
             <Loader2
               aria-label={t("player.seeking")}
-              className="ml-2 h-4 w-4 animate-spin text-[var(--accent)]"
+              className="ml-2 h-4 w-4 shrink-0 animate-spin text-[var(--accent)]"
             />
           ) : null}
 
           <div className="sahne-row-end">
-            <button
-              type="button"
-              onClick={onToggleLobby}
-              aria-pressed={lobbyOpen}
-              className={`sahne-pill${lobbyOpen ? " sahne-pill--on" : ""}`}
-            >
-              <PanelRight size={18} strokeWidth={2.2} />
-              {t("player.lobby")}
-            </button>
-            {props.playbackQueue ? (
+            {hides("salonLabel") ? (
+              <IconButton
+                label={t("player.lobby")}
+                pressed={lobbyOpen}
+                onClick={onToggleLobby}
+              >
+                <PanelRight size={20} strokeWidth={2.2} />
+              </IconButton>
+            ) : (
+              <button
+                type="button"
+                onClick={onToggleLobby}
+                aria-pressed={lobbyOpen}
+                className={`sahne-pill${lobbyOpen ? " sahne-pill--on" : ""}`}
+              >
+                <PanelRight size={18} strokeWidth={2.2} />
+                {t("player.lobby")}
+              </button>
+            )}
+            {props.playbackQueue && !hides("queue") ? (
               <div className="relative" data-player-queue-root>
                 {props.queueOpen ? props.queuePanel : null}
                 <IconButton
@@ -479,7 +558,7 @@ export function SahneChrome(props: SahneChromeProps) {
                 <Settings size={22} strokeWidth={2.2} />
               </IconButton>
             </div>
-            {props.canPictureInPicture && props.onTogglePictureInPicture ? (
+            {props.canPictureInPicture && props.onTogglePictureInPicture && !hides("pip") ? (
               <IconButton
                 label={t("player.pictureInPicture")}
                 pressed={props.isPictureInPicture}
@@ -488,13 +567,95 @@ export function SahneChrome(props: SahneChromeProps) {
                 <PictureInPicture2 size={22} strokeWidth={2.2} />
               </IconButton>
             ) : null}
-            {props.canNativeFullscreen && props.onEnterNativeFullscreen ? (
+            {props.canNativeFullscreen && props.onEnterNativeFullscreen && !hides("native") ? (
               <IconButton
                 label={t("player.nativeFullscreen")}
                 onClick={props.onEnterNativeFullscreen}
               >
                 <TvMinimalPlay size={22} strokeWidth={2.2} />
               </IconButton>
+            ) : null}
+            {fit.more ? (
+              // What did not fit, with its name; the episode list opens here too.
+              <div
+                ref={moreRef}
+                className="relative"
+                data-player-settings-root
+                data-player-queue-root
+              >
+                {isMoreOpen ? (
+                  <div className="sahne-more" role="menu" aria-label={t("player.moreControls")}>
+                    {hides("seek") ? (
+                      <>
+                        <MoreRow icon={<RotateCcw size={18} />} label={t("player.rewind5")} onClick={() => onSeekBy(-5)} />
+                        <MoreRow icon={<RotateCw size={18} />} label={t("player.forward5")} onClick={() => onSeekBy(5)} />
+                      </>
+                    ) : null}
+                    {hides("volume") ? (
+                      <div className="sahne-more-volume">
+                        <button
+                          type="button"
+                          onClick={onToggleMute}
+                          aria-label={muted ? t("player.unmute") : t("player.mute")}
+                          className="sahne-more-row sahne-more-row--icon"
+                        >
+                          {muted || volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
+                        </button>
+                        <input
+                          type="range"
+                          min={0}
+                          max={1}
+                          step={0.01}
+                          value={muted ? 0 : volume}
+                          aria-label={t("player.volume")}
+                          onChange={(event) => onVolumeChange(Number(event.currentTarget.value))}
+                          className="seyir-slider seyirlik-player-volume-slider sahne-more-slider"
+                        />
+                      </div>
+                    ) : null}
+                    {props.playbackQueue && hides("queue") ? (
+                      <MoreRow
+                        icon={<GalleryVerticalEnd size={18} />}
+                        label={props.queueLabel}
+                        pressed={props.queueOpen}
+                        onClick={() => {
+                          setMoreOpen(false);
+                          props.onOpenQueue();
+                        }}
+                      />
+                    ) : null}
+                    {props.canPictureInPicture && props.onTogglePictureInPicture && hides("pip") ? (
+                      <MoreRow
+                        icon={<PictureInPicture2 size={18} />}
+                        label={t("player.pictureInPicture")}
+                        pressed={props.isPictureInPicture}
+                        onClick={() => {
+                          setMoreOpen(false);
+                          props.onTogglePictureInPicture?.();
+                        }}
+                      />
+                    ) : null}
+                    {props.canNativeFullscreen && props.onEnterNativeFullscreen && hides("native") ? (
+                      <MoreRow
+                        icon={<TvMinimalPlay size={18} />}
+                        label={t("player.nativeFullscreen")}
+                        onClick={() => {
+                          setMoreOpen(false);
+                          props.onEnterNativeFullscreen?.();
+                        }}
+                      />
+                    ) : null}
+                  </div>
+                ) : null}
+                {props.queueOpen && props.playbackQueue && hides("queue") ? props.queuePanel : null}
+                <IconButton
+                  label={t("player.moreControls")}
+                  pressed={isMoreOpen}
+                  onClick={() => setMoreOpen((open) => !open)}
+                >
+                  <Ellipsis size={22} strokeWidth={2.2} />
+                </IconButton>
+              </div>
             ) : null}
             {props.canFullscreen ? (
               <IconButton
@@ -524,6 +685,8 @@ export function SahneChrome(props: SahneChromeProps) {
         data-sahne-shown={mode === "lobby" ? "" : undefined}
         aria-hidden={mode !== "lobby"}
       >
+        {/* Keyed by the title, so a new episode's details rise into place. */}
+        <div key={props.itemId} className="sahne-info-body">
         {titleLogoUrl ? (
           <img src={titleLogoUrl} alt="" className="sahne-info-logo" />
         ) : (
@@ -547,6 +710,7 @@ export function SahneChrome(props: SahneChromeProps) {
         {props.overview ? (
           <p className="sahne-overview">{props.overview}</p>
         ) : null}
+        </div>
       </aside>
 
       {items.length > 1 ? (

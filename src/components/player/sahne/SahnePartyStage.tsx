@@ -56,7 +56,7 @@ function JumpTrail({
     const all: Animation[] = [];
     const run = async () => {
       ends.forEach((end, index) =>
-        all.push(end.animate([{ transform: "scale(.4)", opacity: 0 }, { transform: "scale(1)", opacity: 1 }], { duration: 240, delay: index * 90, easing: SINE_OUT, fill: "both" })),
+        all.push(end.animate([{ transform: "scaleY(.3)", opacity: 0 }, { transform: "scaleY(1)", opacity: 1 }], { duration: 240, delay: index * 90, easing: SINE_OUT, fill: "both" })),
       );
       if (tag) all.push(tag.animate([{ opacity: 0, transform: `translate(${xa}px, 0) translateX(-50%) translateY(6px)` }, { opacity: 1, transform: `translate(${xa}px, 0) translateX(-50%)` }], { duration: 260, delay: 360, easing: SINE_OUT, fill: "both" }));
       const travel = Math.min(1100, Math.max(600, width * 1.4));

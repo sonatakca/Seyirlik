@@ -9,6 +9,9 @@ import {
 } from "react-router-dom";
 import { ChevronLeft } from "lucide-react";
 import { CustomVideoPlayer } from "../../components/player/CustomVideoPlayer";
+import { sahneLayout } from "../../components/player/sahne/sahneGeometry";
+import { useViewportCapabilities } from "../../hooks/useViewportCapabilities";
+import { peekSahneLobbyCarry, usePlayerUi } from "../../lib/playerUi";
 import { ErrorMessage } from "../../components/ErrorMessage";
 import { LoadingSpinner } from "../../components/LoadingSpinner";
 import { usePlaybackQueue } from "../../hooks/usePlaybackQueue";
@@ -45,6 +48,8 @@ export function DesktopPlayerPage() {
   const navigate = useNavigate();
   const { language, t } = useLanguage();
   const shouldReduceMotion = Boolean(useReducedMotion());
+  const [playerUi] = usePlayerUi();
+  const viewport = useViewportCapabilities();
   const [item, setItem] = useState<MediaItem | null>(() =>
     itemId ? readPreloadedPlaybackItem(itemId) : null,
   );
@@ -216,6 +221,16 @@ export function DesktopPlayerPage() {
   const resolvedSource = playback.activeSource;
   const shouldShowStandalonePreparingOverlay =
     isPreparingPlayback && (!resolvedItem || !resolvedSource);
+  /*
+   * Arriving from Sahne's lobby, the wait keeps the lobby's frame: the next
+   * title's picture stands where the lobby picture stood, on the room, and
+   * the new player opens around it.
+   */
+  const sahneCarry =
+    playerUi === "sahne" && itemId ? peekSahneLobbyCarry(itemId) : null;
+  const sahneCarryRect = sahneCarry
+    ? sahneLayout(viewport.width, viewport.height, sahneCarry.aspect).lobby
+    : null;
 
   const shouldStartFromBeginning =
     searchParams.get("start") === "0" || searchParams.get("restart") === "1";
@@ -271,7 +286,9 @@ export function DesktopPlayerPage() {
               duration: shouldReduceMotion ? 0 : 0.45,
               ease: [0.22, 1, 0.36, 1],
             }}
-            className="fixed inset-0 z-[100] overflow-hidden bg-black"
+            className={`fixed inset-0 z-[100] overflow-hidden ${
+              sahneCarryRect ? "bg-[#050607]" : "bg-black"
+            }`}
           >
             {loadingBackdropUrl ? (
               <motion.img
@@ -303,9 +320,24 @@ export function DesktopPlayerPage() {
                     ease: [0.22, 1, 0.36, 1],
                   },
                 }}
-                className="absolute inset-0 h-full w-full object-cover"
+                className={`absolute object-cover ${
+                  sahneCarryRect ? "rounded-[14px]" : "inset-0 h-full w-full"
+                }`}
+                style={
+                  sahneCarryRect
+                    ? {
+                        left: sahneCarryRect.x,
+                        top: sahneCarryRect.y,
+                        width: sahneCarryRect.w,
+                        height: sahneCarryRect.h,
+                      }
+                    : undefined
+                }
               />
             ) : null}
+
+            {sahneCarryRect ? null : (
+            <>
 
             <motion.div
               aria-hidden="true"
@@ -339,6 +371,8 @@ export function DesktopPlayerPage() {
                 <LoadingSpinner label="" />
               </div>
             </motion.div>
+            </>
+            )}
           </motion.div>
         ) : null}
       </AnimatePresence>
