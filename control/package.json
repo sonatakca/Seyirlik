@@ -1,0 +1,14 @@
+{
+  "name": "seyirlik-control",
+  "private": true,
+  "type": "module",
+  "description": "Settings and services dashboard for the Seyirlik server, reachable over Tailscale only. No dependencies.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "dev:setup": "node dev-setup.mjs",
+    "dev": "node server.mjs --config .dev/control.json"
+  }
+}

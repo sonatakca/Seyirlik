@@ -35,6 +35,12 @@ export default tseslint.config(
     languageOptions: { globals: globals.node },
   },
 
+  // The control dashboard's page script, served to the browser unbundled.
+  {
+    files: ["control/public/**/*.js"],
+    languageOptions: { globals: globals.browser, sourceType: "script" },
+  },
+
   {
     files: ["**/*.{ts,tsx}"],
     languageOptions: {

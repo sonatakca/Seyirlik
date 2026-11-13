@@ -5,6 +5,13 @@
   "outputDirectory": "dist",
   "cleanUrls": false,
   "trailingSlash": false,
+  "redirects": [
+    {
+      "source": "/control",
+      "destination": "https://seyirlik-server.tail2f8eaf.ts.net/",
+      "permanent": false
+    }
+  ],
   "headers": [
     {
       "source": "/",
