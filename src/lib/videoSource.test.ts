@@ -1797,6 +1797,70 @@ describe("seamless rung switching", () => {
     expect(drivenLevel(s.hls)).toBe(1);
     s.restore();
   });
+  it("refetches every stale stripe a seek back will play, not only the first", () => {
+    // Production (Safari): 144p and 2160p picked in turn every five seconds,
+    // then 2160p kept — a seek back still played every old 144p stripe.
+    const s = session({
+      estimateBps: 20_000_000,
+      currentTime: 40,
+      bufferEnd: 4,
+    });
+    s.attachment.adaptiveController?.setQualityHeight(1080, 1080);
+    s.buffer(0, 4, 10);
+    s.buffer(2, 10, 16);
+    s.buffer(0, 16, 22);
+    s.buffer(2, 22, 28);
+    s.flushes.length = 0;
+
+    s.seek(5);
+    // The stripe under the target from its start; the later one 0.4 s in,
+    // so the kept 1080p before it keeps its last frames.
+    expect(s.flushes).toEqual([
+      { startOffset: 4, endOffset: 10, type: "video" },
+      { startOffset: 16.4, endOffset: 22, type: "video" },
+    ]);
+    s.restore();
+  });
+
+  it("treats any other rung as stale under a manual lock, better ones too", () => {
+    const s = session({
+      estimateBps: 20_000_000,
+      currentTime: 40,
+      bufferEnd: 4,
+    });
+    s.attachment.adaptiveController?.setQualityHeight(720, 720);
+    s.buffer(2, 4, 10);
+    s.buffer(1, 10, 16);
+    s.flushes.length = 0;
+    s.seek(5);
+    expect(s.flushes).toEqual([
+      { startOffset: 4, endOffset: 10, type: "video" },
+    ]);
+    s.restore();
+  });
+  it("takes a sample now and then while Safari has paused loading below the best rung", () => {
+    // WebKit: nothing fetched for 20 s after the link came back, because the
+    // browser had paused loading with a full buffer.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const s = session({
+      estimateBps: 5_000_000,
+      currentTime: 0,
+      bufferEnd: 30,
+    });
+    try {
+      expect(drivenLevel(s.hls)).toBe(1);
+      s.hls.bufferingEnabled = false;
+      s.advance(3000);
+      vi.advanceTimersByTime(1000);
+      expect(s.hls.resumeBuffering).not.toHaveBeenCalled();
+      s.advance(6000);
+      vi.advanceTimersByTime(1000);
+      expect(s.hls.resumeBuffering).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      s.restore();
+    }
+  });
 });
 
 describe("the replacement cut", () => {
@@ -1923,6 +1987,7 @@ describe("the opening rung", () => {
     return {
       hls,
       attachment,
+      video,
       /** A main fragment lands, measured by hls.js at `estimate`. */
       fragment(estimate: number, bytes = 1_500_000, totalMs = 400) {
         clock += 300;
@@ -1981,13 +2046,68 @@ describe("the opening rung", () => {
 
   it("paces every later climb by the ordinary hold", () => {
     const session = open();
-    session.fragment(6_000_000);
-    session.fragment(6_000_000);
+    // 300 kB in 400 ms: delivered at the 6 Mbps the engine measures.
+    session.fragment(6_000_000, 300_000);
+    session.fragment(6_000_000, 300_000);
     // 720p is right for 6 Mbps: the one immediate correction is spent.
     expect(session.hls.levels[drivenLevel(session.hls)]?.height).toBe(720);
     clock += 1000;
     session.fragment(30_000_000);
     expect(session.hls.levels[drivenLevel(session.hls)]?.height).toBe(720);
+  });
+
+  it("climbs straight back when fragments arrive far faster than the estimate says", () => {
+    // Production (Safari, 2 Mbps -> unthrottled): hls.js weights samples by
+    // download time, so fast small downloads barely move its estimate and
+    // 360p took 17 s to reach 480p. The plain delivery rate says it at once.
+    const session = open();
+    session.fragment(6_000_000, 300_000);
+    session.fragment(6_000_000, 300_000);
+    expect(session.hls.levels[drivenLevel(session.hls)]?.height).toBe(720);
+    clock += 1000;
+    // The engine still reads 6 Mbps; two fragments delivered at 30 Mbps,
+    // a second apart (the policy decides at most once a second).
+    session.fragment(6_000_000);
+    clock += 1000;
+    session.fragment(6_000_000);
+    expect(session.hls.levels[drivenLevel(session.hls)]?.height).toBe(1080);
+  });
+
+  it("keeps a recovered rung while the fragments still carry it", () => {
+    // Harness: recovery took 480p to 1080p and the lagging estimate pulled it
+    // back a second later.
+    const session = open();
+    session.fragment(6_000_000, 300_000);
+    session.fragment(6_000_000, 300_000);
+    clock += 1000;
+    session.fragment(6_000_000);
+    clock += 1000;
+    session.fragment(6_000_000);
+    expect(session.hls.levels[drivenLevel(session.hls)]?.height).toBe(1080);
+    // The engine still reads 6 Mbps; the 1080p fragments arrive at 30 Mbps
+    // and the buffer is healthy.
+    Object.defineProperty(session.video, "buffered", {
+      configurable: true,
+      get: () =>
+        ({ length: 1, start: () => 0, end: () => 20 }) as unknown as TimeRanges,
+    });
+    for (let index = 0; index < 3; index += 1) {
+      clock += 1000;
+      session.fragment(6_000_000);
+    }
+    expect(session.hls.levels[drivenLevel(session.hls)]?.height).toBe(1080);
+  });
+
+  it("never lets the delivery rate push quality down", () => {
+    // Small fragments read low; the step down stays the engine's call.
+    remember(40_000_000);
+    const session = open();
+    expect(session.hls.levels[drivenLevel(session.hls)]?.height).toBe(1080);
+    clock += 1000;
+    session.fragment(40_000_000, 50_000);
+    clock += 1000;
+    session.fragment(40_000_000, 50_000);
+    expect(session.hls.levels[drivenLevel(session.hls)]?.height).toBe(1080);
   });
 
   it("drops an over-optimistic remembered rung on the first measurement", () => {

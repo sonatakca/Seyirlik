@@ -318,7 +318,13 @@ const REPLACE_CUT_SECONDS = 0.4;
  * read that as Auto playing 144p on a link that carried 2160p.
  */
 const AUTO_UPGRADE_HEADROOM = 1.5;
-const AUTO_UPGRADE_RETAIN_SECONDS = 4;
+/*
+ * Zero since 2026-11-13: a proven climb keeps only the fetch margin. The
+ * viewer's rule — quality going up should show as soon as it can, going down
+ * may play out what is buffered — and the margin alone is what keeps it
+ * seamless.
+ */
+const AUTO_UPGRADE_RETAIN_SECONDS = 0;
 const AUTO_UPGRADE_UNPROVEN_RETAIN_SECONDS = 16;
 
 /**
@@ -375,6 +381,50 @@ const RESCUE_WINDOW_MS = 30_000;
  * rung that fits the buffer it actually has rather than the bottom one.
  */
 const ABANDON_BUFFER_FLOOR_SECONDS = 6;
+
+/**
+ * Fast recovery when the link comes back.
+ *
+ * hls.js weights every throughput sample by how long its download took. On a
+ * link that has just become fast, a low rung's fragments download in tens of
+ * milliseconds, so each one moves the estimate by well under one percent:
+ * measured on production (Safari, 2 Mbps -> unthrottled), 360p took 17 s to
+ * reach 480p and climbed a rung every second or two from there; in the
+ * harness WebKit sat at 480p for 50 s on a 50 Mbps link with the estimate at
+ * 17 Mbps. Quality going up is what the viewer is waiting for.
+ *
+ * So the policy also keeps the plain delivery rate of the last few main
+ * fragments — bytes over the whole request, first-byte latency included, so a
+ * small fragment can only read low, never high — and when their median is
+ * well above the engine's estimate it climbs straight to the rung that rate
+ * carries, replacing the buffered lower rung beyond the fetch margin. The
+ * engine's estimate still decides every step down.
+ */
+const RECOVERY_SAMPLES = 3;
+const RECOVERY_RATIO = 1.5;
+/** Faster than this, or with a first byte this quick, a read came from a cache. */
+const RECOVERY_MAX_SAMPLE_BPS = 1_000_000_000;
+const RECOVERY_MIN_TTFB_MS = 8;
+/**
+ * No recovery climb this soon after an emergency rescue: a region still
+ * throwing up emergencies has not recovered, and in the cold-read harness the
+ * fast fragments between rescues read as a link that had come back, so the
+ * climb replaced the buffer and set up the next abandonment.
+ */
+const RECOVERY_AFTER_RESCUE_MS = 15_000;
+
+/**
+ * How long Auto below its best rung waits for a sample under ManagedMediaSource.
+ *
+ * Safari tells hls.js to stop loading while the buffer is ample and asks again
+ * only when it runs low, so a link that came back is not seen until then:
+ * measured in WebKit, nothing was fetched for twenty seconds after the link
+ * went from 2 to 50 Mbps, and the climb began when the buffer had drained to
+ * ten. While Auto sits under the best rung its mode and the screen allow,
+ * loading is resumed for a sample this often; the next pause request from the
+ * browser stops it again. At the best rung there is nothing to find out.
+ */
+const RECOVERY_SAMPLE_INTERVAL_MS = 8000;
 
 /**
  * How long a rung the probe climbed to and lost is left alone.
@@ -658,6 +708,13 @@ interface Replacement {
   retainSeconds: number;
   /** Only media of a lower rung is replaced (an automatic upgrade). */
   onlyLower: boolean;
+  /**
+   * Delivery measured from the fragments themselves, when the climb was made
+   * on it (see RECOVERY_SAMPLES); the margin is then sized by it rather than
+   * by the engine's lagging estimate, which once kept 19 s of 480p in front
+   * of a recovery the link carried four times over.
+   */
+  evidenceBps?: number;
   reason: "manual" | "selected" | "upgrade";
 }
 
@@ -986,6 +1043,12 @@ export function attachSourceToVideo(
      */
     let rescue: { from: number; level: number } | null = null;
     let rescueTimes: number[] = [];
+    /** Delivery rates of the last main fragments; see RECOVERY_SAMPLES. */
+    let recentFragmentRates: number[] = [];
+    let lastMainFragmentAt = Date.now();
+    let lastRescueAt = Number.NEGATIVE_INFINITY;
+    /** The recovery rate a climb is being made on, for its replacement. */
+    let recoveryBps: number | null = null;
     /** When the play head last arrived somewhere new: the attach, or a seek. */
     let regionStartedAt = Date.now();
     /** When the forward-buffer cap was first seen lowered; see FORWARD_BUFFER_RESTORE_AFTER_MS. */
@@ -1070,48 +1133,80 @@ export function attachSourceToVideo(
     const refreshLowerRungAtSeek = () => {
       const wanted = lockedHeight !== null ? manualLevel : policyLevel;
       if (wanted === null || wanted < 0) return;
-      const target = videoElement.currentTime;
-      const fragments = [...bufferedMainFragments.entries()].sort(
-        (left, right) => left[1].start - right[1].start,
-      );
       /*
-       * The fragment under the target, or failing that the first one after
-       * it: the target itself may already have been trimmed from the back
-       * buffer, in which case the engine fetches the gap at the wanted rung and
-       * then runs straight into the stale stretch that follows (measured: the
-       * gap at 1080p, then sixteen seconds of 360p). Anything the forward
-       * buffer would reach counts.
+       * Under Auto and its modes only worse media is stale: better media the
+       * buffer already holds is kept. A rung the viewer locked means exactly
+       * that rung, so anything else is stale.
        */
-      const firstIndex = fragments.findIndex(
-        ([, fragment]) =>
-          fragment.end > target &&
-          fragment.start <= target + MAX_FORWARD_BUFFER_SECONDS,
-      );
-      if (firstIndex < 0 || fragments[firstIndex]![1].level >= wanted) return;
-      // The contiguous stretch of lower-rung media from the target onwards.
-      let end = fragments[firstIndex]![1].end;
-      let last = firstIndex;
-      for (let index = firstIndex + 1; index < fragments.length; index += 1) {
-        const fragment = fragments[index]![1];
-        if (fragment.level >= wanted || fragment.start > end + 0.1) break;
-        end = fragment.end;
-        last = index;
+      const locked = lockedHeight !== null;
+      const stale = (level: number) =>
+        locked ? level !== wanted : level < wanted;
+      const target = videoElement.currentTime;
+      /*
+       * Every stale fragment the forward buffer would reach, not only the
+       * stretch under the target. The target itself may already have been
+       * trimmed from the back buffer (measured: the gap refetched at 1080p,
+       * then sixteen seconds of old 360p), and a viewer who flipped between
+       * two rungs left the buffer striped with them — after settling on
+       * 2160p a seek back still played every old 144p stripe.
+       */
+      const fragments = [...bufferedMainFragments.entries()]
+        .filter(
+          ([, fragment]) =>
+            fragment.end > target &&
+            fragment.start <= target + MAX_FORWARD_BUFFER_SECONDS,
+        )
+        .sort((left, right) => left[1].start - right[1].start);
+      const stretches: Array<{
+        keys: string[];
+        start: number;
+        end: number;
+        level: number;
+      }> = [];
+      for (const [key, fragment] of fragments) {
+        const open = stretches.at(-1);
+        if (!stale(fragment.level)) continue;
+        if (open && fragment.start <= open.end + 0.1 && open.keys.length > 0) {
+          const previous = bufferedMainFragments.get(open.keys.at(-1)!);
+          if (previous && Math.abs(previous.end - fragment.start) <= 0.1) {
+            open.keys.push(key);
+            open.end = fragment.end;
+            continue;
+          }
+        }
+        /*
+         * A stretch that begins under the play head is cut from its first
+         * fragment's start: playback restarts there anyway. One that begins
+         * after media being kept is cut 0.4 s in (see REPLACE_CUT_SECONDS),
+         * so the kept fragment's last frames — shown up to a B-frame delay
+         * past the grid — are not torn off into a hole.
+         */
+        const underPlayHead = fragment.start <= target;
+        stretches.push({
+          keys: [key],
+          start: underPlayHead
+            ? fragment.start
+            : fragment.start +
+              Math.min(REPLACE_CUT_SECONDS, fragment.duration / 2),
+          end: fragment.end,
+          level: fragment.level,
+        });
       }
-      const start = fragments[firstIndex]![1].start;
-      for (let index = firstIndex; index <= last; index += 1) {
-        bufferedMainFragments.delete(fragments[index]![0]);
+      if (stretches.length === 0) return;
+      for (const stretch of stretches) {
+        for (const key of stretch.keys) bufferedMainFragments.delete(key);
+        abrRecord("seek-refresh", {
+          level: wanted,
+          fromLevel: stretch.level,
+          startS: Number(stretch.start.toFixed(3)),
+          endS: Number(stretch.end.toFixed(3)),
+        });
+        hls.trigger(Hls.Events.BUFFER_FLUSHING, {
+          startOffset: stretch.start,
+          endOffset: stretch.end,
+          type: "video",
+        });
       }
-      abrRecord("seek-refresh", {
-        level: wanted,
-        fromLevel: fragments[firstIndex]![1].level,
-        startS: Number(start.toFixed(3)),
-        endS: Number(end.toFixed(3)),
-      });
-      hls.trigger(Hls.Events.BUFFER_FLUSHING, {
-        startOffset: start,
-        endOffset: end,
-        type: "video",
-      });
       if (!hls.bufferingEnabled) hls.resumeBuffering();
     };
 
@@ -1200,6 +1295,7 @@ export function attachSourceToVideo(
       bandwidthOptimism = 1,
       mode: AutomaticQualityMode = adaptiveMode,
       ceiling: number | null = maximumHeight,
+      estimateOverride?: number,
     ): number => {
       const rungs = adaptiveRungs();
       if (rungs.length === 0) return -1;
@@ -1211,7 +1307,7 @@ export function attachSourceToVideo(
       // Every rung is above the ceiling, so the cheapest honours it best.
       const pool = eligible.length > 0 ? eligible : [rungs[0]!];
 
-      const estimate = hls.bandwidthEstimate;
+      const estimate = estimateOverride ?? hls.bandwidthEstimate;
       const measured =
         typeof estimate === "number" &&
         Number.isFinite(estimate) &&
@@ -1295,16 +1391,25 @@ export function attachSourceToVideo(
        * wobbling or has just stalled, and the more the climb is a guess, the
        * more of the old buffer it keeps.
        */
-      const estimate = hls.bandwidthEstimate;
+      const estimate = Math.max(hls.bandwidthEstimate || 0, recoveryBps ?? 0);
       const peak = hls.levels[level]?.bitrate || 0;
       if (
-        (reason === "up" || reason === "probe-up") &&
+        (reason === "up" || reason === "probe-up" || reason === "recover") &&
         previous !== null &&
         level > previous &&
         recentStallCount === 0 &&
         !isBandwidthFalling(bandwidthSamples, Date.now())
       ) {
-        const proven = peak > 0 && estimate >= peak * AUTO_UPGRADE_HEADROOM;
+        /*
+         * A recovery climb is made on delivery measured from whole fragments
+         * of a lower rung, which can only read the link low — so it counts as
+         * proven, and the old rung is kept only for the fetch margin. Judged
+         * by peak headroom instead it kept sixteen seconds of 480p on a link
+         * carrying four times the new rung.
+         */
+        const proven =
+          reason === "recover" ||
+          (peak > 0 && estimate >= peak * AUTO_UPGRADE_HEADROOM);
         replaceBufferAhead({
           level,
           retainSeconds: proven
@@ -1312,8 +1417,16 @@ export function attachSourceToVideo(
             : AUTO_UPGRADE_UNPROVEN_RETAIN_SECONDS,
           onlyLower: true,
           reason: "upgrade",
+          ...(recoveryBps === null ? {} : { evidenceBps: recoveryBps }),
         });
       }
+    };
+
+    /** Median delivery rate of the last main fragments, once there are two. */
+    const recentRecoveryRate = (): number | undefined => {
+      if (recentFragmentRates.length < 2) return undefined;
+      const sorted = [...recentFragmentRates].sort((a, b) => a - b);
+      return sorted[Math.floor(sorted.length / 2)];
     };
 
     /** See PROBE_BACKOFF_MS: a rung the probe climbed to and promptly lost. */
@@ -1377,6 +1490,7 @@ export function attachSourceToVideo(
         rescue: asRescue,
       });
       if (downward) {
+        lastRescueAt = now;
         noteProbeFailure(appliedLevel!);
         probeHoldUntil = 0;
         if (asRescue) {
@@ -1554,10 +1668,14 @@ export function attachSourceToVideo(
        * which only ever makes the margin cautious, and the deadline below
        * bounds what that caution can cost a pick. A transfer rate measured
        * from first byte to last was tried and read a 6 Mbps link as 3 Gbps:
-       * small fragments arrive in one burst behind their first byte.
+       * small fragments arrive in one burst behind their first byte. A
+       * recovery climb brings its own evidence (`evidenceBps`, whole requests
+       * first byte included), which is used when it is the larger.
        */
-      const bandwidth =
-        hls.bandwidthEstimate > 0 ? hls.bandwidthEstimate : 1_000_000;
+      const bandwidth = Math.max(
+        hls.bandwidthEstimate > 0 ? hls.bandwidthEstimate : 1_000_000,
+        replacement.evidenceBps ?? 0,
+      );
       const ttfbSeconds =
         ((hls as { ttfbEstimate?: number }).ttfbEstimate || DEFAULT_TTFB_MS) /
         1000;
@@ -1786,6 +1904,39 @@ export function attachSourceToVideo(
       const current = appliedLevel ?? -1;
       let probing = false;
 
+      // See RECOVERY_SAMPLES: the link came back faster than the engine's
+      // estimate can say so.
+      const recovery = recentRecoveryRate();
+      if (
+        current >= 0 &&
+        recovery !== undefined &&
+        recovery >= (hls.bandwidthEstimate || 0) * RECOVERY_RATIO &&
+        recentStallCount === 0 &&
+        now >= upswitchBlockedUntil &&
+        now - lastRescueAt >= RECOVERY_AFTER_RESCUE_MS &&
+        appliedLevelMeasured &&
+        !isBandwidthFalling(bandwidthSamples, now)
+      ) {
+        const fast = chooseAdaptiveLevel(
+          1,
+          adaptiveMode,
+          maximumHeight,
+          recovery,
+        );
+        if (fast > Math.max(current, target)) {
+          probeBackoff.clear();
+          probeHoldUntil = 0;
+          upgradeCandidate = null;
+          recoveryBps = recovery;
+          try {
+            driveLevel(fast, "recover");
+          } finally {
+            recoveryBps = null;
+          }
+          return;
+        }
+      }
+
       /*
        * Climb one rung on the buffer's evidence when the estimate has nothing
        * useful to say. Without this the session cannot leave a low rung it
@@ -1832,6 +1983,30 @@ export function attachSourceToVideo(
       if (current < 0 || target <= current) {
         upgradeCandidate = null;
         if (target === current) return;
+        /*
+         * See RECOVERY_SAMPLES: the engine's estimate lags a link that came
+         * back, so on its own word it pulled a recovery straight back down a
+         * second later (harness: 480p -> 1080p -> 480p, then fourteen seconds
+         * to climb again). While the fragments themselves are still arriving
+         * at a rate that carries this rung, and nothing has stalled, it stays;
+         * a link that really fell shows up within a fragment or two as slow
+         * deliveries, a stall or an abandonment, and those still step down.
+         */
+        if (
+          current >= 0 &&
+          recovery !== undefined &&
+          recentStallCount === 0 &&
+          bufferedAhead() >= STARVED_BUFFER_SECONDS &&
+          // The probe's rule: the link carries the rung's average.
+          chooseAdaptiveLevel(
+            PROBE_BANDWIDTH_OPTIMISM,
+            adaptiveMode,
+            maximumHeight,
+            recovery,
+          ) >= current
+        ) {
+          return;
+        }
         // See PROBE_GRACE_MS: a rung the probe has just taken is not given up
         // on the word of the reading it was taken in spite of — but only
         // while the buffer is still saying the same thing the probe heard.
@@ -2026,6 +2201,7 @@ export function attachSourceToVideo(
       const fragment = asMainFragment(data);
       if (fragment) {
         anyMainFragmentBuffered = true;
+        lastMainFragmentAt = Date.now();
         if (mainFragmentLoading?.sn === fragment.sn) mainFragmentLoading = null;
         bufferedMainFragments.set(String(fragment.sn), {
           level: fragment.level,
@@ -2058,6 +2234,21 @@ export function attachSourceToVideo(
               aborted: stats.stats?.aborted === true,
             });
             persistDeliveredThroughput();
+            const bytes = stats.stats?.loaded ?? 0;
+            const totalMs = (loading.end ?? NaN) - (loading.start ?? NaN);
+            const ttfbMs = (loading.first ?? NaN) - (loading.start ?? NaN);
+            const rate = totalMs > 0 ? (bytes * 8 * 1000) / totalMs : NaN;
+            if (
+              stats.stats?.aborted !== true &&
+              Number.isFinite(rate) &&
+              rate > 0 &&
+              rate < RECOVERY_MAX_SAMPLE_BPS &&
+              ttfbMs >= RECOVERY_MIN_TTFB_MS
+            ) {
+              recentFragmentRates = [...recentFragmentRates, rate].slice(
+                -RECOVERY_SAMPLES,
+              );
+            }
           }
         }
         if (
@@ -2253,6 +2444,7 @@ export function attachSourceToVideo(
         recentStallCount,
         upswitchBlockedForMs: Math.max(0, upswitchBlockedUntil - Date.now()),
         probeHoldForMs: Math.max(0, probeHoldUntil - Date.now()),
+        recoveryRateBps: Math.round(recentRecoveryRate() ?? 0),
         pendingClimb: upgradeCandidate,
         ladder: hls.levels.map((rung, index) => ({
           index,
@@ -2278,9 +2470,32 @@ export function attachSourceToVideo(
 
     // See RUNG_TICK_INTERVAL_MS: the engine's own events arrive in bursts, so
     // the policy keeps its own clock rather than inheriting that shape.
+    /** See RECOVERY_SAMPLE_INTERVAL_MS. */
+    const resumeForRecoverySample = () => {
+      if (hls.bufferingEnabled || lockedHeight !== null) return;
+      if (appliedLevel === null || hls.levels.length === 0) return;
+      const now = Date.now();
+      if (now - lastMainFragmentAt < RECOVERY_SAMPLE_INTERVAL_MS) return;
+      const best = chooseAdaptiveLevel(
+        1,
+        adaptiveMode,
+        maximumHeight,
+        Number.MAX_SAFE_INTEGER,
+      );
+      if (appliedLevel >= best) return;
+      lastMainFragmentAt = now;
+      abrRecord("resume-loading", {
+        reason: "recovery-sample",
+        level: appliedLevel,
+        bufferedAheadS: Number(bufferedAhead().toFixed(1)),
+      });
+      hls.resumeBuffering();
+    };
+
     const rungTicker = setInterval(() => {
       // Also the backstop for a starved play head that raised no event.
       resumeStarvedLoading("tick");
+      resumeForRecoverySample();
       evaluateAdaptiveTarget();
     }, RUNG_TICK_INTERVAL_MS);
 
