@@ -113,25 +113,6 @@ export function stageTransform(full: Rect, target: Rect): StageTransform {
   };
 }
 
-/**
- * The clip that makes the screen-sized box end where the picture ends, with
- * corners that measure `radius` on screen whatever the scale.
- */
-export function stageClip(
-  full: Rect,
-  width: number,
-  height: number,
-  scale: number,
-  radius: number,
-): string {
-  const top = Math.max(full.y, 0);
-  const left = Math.max(full.x, 0);
-  const bottom = Math.max(height - full.y - full.h, 0);
-  const right = Math.max(width - full.x - full.w, 0);
-  const round = scale > 0 ? radius / scale : radius;
-  return `inset(${top}px ${right}px ${bottom}px ${left}px round ${round}px)`;
-}
-
 export function rectFor(layout: SahneLayout, mode: SahneMode): Rect {
   return mode === "lobby"
     ? layout.lobby

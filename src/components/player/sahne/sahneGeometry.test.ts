@@ -5,7 +5,6 @@ import {
   SAHNE_DECK,
   SAHNE_TOP,
   sahneLayout,
-  stageClip,
   stageTransform,
 } from "./sahneGeometry";
 
@@ -56,12 +55,13 @@ describe("stageTransform", () => {
   });
 });
 
-describe("stageClip", () => {
-  it("cuts the letterbox away and keeps the screen radius under scale", () => {
-    const full = containRect({ x: 0, y: 0, w: 1440, h: 810 }, SCOPE);
-    const clip = stageClip(full, 1440, 810, 0.5, 14);
-    const bar = (810 - full.h) / 2;
-    expect(clip).toBe(`inset(${bar}px 0px ${bar}px 0px round 28px)`);
+describe("containRect", () => {
+  it("top-aligns when asked, so the lobby picture hugs the top", () => {
+    const box = { x: 10, y: 80, w: 800, h: 600 };
+    const rect = containRect(box, 16 / 9, "top");
+    expect(rect.y).toBe(80);
+    expect(rect.w).toBe(800);
+    expect(rect.h).toBeCloseTo(450);
   });
 });
 

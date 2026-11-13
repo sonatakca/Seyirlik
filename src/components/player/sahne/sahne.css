@@ -22,15 +22,20 @@
   color: rgba(226, 232, 240, 0.52);
 }
 
-/* The light: the picture's colours, blurred, fading out long before its edge. */
+/*
+ * The light: the title's artwork, tiny and blurred, under the picture (the
+ * player renders it beneath the picture layer), fading out before its edge.
+ */
 .sahne-glow {
   position: absolute;
   left: 0;
   top: 0;
-  z-index: -1;
+  z-index: 1;
   width: 48px;
   height: 20px;
+  object-fit: cover;
   transform-origin: 0 0;
+  pointer-events: none;
   filter: blur(12px) saturate(1.6);
   -webkit-mask-image: radial-gradient(
     ellipse 50% 50% at 50% 50%,
@@ -46,14 +51,52 @@
   );
   opacity: 0;
   transition:
-    transform var(--sahne-move),
+    transform 0.72s cubic-bezier(0.16, 1, 0.3, 1),
     opacity 0.9s linear;
 }
-.sahne:is([data-sahne-mode="controls"], [data-sahne-mode="lobby"]) .sahne-glow {
+.sahne-glow[data-sahne-glow="controls"] {
   opacity: 0.4;
 }
-.sahne[data-sahne-mode="lobby"] .sahne-glow {
+.sahne-glow[data-sahne-glow="lobby"] {
   opacity: 0.46;
+}
+
+/* The picture's corners, rounded by covering them in the room's colour, so
+   the video itself is never clipped or masked. */
+.sahne-corners {
+  position: absolute;
+  z-index: 13;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s linear;
+}
+.sahne-corners[data-shown] {
+  opacity: 1;
+}
+.sahne-corners i {
+  position: absolute;
+  width: var(--sahne-r);
+  height: var(--sahne-r);
+}
+.sahne-corners i:nth-child(1) {
+  left: 0;
+  top: 0;
+  background: radial-gradient(circle at 100% 100%, transparent calc(var(--sahne-r) - 0.6px), #050607 var(--sahne-r));
+}
+.sahne-corners i:nth-child(2) {
+  right: 0;
+  top: 0;
+  background: radial-gradient(circle at 0 100%, transparent calc(var(--sahne-r) - 0.6px), #050607 var(--sahne-r));
+}
+.sahne-corners i:nth-child(3) {
+  left: 0;
+  bottom: 0;
+  background: radial-gradient(circle at 100% 0, transparent calc(var(--sahne-r) - 0.6px), #050607 var(--sahne-r));
+}
+.sahne-corners i:nth-child(4) {
+  right: 0;
+  bottom: 0;
+  background: radial-gradient(circle at 0 0, transparent calc(var(--sahne-r) - 0.6px), #050607 var(--sahne-r));
 }
 
 /* Everything that stands in the room. */
@@ -86,9 +129,7 @@
 .sahne-icon:focus-visible,
 .sahne-play:focus-visible,
 .sahne-pill:focus-visible,
-.sahne-chip:focus-visible,
-.sahne-clock:focus-visible,
-.sahne-q:focus-visible {
+.sahne-clock:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -280,7 +321,7 @@
   left: calc(var(--sahne-lx) + var(--sahne-lw) + 2.75rem);
   right: var(--sahne-g);
   top: var(--sahne-ly);
-  bottom: 1.25rem;
+  bottom: calc(100% - var(--sahne-ly) - var(--sahne-lh) - 84px);
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -334,121 +375,86 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 4;
 }
-.sahne-queue {
-  margin-top: auto;
-  padding-top: 18px;
+/* The row under the lobby: the season, or the collection, as stills. */
+.sahne-strip {
+  position: absolute;
+  left: var(--sahne-lx);
+  right: 0;
+  top: calc(var(--sahne-ly) + var(--sahne-lh) + 104px);
 }
-.sahne-queue-list {
+.sahne-strip > .sahne-caps {
+  display: block;
+  margin-bottom: 10px;
+}
+.sahne-strip-row {
+  display: flex;
+  gap: 14px;
+  padding: 2px var(--sahne-g) 6px 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  scroll-behavior: smooth;
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 96px), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 96px), transparent);
+}
+.sahne-strip-row::-webkit-scrollbar {
+  display: none;
+}
+.sahne-card {
   display: grid;
+  flex: none;
+  width: 236px;
   gap: 2px;
-  margin: 8px -10px 0;
-}
-.sahne-q {
-  display: grid;
-  grid-template-columns: 92px 1fr;
-  grid-template-rows: auto auto;
-  align-items: center;
-  column-gap: 14px;
-  padding: 8px 10px;
-  border-radius: 12px;
   text-align: left;
-  transition: background-color 0.2s;
 }
-.sahne-q:not(:disabled):hover {
-  background: rgba(255, 255, 255, 0.07);
-}
-.sahne-q:disabled {
+.sahne-card:disabled {
   cursor: default;
 }
-.sahne-q-art {
-  grid-row: 1 / 3;
+.sahne-card-still {
+  display: block;
+  margin-bottom: 8px;
   aspect-ratio: 16 / 9;
   overflow: hidden;
-  border-radius: 8px;
+  border-radius: 12px;
   background: rgba(255, 255, 255, 0.065);
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+  transition:
+    box-shadow 0.2s,
+    transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
-.sahne-q-art img {
+.sahne-card-still img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
-.sahne-q-title {
-  align-self: end;
+.sahne-card:not(:disabled):hover .sahne-card-still {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.28);
+  transform: translateY(-2px);
+}
+.sahne-card--now .sahne-card-still {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.sahne-card-meta {
+  color: rgba(226, 232, 240, 0.52);
+  font-size: 0.6875rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.sahne-card--now .sahne-card-meta {
+  color: var(--accent);
+}
+.sahne-card-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   font-weight: 700;
 }
-.sahne-q-meta {
-  align-self: start;
-  color: rgba(226, 232, 240, 0.52);
-  font-size: 0.75rem;
+.sahne-card:focus-visible {
+  outline: none;
 }
-.sahne-q--now .sahne-q-meta {
-  color: var(--accent);
-}
-
-.sahne-prefs {
-  position: absolute;
-  left: var(--sahne-lx);
-  width: var(--sahne-lw);
-  top: calc(var(--sahne-ly) + var(--sahne-lh) + 126px);
-  bottom: 1rem;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  align-content: start;
-  gap: 16px 40px;
-  overflow-y: auto;
-  scrollbar-width: none;
-}
-.sahne-pref > .sahne-caps {
-  display: block;
-  margin-bottom: 8px;
-}
-.sahne-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.sahne-chips--sub {
-  margin-top: 6px;
-}
-.sahne-chip {
-  display: inline-flex;
-  height: 34px;
-  align-items: center;
-  gap: 7px;
-  padding: 0 14px;
-  border-radius: 9999px;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
-  color: rgba(226, 232, 240, 0.72);
-  font-size: 0.8125rem;
-  font-weight: 700;
-  white-space: nowrap;
-  transition:
-    background-color 0.2s,
-    color 0.2s;
-}
-.sahne-chip:not(:disabled):hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #fff;
-}
-.sahne-chip:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
-.sahne-chip--on,
-.sahne-chip--on:disabled {
-  background: #fff;
-  box-shadow: none;
-  color: #08090a;
-  opacity: 1;
-}
-.sahne-chip--on:not(:disabled):hover {
-  background: #fff;
-  color: #08090a;
+.sahne-card:focus-visible .sahne-card-still {
+  box-shadow: 0 0 0 2px var(--accent);
 }
 
 @media (max-height: 680px) {

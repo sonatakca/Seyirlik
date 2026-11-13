@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { TRICKPLAY_COLUMNS, TRICKPLAY_ROWS } from "./constants";
@@ -19,6 +20,8 @@ interface SeekPreviewFrameProps {
   shown: boolean;
   rect: { left: number; top: number; width: number; height: number } | null;
   className: string;
+  /** Places the frame's box where the picture is, when that is not a class. */
+  style?: CSSProperties;
 }
 
 /** Arrival: quick enough to answer the pointer. Sine, so the peak step stays small. */
@@ -170,6 +173,7 @@ export function SeekPreviewFrame({
   shown: isShown,
   rect,
   className,
+  style,
 }: SeekPreviewFrameProps) {
   const reduceMotion = useReducedMotion();
   const shown = useDecodedTile(tile);
@@ -183,6 +187,7 @@ export function SeekPreviewFrame({
           data-testid="seek-preview-frame"
           aria-hidden="true"
           className={`pointer-events-none z-[9] overflow-hidden ${className}`}
+          style={style}
           initial={{ opacity: 0 }}
           animate={{
             opacity: 1,

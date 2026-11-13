@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -22,22 +23,19 @@ import {
   TvMinimalPlay,
 } from "lucide-react";
 import { useLanguage } from "../../../i18n/LanguageContext";
+import type { Language } from "../../../i18n/translations";
+import { getEpisodeDisplayMetadata } from "../../../lib/episodeMetadataPreferences";
 import { formatTemplate } from "../../../lib/format";
-import { getPrimaryImageUrl } from "../../../lib/mediaApi";
+import {
+  getBackdropImageUrl,
+  getPrimaryImageUrl,
+  getThumbImageUrl,
+} from "../../../lib/mediaApi";
 import type { PlaybackQueue } from "../../../lib/playbackQueue";
-import type {
-  MediaItem,
-  PlaybackSourceCandidate,
-} from "../../../lib/types";
+import type { MediaItem } from "../../../lib/types";
 import { Tooltip } from "../../ui/Tooltip";
 import { formatTime } from "../PlayerControls";
-import {
-  AUTOMATIC_QUALITY_MODES,
-  getSelectableStreams,
-} from "../settingsChoices";
 import { SeekBar } from "../SeekBar";
-import { streamLabels } from "../streamLabels";
-import type { CompleteFileQualityControls } from "../types";
 import { VolumeControl } from "../VolumeControl";
 import { rectFor, type SahneLayout, type SahneMode } from "./sahneGeometry";
 import "./sahne.css";
@@ -47,8 +45,6 @@ export interface SahneChromeProps {
   layout: SahneLayout;
   lobbyOpen: boolean;
   onToggleLobby: () => void;
-  /** The element on screen, for the room's light. */
-  getVideo: () => HTMLVideoElement | null;
 
   backTo: string;
   title: string;
@@ -98,14 +94,6 @@ export interface SahneChromeProps {
   facts: string[];
   overview: string | null;
   onPlayQueueItem?: (itemId: string) => void;
-  source: PlaybackSourceCandidate;
-  selectedAudioStreamIndex?: number;
-  selectedSubtitleStreamIndex: number;
-  canSwitchAudio: boolean;
-  canSwitchSubtitles: boolean;
-  completeFileQuality?: CompleteFileQualityControls;
-  onSelectAudioStream: (streamIndex: number) => void;
-  onSelectSubtitleStream: (streamIndex: number) => void;
 }
 
 const ICON = "flex h-11 w-11 shrink-0 items-center justify-center rounded-full";
@@ -143,98 +131,49 @@ function IconButton({
   );
 }
 
-/**
- * The room's light: the picture's own colours, small and blurred, standing
- * behind it and fading to nothing well before its own edge.
- */
-function SahneGlow({
-  getVideo,
-  active,
-  style,
-}: {
-  getVideo: () => HTMLVideoElement | null;
-  active: boolean;
-  style: CSSProperties;
-}) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-
-  useEffect(() => {
-    if (!active) return undefined;
-    const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d");
-    if (!canvas || !context) return undefined;
-
-    const draw = () => {
-      if (document.visibilityState !== "visible") return;
-      const video = getVideo();
-      if (!video || video.readyState < 2) return;
-      try {
-        context.drawImage(video, 0, 0, canvas.width, canvas.height);
-      } catch {
-        // A picture the canvas may not draw leaves the room unlit.
-      }
-    };
-    draw();
-    const timer = window.setInterval(draw, 125);
-    return () => window.clearInterval(timer);
-  }, [active, getVideo]);
-
-  return (
-    <canvas
-      ref={canvasRef}
-      width={48}
-      height={20}
-      aria-hidden="true"
-      className="sahne-glow"
-      style={style}
-    />
-  );
-}
-
-function Chip({
-  active,
-  onClick,
-  disabled,
-  children,
-}: {
-  active: boolean;
-  onClick?: () => void;
-  disabled?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      role="menuitemradio"
-      aria-checked={active}
-      disabled={disabled || !onClick}
-      onClick={onClick}
-      className={`sahne-chip${active ? " sahne-chip--on" : ""}`}
-    >
-      {children}
-    </button>
-  );
-}
-
-function queueWindow(queue: PlaybackQueue): MediaItem[] {
+/** What the lobby's row holds: the season being watched, or the collection. */
+function stripItems(queue: PlaybackQueue): MediaItem[] {
   const season = queue.seasons?.find(
     (candidate) => candidate.id === queue.currentSeasonId,
   );
-  const items = season?.episodes ?? queue.items;
-  const index = Math.max(
-    0,
-    items.findIndex((item) => item.Id === queue.currentItemId),
-  );
-  const start = Math.max(0, Math.min(index, items.length - 4));
-  return items.slice(start, start + 4);
+  return season?.episodes ?? queue.items;
 }
 
-function queueRowMeta(item: MediaItem, language: string): string {
-  if (
-    typeof item.ParentIndexNumber === "number" &&
-    typeof item.IndexNumber === "number"
-  ) {
-    return `S${item.ParentIndexNumber} · ${language === "tr" ? "B" : "E"}${item.IndexNumber}`;
+/**
+ * A 16:9 still for a row card. An episode's still is stored as its thumb (it
+ * never has a cover); a film in a collection uses its thumb or backdrop, and
+ * only then its poster.
+ */
+function stillFor(item: MediaItem, language: Language): string {
+  if (item.Type === "Episode") {
+    const chosen = getEpisodeDisplayMetadata(item, language).thumbnailUrl;
+    if (chosen) return chosen;
+  }
+  if (item.ImageTags?.Thumb) {
+    return getThumbImageUrl(item.Id, item.ImageTags.Thumb, 480);
+  }
+  const backdrop = item.BackdropImageTags?.[0];
+  if (backdrop) return getBackdropImageUrl(item.Id, backdrop, 480);
+  if (item.ImageTags?.Primary) {
+    return getPrimaryImageUrl(item.Id, item.ImageTags.Primary, 480);
+  }
+  if (item.SeriesId && item.SeriesPrimaryImageTag) {
+    return getPrimaryImageUrl(item.SeriesId, item.SeriesPrimaryImageTag, 480);
+  }
+  return "";
+}
+
+function stripTitle(item: MediaItem, language: Language): string {
+  return item.Type === "Episode"
+    ? (getEpisodeDisplayMetadata(item, language).title ?? item.Name)
+    : item.Name;
+}
+
+function stripNumber(item: MediaItem, language: string): string {
+  if (item.Type === "Episode" && typeof item.IndexNumber === "number") {
+    return language === "tr"
+      ? `${item.IndexNumber}. Bölüm`
+      : `Episode ${item.IndexNumber}`;
   }
   return item.ProductionYear ? String(item.ProductionYear) : "";
 }
@@ -245,7 +184,6 @@ export function SahneChrome(props: SahneChromeProps) {
     layout,
     lobbyOpen,
     onToggleLobby,
-    getVideo,
     backTo,
     title,
     titleLogoUrl,
@@ -268,7 +206,7 @@ export function SahneChrome(props: SahneChromeProps) {
   const { t, language } = useLanguage();
   const [showRemaining, setShowRemaining] = useState(false);
   const [isVolumeOpen, setIsVolumeOpen] = useState(false);
-  const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
+  const stripRef = useRef<HTMLDivElement | null>(null);
   // The clock the end time is read from, refreshed while the room shows.
   const [now, setNow] = useState(() => Date.now());
 
@@ -283,7 +221,6 @@ export function SahneChrome(props: SahneChromeProps) {
   // The room's furniture keeps its place while the picture is full, so it
   // fades where it stands instead of travelling with the picture.
   const ui = rectFor(layout, lobbyOpen ? "lobby" : "controls");
-  const target = rectFor(layout, mode);
   const lobby = layout.lobby;
 
   const remaining = Math.max(duration - currentTime, 0);
@@ -309,23 +246,18 @@ export function SahneChrome(props: SahneChromeProps) {
     "--sahne-lh": `${lobby.h}px`,
     "--sahne-g": `${layout.gutter}px`,
   } as CSSProperties;
-  const glowStyle: CSSProperties = {
-    transform: `translate(${target.x - target.w * 0.24}px, ${
-      target.y - target.h * 0.55
-    }px) scale(${(target.w * 1.48) / 48}, ${(target.h * 2.1) / 20})`,
-  };
+  const items = props.playbackQueue ? stripItems(props.playbackQueue) : [];
+  const currentId = props.playbackQueue?.currentItemId;
+  const isLobby = mode === "lobby";
 
-  const audioStreams = getSelectableStreams(props.source, "Audio");
-  const subtitleStreams = getSelectableStreams(props.source, "Subtitle");
-  const audioLabels = streamLabels(audioStreams, "audio", language, t);
-  const subtitleLabels = streamLabels(subtitleStreams, "subtitle", language, t);
-  const quality = props.completeFileQuality;
-  const showAdvanced =
-    quality !== undefined &&
-    (isAdvancedOpen || quality.activeMode === "advanced");
-  const queueItems = props.playbackQueue
-    ? queueWindow(props.playbackQueue)
-    : [];
+  // Opening the lobby brings the playing episode into view in the row.
+  useLayoutEffect(() => {
+    if (!isLobby) return;
+    const strip = stripRef.current;
+    const current = strip?.querySelector<HTMLElement>("[data-strip-current]");
+    if (!strip || !current) return;
+    strip.scrollLeft = Math.max(0, current.offsetLeft - strip.clientWidth * 0.25);
+  }, [isLobby, currentId]);
 
   return (
     <div
@@ -334,8 +266,6 @@ export function SahneChrome(props: SahneChromeProps) {
       data-sahne-lobby={lobbyOpen ? "" : undefined}
       style={rootStyle}
     >
-      <SahneGlow getVideo={getVideo} active={shown} style={glowStyle} />
-
       <header
         className="sahne-ui sahne-top"
         data-sahne-shown={shown ? "" : undefined}
@@ -592,179 +522,48 @@ export function SahneChrome(props: SahneChromeProps) {
         {props.overview ? (
           <p className="sahne-overview">{props.overview}</p>
         ) : null}
-        {queueItems.length > 1 ? (
-          <div className="sahne-queue">
-            <span className="sahne-caps">{props.queueLabel}</span>
-            <div className="sahne-queue-list">
-              {queueItems.map((queueItem) => {
-                const isCurrent =
-                  queueItem.Id === props.playbackQueue?.currentItemId;
-                const thumb = queueItem.ImageTags?.Primary
-                  ? getPrimaryImageUrl(
-                      queueItem.Id,
-                      queueItem.ImageTags.Primary,
-                      400,
-                    )
-                  : "";
-                return (
-                  <button
-                    key={queueItem.Id}
-                    type="button"
-                    disabled={isCurrent || !props.onPlayQueueItem}
-                    onClick={() => props.onPlayQueueItem?.(queueItem.Id)}
-                    className={`sahne-q${isCurrent ? " sahne-q--now" : ""}`}
-                  >
-                    <span className="sahne-q-art">
-                      {thumb ? <img src={thumb} alt="" loading="lazy" /> : null}
-                    </span>
-                    <span className="sahne-q-title">{queueItem.Name}</span>
-                    <span className="sahne-q-meta">
-                      {isCurrent
-                        ? t("player.nowPlaying")
-                        : queueRowMeta(queueItem, language)}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
       </aside>
 
-      <section
-        className="sahne-lobby sahne-prefs"
-        data-sahne-lobby-content
-        data-sahne-shown={mode === "lobby" ? "" : undefined}
-        aria-hidden={mode !== "lobby"}
-      >
-        {audioStreams.length > 1 ? (
-          <div className="sahne-pref" role="group" aria-label={t("settings.audio")}>
-            <span className="sahne-caps">{t("settings.audio")}</span>
-            <div className="sahne-chips">
-              {audioStreams.map((stream, index) => (
-                <Chip
-                  key={`${stream.Index ?? index}-audio`}
-                  active={stream.Index === props.selectedAudioStreamIndex}
-                  onClick={
-                    stream.Index === undefined || !props.canSwitchAudio
-                      ? undefined
-                      : () => props.onSelectAudioStream(stream.Index as number)
-                  }
+      {items.length > 1 ? (
+        <section
+          className="sahne-lobby sahne-strip"
+          data-sahne-lobby-content
+          data-sahne-shown={isLobby ? "" : undefined}
+          aria-hidden={!isLobby}
+          aria-label={props.queueLabel}
+        >
+          <span className="sahne-caps">{props.queueLabel}</span>
+          <div className="sahne-strip-row" ref={stripRef}>
+            {items.map((stripItem) => {
+              const isCurrent = stripItem.Id === currentId;
+              const still = stillFor(stripItem, language);
+              return (
+                <button
+                  key={stripItem.Id}
+                  type="button"
+                  tabIndex={isLobby ? 0 : -1}
+                  data-strip-current={isCurrent ? "" : undefined}
+                  disabled={isCurrent || !props.onPlayQueueItem}
+                  onClick={() => props.onPlayQueueItem?.(stripItem.Id)}
+                  className={`sahne-card${isCurrent ? " sahne-card--now" : ""}`}
                 >
-                  {audioLabels[index]}
-                </Chip>
-              ))}
-            </div>
+                  <span className="sahne-card-still">
+                    {still ? <img src={still} alt="" loading="lazy" /> : null}
+                  </span>
+                  <span className="sahne-card-meta">
+                    {isCurrent
+                      ? t("player.nowPlaying")
+                      : stripNumber(stripItem, language)}
+                  </span>
+                  <span className="sahne-card-title">
+                    {stripTitle(stripItem, language)}
+                  </span>
+                </button>
+              );
+            })}
           </div>
-        ) : null}
-        {subtitleStreams.length > 0 ? (
-          <div
-            className="sahne-pref"
-            role="group"
-            aria-label={t("settings.subtitles")}
-          >
-            <span className="sahne-caps">{t("settings.subtitles")}</span>
-            <div className="sahne-chips">
-              <Chip
-                active={props.selectedSubtitleStreamIndex === -1}
-                onClick={
-                  props.canSwitchSubtitles
-                    ? () => props.onSelectSubtitleStream(-1)
-                    : undefined
-                }
-              >
-                {t("settings.off")}
-              </Chip>
-              {subtitleStreams.map((stream, index) => (
-                <Chip
-                  key={`${stream.Index ?? index}-subtitle`}
-                  active={stream.Index === props.selectedSubtitleStreamIndex}
-                  onClick={
-                    stream.Index === undefined || !props.canSwitchSubtitles
-                      ? undefined
-                      : () =>
-                          props.onSelectSubtitleStream(stream.Index as number)
-                  }
-                >
-                  {subtitleLabels[index]}
-                </Chip>
-              ))}
-            </div>
-          </div>
-        ) : null}
-        {quality ? (
-          <div
-            className="sahne-pref"
-            role="group"
-            aria-label={t("settings.quality")}
-          >
-            <span className="sahne-caps">{t("settings.quality")}</span>
-            <div className="sahne-chips">
-              {AUTOMATIC_QUALITY_MODES.map(({ mode: qualityMode, labelKey }) => {
-                const effective = quality.modeQualityLabels[qualityMode];
-                return (
-                  <Chip
-                    key={qualityMode}
-                    active={quality.activeMode === qualityMode}
-                    onClick={() => {
-                      setIsAdvancedOpen(false);
-                      quality.onSelectMode(qualityMode);
-                    }}
-                  >
-                    {qualityMode === "auto" && effective
-                      ? formatTemplate(t("player.qualityAutoEffective"), {
-                          quality: effective,
-                        })
-                      : t(labelKey)}
-                  </Chip>
-                );
-              })}
-              {quality.advancedOptions.length > 0 ? (
-                <Chip
-                  active={quality.activeMode === "advanced"}
-                  onClick={() => setIsAdvancedOpen((open) => !open)}
-                >
-                  {t("player.qualityAdvanced")}
-                </Chip>
-              ) : null}
-            </div>
-            {showAdvanced ? (
-              <div className="sahne-chips sahne-chips--sub">
-                {quality.advancedOptions.map((option) => (
-                  <Chip
-                    key={option.id}
-                    active={
-                      quality.activeMode === "advanced" &&
-                      quality.lockedQualityId === option.id
-                    }
-                    onClick={() => quality.onSelectAdvancedQuality(option.id)}
-                  >
-                    {quality.preparingQualityId === option.id
-                      ? `${option.label} · ${t("player.qualityPreparing")}`
-                      : option.label}
-                  </Chip>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-        <div className="sahne-pref">
-          <span className="sahne-caps" aria-hidden="true">
-            &nbsp;
-          </span>
-          <div className="sahne-chips">
-            <button
-              type="button"
-              className="sahne-chip"
-              data-player-settings-root
-              onClick={props.onOpenSettings}
-            >
-              <Settings size={15} strokeWidth={2.2} />
-              {t("player.allSettings")}
-            </button>
-          </div>
-        </div>
-      </section>
+        </section>
+      ) : null}
     </div>
   );
 }

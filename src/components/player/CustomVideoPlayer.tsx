@@ -64,12 +64,12 @@ import { PlayerControls } from "./PlayerControls";
 import { PlayerQueuePanel } from "./PlayerQueuePanel";
 import { PlayerSettingsPanel } from "./PlayerSettingsPanel";
 import { SahneChrome } from "./sahne/SahneChrome";
+import { SahneGlow } from "./sahne/SahneGlow";
 import {
   rectFor,
   sahneLayout,
   SAHNE_LOBBY_IDLE_MS,
   SAHNE_RADIUS,
-  stageClip,
   stageTransform,
   type SahneMode,
 } from "./sahne/sahneGeometry";
@@ -5435,22 +5435,30 @@ export function CustomVideoPlayer({
     sahneGeometry.full,
     rectFor(sahneGeometry, sahneMode),
   );
+  /*
+   * Only a transform: the video is never clipped or masked, which would take
+   * an HDR picture off its direct path to the display. The picture box is
+   * sized to the picture itself, so there is no letterbox to cut away, and the
+   * corners are rounded by covers in the room's colour.
+   */
   const sahneStageStyle = isSahne
     ? {
         transformOrigin: "0 0",
         transform: `translate(${sahneStage.x}px, ${sahneStage.y}px) scale(${sahneStage.scale})`,
-        clipPath: stageClip(
-          sahneGeometry.full,
-          viewport.width,
-          viewport.height,
-          sahneStage.scale,
-          sahneMode === "full" ? 0 : SAHNE_RADIUS,
-        ),
         transition: shouldReduceMotion
           ? undefined
-          : "transform 0.72s cubic-bezier(0.16, 1, 0.3, 1), clip-path 0.72s cubic-bezier(0.16, 1, 0.3, 1)",
+          : "transform 0.72s cubic-bezier(0.16, 1, 0.3, 1)",
       }
     : undefined;
+  const sahnePictureStyle = isSahne
+    ? {
+        left: `${sahneGeometry.full.x}px`,
+        top: `${sahneGeometry.full.y}px`,
+        width: `${sahneGeometry.full.w}px`,
+        height: `${sahneGeometry.full.h}px`,
+      }
+    : undefined;
+  const stagePictureClass = isSahne ? "absolute" : pictureBoxClass;
 
   // Left paused and alone for a while, the film opens its lobby.
   const isSahneLobbyArmed =
@@ -5732,12 +5740,27 @@ export function CustomVideoPlayer({
         changes nothing; in Sahne it moves and clips everything that is the
         picture as one, so the room can stand around it.
       */}
+      {isSahne ? (
+        <SahneGlow
+          imageUrl={preparingBackdropUrl}
+          target={rectFor(sahneGeometry, sahneMode)}
+          mode={sahneMode}
+        />
+      ) : null}
       <div
-        className={isSahne ? "absolute inset-0 z-[2]" : "absolute inset-0"}
+        className={
+          isSahne ? "pointer-events-none absolute inset-0 z-[2]" : "absolute inset-0"
+        }
         style={sahneStageStyle}
+      >
+      <div
+        ref={pictureBoxRef}
+        className={
+          isSahne ? `${stagePictureClass} pointer-events-auto` : pictureBoxClass
+        }
+        style={sahnePictureStyle}
         data-sahne-picture={isSahne ? "" : undefined}
       >
-      <div ref={pictureBoxRef} className={pictureBoxClass}>
         {(["a", "b"] as const).map((deckId) => {
           const isActiveDeck = deckId === deck.activeDeckId;
 
@@ -5813,7 +5836,10 @@ export function CustomVideoPlayer({
         changes that still have to replace the source in place — an audio track
         needing a different encode, an HLS session, a title change.
       */}
-      <div className={`pointer-events-none ${pictureBoxClass}`}>
+      <div
+        className={`pointer-events-none ${stagePictureClass}`}
+        style={sahnePictureStyle}
+      >
         <canvas
           ref={frameHoldCanvasRef}
           aria-hidden="true"
@@ -5921,8 +5947,35 @@ export function CustomVideoPlayer({
         tile={fullscreenSeekPreview}
         shown={seekPreview?.shown === true}
         rect={fullscreenSeekPreviewRect}
-        className={pictureBoxClass}
+        className={stagePictureClass}
+        style={sahnePictureStyle}
       />
+
+      {isSahne ? (
+        <div
+          aria-hidden="true"
+          className="sahne-corners"
+          data-shown={sahneMode !== "full" ? "" : undefined}
+          style={{
+            ...sahnePictureStyle,
+            ["--sahne-r" as string]: `${
+              SAHNE_RADIUS /
+              Math.max(
+                stageTransform(
+                  sahneGeometry.full,
+                  rectFor(sahneGeometry, sahneMode === "full" ? "controls" : sahneMode),
+                ).scale,
+                0.1,
+              )
+            }px`,
+          }}
+        >
+          <i />
+          <i />
+          <i />
+          <i />
+        </div>
+      ) : null}
 
       <AnimatePresence>
         {videoFitNotice ? (
@@ -5951,6 +6004,8 @@ export function CustomVideoPlayer({
           ref={subtitleOverlayRef}
           data-subtitle-editor-root
           className={`seyirlik-subtitle-overlay absolute z-[24] ${
+            isSahne ? (isSubtitleEditMode ? "pointer-events-auto" : "pointer-events-none") : ""
+          } ${
             subtitlePosition
               ? ""
               : "seyirlik-subtitle-overlay--default bottom-[12%] left-1/2"
@@ -6106,7 +6161,6 @@ export function CustomVideoPlayer({
                 setSahneLobby(!isSahneLobbyOpen);
                 revealPlayerChrome();
               }}
-              getVideo={() => videoRef.current}
               backTo={backTo ?? getMediaOwnerRouteForItem(item)}
               title={playerHeaderTitle}
               titleLogoUrl={titleLogoUrl}
@@ -6193,14 +6247,6 @@ export function CustomVideoPlayer({
               facts={sahneFacts}
               overview={sahneOverview}
               onPlayQueueItem={onPlayQueueItem ? handlePlayQueueItem : undefined}
-              source={sourceWithLiveTranscodingReasons}
-              selectedAudioStreamIndex={activeAudioStreamIndex}
-              selectedSubtitleStreamIndex={selectedSubtitleStreamIndex}
-              canSwitchAudio={canSwitchAudio}
-              canSwitchSubtitles={canSwitchSubtitles}
-              completeFileQuality={completeFileQualityControls}
-              onSelectAudioStream={handleSelectAudioStream}
-              onSelectSubtitleStream={handleSelectSubtitleStream}
             />
           ) : (
           <PlayerControls
