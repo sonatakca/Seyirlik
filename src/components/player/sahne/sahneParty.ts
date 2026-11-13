@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { partyColours } from "../../../features/partyWatch/partyColours";
-import type { PartyNotice, PartySessionState } from "../../../features/partyWatch/partySession";
+import type {
+  PartyNotice,
+  PartySessionState,
+} from "../../../features/partyWatch/partySession";
 import type { PartyConnection } from "../../../features/partyWatch/partySession";
 import type { PartyParticipant } from "../../../features/partyWatch/partyWatchTypes";
 
@@ -68,8 +71,11 @@ export function useSahneParty(
   language: string,
 ): SahneParty {
   const snapshot = state?.snapshot ?? null;
-  const live = state && snapshot && state.connection !== "ended" ? snapshot : null;
-  const discs = live ? partyDiscs(live.participants, state!.selfId, language) : [];
+  const live =
+    state && snapshot && state.connection !== "ended" ? snapshot : null;
+  const discs = live
+    ? partyDiscs(live.participants, state!.selfId, language)
+    : [];
   // People who have left keep their disc for their own leaving note.
   const [known, setKnown] = useState<ReadonlyMap<string, PartyDisc>>(new Map());
   const unknown = discs.filter((disc) => !known.has(disc.id));

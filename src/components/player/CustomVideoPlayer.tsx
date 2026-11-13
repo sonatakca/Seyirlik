@@ -5577,7 +5577,9 @@ export function CustomVideoPlayer({
       : t("player.queueCollection")
     : t("player.playbackQueue");
   const sahneFacts = [
-    typeof item.ProductionYear === "number" ? String(item.ProductionYear) : null,
+    typeof item.ProductionYear === "number"
+      ? String(item.ProductionYear)
+      : null,
     formatRuntime(item.RunTimeTicks, mediaFormatLabels),
     item.OfficialRating?.replace(/^[A-Z]{2}-/, "") ?? null,
     ...(item.Genres ?? []).slice(0, 2),
@@ -5602,10 +5604,7 @@ export function CustomVideoPlayer({
           />
         ) : null}
 
-        <Tooltip
-          content={t("player.enterViewMode")}
-          group="top-right"
-        >
+        <Tooltip content={t("player.enterViewMode")} group="top-right">
           <button
             type="button"
             onClick={enterViewMode}
@@ -5677,9 +5676,7 @@ export function CustomVideoPlayer({
           >
             <Bookmark
               size={18}
-              fill={
-                checkpointSeconds !== null ? "currentColor" : "none"
-              }
+              fill={checkpointSeconds !== null ? "currentColor" : "none"}
             />
           </button>
         </Tooltip>
@@ -5697,9 +5694,7 @@ export function CustomVideoPlayer({
             >
               <Camera
                 size={18}
-                className={
-                  isSavingFrame ? "animate-pulse" : undefined
-                }
+                className={isSavingFrame ? "animate-pulse" : undefined}
               />
             </button>
           </Tooltip>
@@ -5782,86 +5777,90 @@ export function CustomVideoPlayer({
       ) : null}
       <div
         className={
-          isSahne ? "pointer-events-none absolute inset-0 z-[2]" : "absolute inset-0"
+          isSahne
+            ? "pointer-events-none absolute inset-0 z-[2]"
+            : "absolute inset-0"
         }
         style={sahneStageStyle}
       >
-      <div
-        ref={pictureBoxRef}
-        className={
-          isSahne ? `${stagePictureClass} pointer-events-auto` : pictureBoxClass
-        }
-        style={sahnePictureStyle}
-        data-sahne-picture={isSahne ? "" : undefined}
-      >
-        {(["a", "b"] as const).map((deckId) => {
-          const isActiveDeck = deckId === deck.activeDeckId;
+        <div
+          ref={pictureBoxRef}
+          className={
+            isSahne
+              ? `${stagePictureClass} pointer-events-auto`
+              : pictureBoxClass
+          }
+          style={sahnePictureStyle}
+          data-sahne-picture={isSahne ? "" : undefined}
+        >
+          {(["a", "b"] as const).map((deckId) => {
+            const isActiveDeck = deckId === deck.activeDeckId;
 
-          return (
-            <video
-              key={deckId}
-              ref={deckRefs[deckId]}
-              data-deck={deckId}
-              data-deck-role={isActiveDeck ? "active" : "standby"}
-              controls={false}
-              playsInline
-              preload="auto"
-              aria-hidden={isActiveDeck ? undefined : true}
-              tabIndex={isActiveDeck ? undefined : -1}
-              className={`seyirlik-video absolute inset-0 h-full w-full ${pictureFitClass} ${
-                isActiveDeck
-                  ? "z-[2] opacity-100"
-                  : "pointer-events-none z-[1] opacity-0"
-              }`}
-              style={{
-                transition: shouldReduceMotion
-                  ? undefined
-                  : `opacity ${HANDOFF_CROSSFADE_MS}ms linear`,
-              }}
-              onPlay={handleVideoPlay}
-              onPause={handleVideoPause}
-              onTimeUpdate={handleTimeUpdate}
-              onSeeked={handleVideoSeeked}
-              onWaiting={(event) => {
-                // Standby buffering is not the viewer waiting, and must not
-                // reveal the chrome or count as an Auto-quality stall.
-                if (!isActiveDeckElement(event.currentTarget)) return;
-                revealPlayerChrome();
-              }}
-              onError={handleVideoError}
-              onEnded={(event) => {
-                if (!isActiveDeckElement(event.currentTarget)) return;
-                const positionSeconds = updateLatestPlaybackPosition();
-                onPlaybackProgress?.(positionSeconds, true);
-                reportStoppedOnce(false);
-                handleDefaultNextEpisodePlay();
-              }}
-            />
-          );
-        })}
-      </div>
+            return (
+              <video
+                key={deckId}
+                ref={deckRefs[deckId]}
+                data-deck={deckId}
+                data-deck-role={isActiveDeck ? "active" : "standby"}
+                controls={false}
+                playsInline
+                preload="auto"
+                aria-hidden={isActiveDeck ? undefined : true}
+                tabIndex={isActiveDeck ? undefined : -1}
+                className={`seyirlik-video absolute inset-0 h-full w-full ${pictureFitClass} ${
+                  isActiveDeck
+                    ? "z-[2] opacity-100"
+                    : "pointer-events-none z-[1] opacity-0"
+                }`}
+                style={{
+                  transition: shouldReduceMotion
+                    ? undefined
+                    : `opacity ${HANDOFF_CROSSFADE_MS}ms linear`,
+                }}
+                onPlay={handleVideoPlay}
+                onPause={handleVideoPause}
+                onTimeUpdate={handleTimeUpdate}
+                onSeeked={handleVideoSeeked}
+                onWaiting={(event) => {
+                  // Standby buffering is not the viewer waiting, and must not
+                  // reveal the chrome or count as an Auto-quality stall.
+                  if (!isActiveDeckElement(event.currentTarget)) return;
+                  revealPlayerChrome();
+                }}
+                onError={handleVideoError}
+                onEnded={(event) => {
+                  if (!isActiveDeckElement(event.currentTarget)) return;
+                  const positionSeconds = updateLatestPlaybackPosition();
+                  onPlaybackProgress?.(positionSeconds, true);
+                  reportStoppedOnce(false);
+                  handleDefaultNextEpisodePlay();
+                }}
+              />
+            );
+          })}
+        </div>
 
-      {/*
+        {/*
         Development-only readout of which media is genuinely on screen. A
         handoff is invisible by design, so without this there is no way to tell
         a switch that worked from one that silently declined.
       */}
-      {import.meta.env.DEV ? (
-        <ActiveSourceBadge
-          videoRef={videoRef}
-          activeDeckId={deck.activeDeckId}
-          deckEpoch={deckEpoch}
-          activeQualityId={activeQualityFileId}
-          activeQualityLabel={
-            activeQualityFile
-              ? `${activeQualityFile.height}p${activeQualityFile.kind === "original" ? " original" : ""}`
-              : undefined
-          }
-          pendingQualityId={deck.pendingQualityId}
-        />
-      ) : null}
+        {import.meta.env.DEV ? (
+          <ActiveSourceBadge
+            videoRef={videoRef}
+            activeDeckId={deck.activeDeckId}
+            deckEpoch={deckEpoch}
+            activeQualityId={activeQualityFileId}
+            activeQualityLabel={
+              activeQualityFile
+                ? `${activeQualityFile.height}p${activeQualityFile.kind === "original" ? " original" : ""}`
+                : undefined
+            }
+            pendingQualityId={deck.pendingQualityId}
+          />
+        ) : null}
 
-      {/*
+        {/*
         The outgoing frame, held over the element while it reloads.
 
         No longer part of a rendition change: those hand over between decks and
@@ -5869,257 +5868,263 @@ export function CustomVideoPlayer({
         changes that still have to replace the source in place — an audio track
         needing a different encode, an HLS session, a title change.
       */}
-      <div
-        className={`pointer-events-none ${stagePictureClass}`}
-        style={sahnePictureStyle}
-      >
-        <canvas
-          ref={frameHoldCanvasRef}
-          aria-hidden="true"
-          className={`pointer-events-none absolute inset-0 z-[11] h-full w-full bg-black ${pictureFitClass} transition-opacity duration-200 ${
-            isHoldingFrame ? "opacity-100" : "opacity-0"
-          }`}
-        />
-      </div>
+        <div
+          className={`pointer-events-none ${stagePictureClass}`}
+          style={sahnePictureStyle}
+        >
+          <canvas
+            ref={frameHoldCanvasRef}
+            aria-hidden="true"
+            className={`pointer-events-none absolute inset-0 z-[11] h-full w-full bg-black ${pictureFitClass} transition-opacity duration-200 ${
+              isHoldingFrame ? "opacity-100" : "opacity-0"
+            }`}
+          />
+        </div>
 
-      {/*
+        {/*
         Warms bytes for the source replacements that cannot hand over between
         decks. A rendition change no longer comes through here: the standby deck
         is the thing that buffers it, and that deck goes on to play it.
       */}
-      <video
-        ref={preloadVideoRef}
-        aria-hidden="true"
-        tabIndex={-1}
-        muted
-        playsInline
-        preload="none"
-        className="pointer-events-none absolute h-px w-px opacity-0"
-      />
+        <video
+          ref={preloadVideoRef}
+          aria-hidden="true"
+          tabIndex={-1}
+          muted
+          playsInline
+          preload="none"
+          className="pointer-events-none absolute h-px w-px opacity-0"
+        />
 
-      <AnimatePresence initial={false}>
-        {showPreparingArtwork ? (
-          <motion.div
-            key="player-preparing-artwork"
+        <AnimatePresence initial={false}>
+          {showPreparingArtwork ? (
+            <motion.div
+              key="player-preparing-artwork"
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 z-[12] overflow-hidden bg-black"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{
+                duration: shouldReduceMotion ? 0 : 0.45,
+                ease: [0.22, 1, 0.36, 1],
+              }}
+            >
+              {preparingBackdropUrl ? (
+                <motion.img
+                  src={preparingBackdropUrl}
+                  alt=""
+                  draggable={false}
+                  className="absolute inset-0 h-full w-full object-cover"
+                  initial={{
+                    opacity: 0,
+                    transform: `scale(${shouldReduceMotion ? 1 : 1.035})`,
+                  }}
+                  animate={{
+                    opacity: 1,
+                    transform: "scale(1.02)",
+                  }}
+                  exit={{
+                    opacity: 0,
+                    transform: [
+                      "scale(1.02)",
+                      `scale(${shouldReduceMotion ? 1 : 1.01})`,
+                    ],
+                  }}
+                  transition={{
+                    opacity: {
+                      duration: shouldReduceMotion ? 0 : 0.5,
+                    },
+                    transform: {
+                      duration: shouldReduceMotion ? 0 : 1.2,
+                      ease: [0.22, 1, 0.36, 1],
+                    },
+                  }}
+                />
+              ) : null}
+
+              <div className="absolute inset-0 bg-black/45" />
+
+              <div className="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-black/45" />
+
+              <div className="absolute inset-0 z-10 grid place-items-center">
+                <LoadingSpinner label="" />
+              </div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
+
+        {!isViewModeEnabled && !isSahne ? (
+          <>
+            <div
+              aria-hidden="true"
+              className={`seyirlik-player-gradient-top pointer-events-none absolute inset-x-0 top-0 z-[8] transition-opacity h-[26%] ${
+                shouldRenderPlayerChrome
+                  ? "opacity-100 duration-[620ms] ease-[cubic-bezier(0.16,1,0.3,1)]"
+                  : "opacity-0 duration-[420ms] ease-[cubic-bezier(0.45,0,0.75,0.2)]"
+              }`}
+            />
+            <div
+              aria-hidden="true"
+              className={`seyirlik-player-gradient-bottom pointer-events-none absolute inset-x-0 bottom-0 z-[8] transition-opacity h-[38%] ${
+                shouldRenderPlayerChrome
+                  ? "opacity-100 duration-[620ms] ease-[cubic-bezier(0.16,1,0.3,1)]"
+                  : "opacity-0 duration-[420ms] ease-[cubic-bezier(0.45,0,0.75,0.2)]"
+              }`}
+            />
+          </>
+        ) : null}
+
+        <SeekPreviewFrame
+          tile={fullscreenSeekPreview}
+          shown={seekPreview?.shown === true}
+          rect={fullscreenSeekPreviewRect}
+          className={stagePictureClass}
+          style={sahnePictureStyle}
+        />
+
+        {isSahne ? (
+          <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-0 z-[12] overflow-hidden bg-black"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{
-              duration: shouldReduceMotion ? 0 : 0.45,
-              ease: [0.22, 1, 0.36, 1],
+            className="sahne-corners"
+            data-shown={sahneMode !== "full" ? "" : undefined}
+            style={{
+              ...sahnePictureStyle,
+              ["--sahne-r" as string]: `${
+                SAHNE_RADIUS /
+                Math.max(
+                  stageTransform(
+                    sahneGeometry.full,
+                    rectFor(
+                      sahneGeometry,
+                      sahneMode === "full" ? "controls" : sahneMode,
+                    ),
+                  ).scale,
+                  0.1,
+                )
+              }px`,
             }}
           >
-            {preparingBackdropUrl ? (
-              <motion.img
-                src={preparingBackdropUrl}
-                alt=""
-                draggable={false}
-                className="absolute inset-0 h-full w-full object-cover"
-                initial={{
-                  opacity: 0,
-                  transform: `scale(${shouldReduceMotion ? 1 : 1.035})`,
-                }}
-                animate={{
-                  opacity: 1,
-                  transform: "scale(1.02)",
-                }}
-                exit={{
-                  opacity: 0,
-                  transform: [
-                    "scale(1.02)",
-                    `scale(${shouldReduceMotion ? 1 : 1.01})`,
-                  ],
-                }}
-                transition={{
-                  opacity: {
-                    duration: shouldReduceMotion ? 0 : 0.5,
-                  },
-                  transform: {
-                    duration: shouldReduceMotion ? 0 : 1.2,
-                    ease: [0.22, 1, 0.36, 1],
-                  },
-                }}
-              />
-            ) : null}
-
-            <div className="absolute inset-0 bg-black/45" />
-
-            <div className="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-black/45" />
-
-            <div className="absolute inset-0 z-10 grid place-items-center">
-              <LoadingSpinner label="" />
-            </div>
-          </motion.div>
+            <i />
+            <i />
+            <i />
+            <i />
+          </div>
         ) : null}
-      </AnimatePresence>
 
-      {!isViewModeEnabled && !isSahne ? (
-        <>
-          <div
-            aria-hidden="true"
-            className={`seyirlik-player-gradient-top pointer-events-none absolute inset-x-0 top-0 z-[8] transition-opacity h-[26%] ${
-              shouldRenderPlayerChrome
-                ? "opacity-100 duration-[620ms] ease-[cubic-bezier(0.16,1,0.3,1)]"
-                : "opacity-0 duration-[420ms] ease-[cubic-bezier(0.45,0,0.75,0.2)]"
-            }`}
-          />
-          <div
-            aria-hidden="true"
-            className={`seyirlik-player-gradient-bottom pointer-events-none absolute inset-x-0 bottom-0 z-[8] transition-opacity h-[38%] ${
-              shouldRenderPlayerChrome
-                ? "opacity-100 duration-[620ms] ease-[cubic-bezier(0.16,1,0.3,1)]"
-                : "opacity-0 duration-[420ms] ease-[cubic-bezier(0.45,0,0.75,0.2)]"
-            }`}
-          />
-        </>
-      ) : null}
-
-      <SeekPreviewFrame
-        tile={fullscreenSeekPreview}
-        shown={seekPreview?.shown === true}
-        rect={fullscreenSeekPreviewRect}
-        className={stagePictureClass}
-        style={sahnePictureStyle}
-      />
-
-      {isSahne ? (
-        <div
-          aria-hidden="true"
-          className="sahne-corners"
-          data-shown={sahneMode !== "full" ? "" : undefined}
-          style={{
-            ...sahnePictureStyle,
-            ["--sahne-r" as string]: `${
-              SAHNE_RADIUS /
-              Math.max(
-                stageTransform(
-                  sahneGeometry.full,
-                  rectFor(sahneGeometry, sahneMode === "full" ? "controls" : sahneMode),
-                ).scale,
-                0.1,
-              )
-            }px`,
-          }}
-        >
-          <i />
-          <i />
-          <i />
-          <i />
-        </div>
-      ) : null}
-
-      <AnimatePresence>
-        {videoFitNotice ? (
-          <motion.div
-            key={videoFitNotice.key}
-            role="status"
-            className="pointer-events-none absolute inset-0 z-[60] flex items-center justify-center"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: shouldReduceMotion ? 0 : 0.18 }}
-          >
-            <span className="rounded-full bg-black/70 px-4 py-2 text-sm font-black text-white shadow-player-controls backdrop-blur-xl">
-              {t(
-                videoFitNotice.fit === "fill"
-                  ? "player.videoFit.fill"
-                  : "player.videoFit.original",
-              )}
-            </span>
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
-
-      {subtitleLines.length > 0 ? (
-        <div
-          ref={subtitleOverlayRef}
-          data-subtitle-editor-root
-          className={`seyirlik-subtitle-overlay absolute z-[24] ${
-            isSahne ? (isSubtitleEditMode ? "pointer-events-auto" : "pointer-events-none") : ""
-          } ${
-            subtitlePosition
-              ? ""
-              : "seyirlik-subtitle-overlay--default bottom-[12%] left-1/2"
-          } ${isSubtitleEditMode ? (isDraggingSubtitle ? "cursor-grabbing" : "cursor-grab") : "cursor-default"} ${
-            isShowingSubtitlePlaceholder
-              ? "seyirlik-subtitle-overlay--placeholder"
-              : ""
-          } ${isSubtitleEditMode ? "seyirlik-subtitle-overlay--editing" : ""}`}
-          style={subtitleOverlayStyle}
-          onPointerDown={handleSubtitlePointerDown}
-          onPointerMove={handleSubtitlePointerMove}
-          onPointerUp={finishSubtitleDrag}
-          onPointerCancel={handleSubtitlePointerCancel}
-          onLostPointerCapture={handleSubtitlePointerCancel}
-          onDoubleClick={handleSubtitleDoubleClick}
-          aria-label={t("player.dragSubtitles")}
-        >
-          {subtitleLines.map((line, index) => (
-            <div
-              key={`${line}-${index}`}
-              className="seyirlik-subtitle-line-wrap"
+        <AnimatePresence>
+          {videoFitNotice ? (
+            <motion.div
+              key={videoFitNotice.key}
+              role="status"
+              className="pointer-events-none absolute inset-0 z-[60] flex items-center justify-center"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: shouldReduceMotion ? 0 : 0.18 }}
             >
-              <span className="seyirlik-subtitle-line">{line}</span>
-            </div>
-          ))}
-
-          {isSubtitleEditMode ? (
-            <>
-              <button
-                type="button"
-                className="seyirlik-subtitle-resize-handle seyirlik-subtitle-resize-handle--tl"
-                aria-label={t("player.resizeSubtitlesTopLeft")}
-                onPointerDown={(event) =>
-                  handleSubtitleResizePointerDown(event, -1, -1)
-                }
-                onPointerMove={handleSubtitleResizePointerMove}
-                onPointerUp={finishSubtitleResize}
-                onPointerCancel={handleSubtitleResizePointerCancel}
-                onLostPointerCapture={handleSubtitleResizePointerCancel}
-              />
-              <button
-                type="button"
-                className="seyirlik-subtitle-resize-handle seyirlik-subtitle-resize-handle--tr"
-                aria-label={t("player.resizeSubtitlesTopRight")}
-                onPointerDown={(event) =>
-                  handleSubtitleResizePointerDown(event, 1, -1)
-                }
-                onPointerMove={handleSubtitleResizePointerMove}
-                onPointerUp={finishSubtitleResize}
-                onPointerCancel={handleSubtitleResizePointerCancel}
-                onLostPointerCapture={handleSubtitleResizePointerCancel}
-              />
-              <button
-                type="button"
-                className="seyirlik-subtitle-resize-handle seyirlik-subtitle-resize-handle--bl"
-                aria-label={t("player.resizeSubtitlesBottomLeft")}
-                onPointerDown={(event) =>
-                  handleSubtitleResizePointerDown(event, -1, 1)
-                }
-                onPointerMove={handleSubtitleResizePointerMove}
-                onPointerUp={finishSubtitleResize}
-                onPointerCancel={handleSubtitleResizePointerCancel}
-                onLostPointerCapture={handleSubtitleResizePointerCancel}
-              />
-              <button
-                type="button"
-                className="seyirlik-subtitle-resize-handle seyirlik-subtitle-resize-handle--br"
-                aria-label={t("player.resizeSubtitlesBottomRight")}
-                onPointerDown={(event) =>
-                  handleSubtitleResizePointerDown(event, 1, 1)
-                }
-                onPointerMove={handleSubtitleResizePointerMove}
-                onPointerUp={finishSubtitleResize}
-                onPointerCancel={handleSubtitleResizePointerCancel}
-                onLostPointerCapture={handleSubtitleResizePointerCancel}
-              />
-            </>
+              <span className="rounded-full bg-black/70 px-4 py-2 text-sm font-black text-white shadow-player-controls backdrop-blur-xl">
+                {t(
+                  videoFitNotice.fit === "fill"
+                    ? "player.videoFit.fill"
+                    : "player.videoFit.original",
+                )}
+              </span>
+            </motion.div>
           ) : null}
-        </div>
-      ) : null}
+        </AnimatePresence>
 
+        {subtitleLines.length > 0 ? (
+          <div
+            ref={subtitleOverlayRef}
+            data-subtitle-editor-root
+            className={`seyirlik-subtitle-overlay absolute z-[24] ${
+              isSahne
+                ? isSubtitleEditMode
+                  ? "pointer-events-auto"
+                  : "pointer-events-none"
+                : ""
+            } ${
+              subtitlePosition
+                ? ""
+                : "seyirlik-subtitle-overlay--default bottom-[12%] left-1/2"
+            } ${isSubtitleEditMode ? (isDraggingSubtitle ? "cursor-grabbing" : "cursor-grab") : "cursor-default"} ${
+              isShowingSubtitlePlaceholder
+                ? "seyirlik-subtitle-overlay--placeholder"
+                : ""
+            } ${isSubtitleEditMode ? "seyirlik-subtitle-overlay--editing" : ""}`}
+            style={subtitleOverlayStyle}
+            onPointerDown={handleSubtitlePointerDown}
+            onPointerMove={handleSubtitlePointerMove}
+            onPointerUp={finishSubtitleDrag}
+            onPointerCancel={handleSubtitlePointerCancel}
+            onLostPointerCapture={handleSubtitlePointerCancel}
+            onDoubleClick={handleSubtitleDoubleClick}
+            aria-label={t("player.dragSubtitles")}
+          >
+            {subtitleLines.map((line, index) => (
+              <div
+                key={`${line}-${index}`}
+                className="seyirlik-subtitle-line-wrap"
+              >
+                <span className="seyirlik-subtitle-line">{line}</span>
+              </div>
+            ))}
+
+            {isSubtitleEditMode ? (
+              <>
+                <button
+                  type="button"
+                  className="seyirlik-subtitle-resize-handle seyirlik-subtitle-resize-handle--tl"
+                  aria-label={t("player.resizeSubtitlesTopLeft")}
+                  onPointerDown={(event) =>
+                    handleSubtitleResizePointerDown(event, -1, -1)
+                  }
+                  onPointerMove={handleSubtitleResizePointerMove}
+                  onPointerUp={finishSubtitleResize}
+                  onPointerCancel={handleSubtitleResizePointerCancel}
+                  onLostPointerCapture={handleSubtitleResizePointerCancel}
+                />
+                <button
+                  type="button"
+                  className="seyirlik-subtitle-resize-handle seyirlik-subtitle-resize-handle--tr"
+                  aria-label={t("player.resizeSubtitlesTopRight")}
+                  onPointerDown={(event) =>
+                    handleSubtitleResizePointerDown(event, 1, -1)
+                  }
+                  onPointerMove={handleSubtitleResizePointerMove}
+                  onPointerUp={finishSubtitleResize}
+                  onPointerCancel={handleSubtitleResizePointerCancel}
+                  onLostPointerCapture={handleSubtitleResizePointerCancel}
+                />
+                <button
+                  type="button"
+                  className="seyirlik-subtitle-resize-handle seyirlik-subtitle-resize-handle--bl"
+                  aria-label={t("player.resizeSubtitlesBottomLeft")}
+                  onPointerDown={(event) =>
+                    handleSubtitleResizePointerDown(event, -1, 1)
+                  }
+                  onPointerMove={handleSubtitleResizePointerMove}
+                  onPointerUp={finishSubtitleResize}
+                  onPointerCancel={handleSubtitleResizePointerCancel}
+                  onLostPointerCapture={handleSubtitleResizePointerCancel}
+                />
+                <button
+                  type="button"
+                  className="seyirlik-subtitle-resize-handle seyirlik-subtitle-resize-handle--br"
+                  aria-label={t("player.resizeSubtitlesBottomRight")}
+                  onPointerDown={(event) =>
+                    handleSubtitleResizePointerDown(event, 1, 1)
+                  }
+                  onPointerMove={handleSubtitleResizePointerMove}
+                  onPointerUp={finishSubtitleResize}
+                  onPointerCancel={handleSubtitleResizePointerCancel}
+                  onLostPointerCapture={handleSubtitleResizePointerCancel}
+                />
+              </>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {isSubtitleEditMode ? (
@@ -6245,7 +6250,9 @@ export function CustomVideoPlayer({
                   <PlayerQueuePanel
                     queue={playbackQueue}
                     onPlayItem={(queueItem) =>
-                      onPlayQueueItem ? handlePlayQueueItem(queueItem.Id) : undefined
+                      onPlayQueueItem
+                        ? handlePlayQueueItem(queueItem.Id)
+                        : undefined
                     }
                   />
                 ) : null
@@ -6299,76 +6306,78 @@ export function CustomVideoPlayer({
               onShowControls={revealPlayerChrome}
             />
           ) : (
-          <PlayerControls
-            visible={shouldRenderPlayerChrome}
-            isPlaying={progress.isPlaying}
-            playWaiting={partyWatch.isStartPending}
-            onControlsHoverStart={keepControlsVisible}
-            onControlsHoverEnd={releaseControlsHover}
-            seekPreviewLoading={isSeekLoadingShown}
-            seekPointerAxis={seekPointerAxis}
-            compactSeekPreview={isCompactPhonePlayer}
-            compactLayout={isCompactPhonePlayer}
-            currentTime={progress.currentTime}
-            duration={progress.duration}
-            bufferedEnd={progress.bufferedEnd}
-            volume={progress.volume}
-            muted={progress.muted}
-            itemId={item.Id}
-            mediaSourceId={activeSource.mediaSourceId}
-            checkpointSeconds={checkpointSeconds}
-            previewAspectRatio={previewAspectRatio}
-            onTogglePlay={partyWatch.togglePlay}
-            onSeek={handleSeekCommit}
-            onSeekPreview={handleSeekPreview}
-            onSeekPreviewCancel={cancelSeekPreview}
-            onSeekBy={handleSeekBy}
-            onToggleMute={progress.toggleMute}
-            onVolumeChange={progress.setVolume}
-            onToggleFullscreen={toggleFullscreen}
-            canFullscreen={canCustomFullscreen}
-            isFullscreen={isCustomFullscreen}
-            canNativeFullscreen={canNativeFullscreen}
-            onEnterNativeFullscreen={handleEnterNativeFullscreen}
-            canPictureInPicture={canPictureInPicture}
-            isPictureInPicture={isPictureInPicture}
-            onTogglePictureInPicture={handleTogglePictureInPicture}
-            playbackQueue={playbackQueue}
-            queueOpen={isQueueOpen}
-            onOpenQueue={() => {
-              setIsQueueOpen((current) => !current);
-              setIsSettingsOpen(false);
-              setIsPartyWatchOpen(false);
-              revealPlayerChrome();
-            }}
-            onPlayQueueItem={onPlayQueueItem ? handlePlayQueueItem : undefined}
-            onOpenSettings={() => {
-              setIsSettingsOpen((current) => !current);
-              setIsQueueOpen(false);
-              setIsPartyWatchOpen(false);
-              revealPlayerChrome();
-            }}
-            source={sourceWithLiveTranscodingReasons}
-            qualityOptions={qualityOptions}
-            selectedQualityId={selectedQualityId}
-            selectedAudioStreamIndex={activeAudioStreamIndex}
-            selectedSubtitleStreamIndex={selectedSubtitleStreamIndex}
-            subtitleDelaySeconds={subtitleDelaySeconds}
-            canSwitchAudio={canSwitchAudio}
-            canSwitchSubtitles={canSwitchSubtitles}
-            completeFileQuality={completeFileQualityControls}
-            isSubtitleEditMode={isSubtitleEditMode}
-            settingsOpen={isSettingsOpen}
-            onSelectAutoQuality={handleSelectAutoQuality}
-            onSelectQuality={handleSelectQuality}
-            onSelectAudioStream={handleSelectAudioStream}
-            {...(settingsNoticeText
-              ? { audioNoticeText: settingsNoticeText }
-              : {})}
-            onSelectSubtitleStream={handleSelectSubtitleStream}
-            onSubtitleDelayChange={setSubtitleDelaySeconds}
-            onStartSubtitleEdit={startSubtitleEditMode}
-          />
+            <PlayerControls
+              visible={shouldRenderPlayerChrome}
+              isPlaying={progress.isPlaying}
+              playWaiting={partyWatch.isStartPending}
+              onControlsHoverStart={keepControlsVisible}
+              onControlsHoverEnd={releaseControlsHover}
+              seekPreviewLoading={isSeekLoadingShown}
+              seekPointerAxis={seekPointerAxis}
+              compactSeekPreview={isCompactPhonePlayer}
+              compactLayout={isCompactPhonePlayer}
+              currentTime={progress.currentTime}
+              duration={progress.duration}
+              bufferedEnd={progress.bufferedEnd}
+              volume={progress.volume}
+              muted={progress.muted}
+              itemId={item.Id}
+              mediaSourceId={activeSource.mediaSourceId}
+              checkpointSeconds={checkpointSeconds}
+              previewAspectRatio={previewAspectRatio}
+              onTogglePlay={partyWatch.togglePlay}
+              onSeek={handleSeekCommit}
+              onSeekPreview={handleSeekPreview}
+              onSeekPreviewCancel={cancelSeekPreview}
+              onSeekBy={handleSeekBy}
+              onToggleMute={progress.toggleMute}
+              onVolumeChange={progress.setVolume}
+              onToggleFullscreen={toggleFullscreen}
+              canFullscreen={canCustomFullscreen}
+              isFullscreen={isCustomFullscreen}
+              canNativeFullscreen={canNativeFullscreen}
+              onEnterNativeFullscreen={handleEnterNativeFullscreen}
+              canPictureInPicture={canPictureInPicture}
+              isPictureInPicture={isPictureInPicture}
+              onTogglePictureInPicture={handleTogglePictureInPicture}
+              playbackQueue={playbackQueue}
+              queueOpen={isQueueOpen}
+              onOpenQueue={() => {
+                setIsQueueOpen((current) => !current);
+                setIsSettingsOpen(false);
+                setIsPartyWatchOpen(false);
+                revealPlayerChrome();
+              }}
+              onPlayQueueItem={
+                onPlayQueueItem ? handlePlayQueueItem : undefined
+              }
+              onOpenSettings={() => {
+                setIsSettingsOpen((current) => !current);
+                setIsQueueOpen(false);
+                setIsPartyWatchOpen(false);
+                revealPlayerChrome();
+              }}
+              source={sourceWithLiveTranscodingReasons}
+              qualityOptions={qualityOptions}
+              selectedQualityId={selectedQualityId}
+              selectedAudioStreamIndex={activeAudioStreamIndex}
+              selectedSubtitleStreamIndex={selectedSubtitleStreamIndex}
+              subtitleDelaySeconds={subtitleDelaySeconds}
+              canSwitchAudio={canSwitchAudio}
+              canSwitchSubtitles={canSwitchSubtitles}
+              completeFileQuality={completeFileQualityControls}
+              isSubtitleEditMode={isSubtitleEditMode}
+              settingsOpen={isSettingsOpen}
+              onSelectAutoQuality={handleSelectAutoQuality}
+              onSelectQuality={handleSelectQuality}
+              onSelectAudioStream={handleSelectAudioStream}
+              {...(settingsNoticeText
+                ? { audioNoticeText: settingsNoticeText }
+                : {})}
+              onSelectSubtitleStream={handleSelectSubtitleStream}
+              onSubtitleDelayChange={setSubtitleDelaySeconds}
+              onStartSubtitleEdit={startSubtitleEditMode}
+            />
           )}
         </>
       ) : null}

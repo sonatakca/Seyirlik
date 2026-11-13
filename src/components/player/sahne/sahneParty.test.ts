@@ -7,7 +7,11 @@ import {
 import type { PartyParticipant } from "../../../features/partyWatch/partyWatchTypes";
 import { initialOf, partyDiscs } from "./sahneParty";
 
-const person = (userId: string, client: string, displayName: string): PartyParticipant => ({
+const person = (
+  userId: string,
+  client: string,
+  displayName: string,
+): PartyParticipant => ({
   id: `${userId}:${client}`,
   userId,
   displayName,
@@ -38,14 +42,23 @@ describe("party colours", () => {
   });
 
   it("never gives two users the same colour while there are colours left", () => {
-    const party = Array.from({ length: 6 }, (_, index) => person(`u${index}`, "1", `P${index}`));
-    const colours = new Set([...partyColours(party).values()].map((colour) => colour.color));
+    const party = Array.from({ length: 6 }, (_, index) =>
+      person(`u${index}`, "1", `P${index}`),
+    );
+    const colours = new Set(
+      [...partyColours(party).values()].map((colour) => colour.color),
+    );
     expect(colours.size).toBe(6);
   });
 
   it("does not change anyone's colour when someone arrives", () => {
     const before = partyColours([sonat, qa, ece]);
-    const afterJoin = partyColours([sonat, qa, ece, person("user-new", "1", "Yeni")]);
+    const afterJoin = partyColours([
+      sonat,
+      qa,
+      ece,
+      person("user-new", "1", "Yeni"),
+    ]);
     for (const userId of ["user-sonat", "user-qa", "user-ece"]) {
       expect(afterJoin.get(userId)).toBe(before.get(userId));
     }
@@ -55,19 +68,27 @@ describe("party colours", () => {
     // Find two users who want the same colour.
     const ids = Array.from({ length: 40 }, (_, index) => `clash-${index}`);
     const first = ids[0];
-    const second = ids.find((id) => id !== first && preferredPartyColour(id) === preferredPartyColour(first))!;
+    const second = ids.find(
+      (id) =>
+        id !== first &&
+        preferredPartyColour(id) === preferredPartyColour(first),
+    )!;
     const a = person(first, "1", "A");
     const b = person(second, "1", "B");
     const together = partyColours([a, b]);
     expect(together.get(second)).not.toBe(together.get(first));
-    expect(partyColours([b]).get(second)).toBe(PARTY_COLOURS[preferredPartyColour(second)]);
+    expect(partyColours([b]).get(second)).toBe(
+      PARTY_COLOURS[preferredPartyColour(second)],
+    );
   });
 
   it("gives one user on two devices one colour", () => {
     const phone = person("user-sonat", "2", "Sonat");
     const colours = partyColours([sonat, phone, qa]);
     const discs = partyDiscs([sonat, phone, qa], qa.id, "tr");
-    expect(discs.find((d) => d.id === sonat.id)?.color).toBe(discs.find((d) => d.id === phone.id)?.color);
+    expect(discs.find((d) => d.id === sonat.id)?.color).toBe(
+      discs.find((d) => d.id === phone.id)?.color,
+    );
     expect(colours.size).toBe(2);
   });
 

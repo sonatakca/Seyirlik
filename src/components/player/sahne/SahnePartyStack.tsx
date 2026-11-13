@@ -22,8 +22,20 @@ function Ring({ color }: { color: string }) {
   return (
     <svg className="sahne-disc-ring" viewBox="0 0 42 42" aria-hidden="true">
       <g className="sahne-spin">
-        <path d="M 21 3 A 18 18 0 0 1 39 21" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" />
-        <path d="M 21 39 A 18 18 0 0 1 3 21" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" />
+        <path
+          d="M 21 3 A 18 18 0 0 1 39 21"
+          fill="none"
+          stroke={color}
+          strokeWidth="2.5"
+          strokeLinecap="round"
+        />
+        <path
+          d="M 21 39 A 18 18 0 0 1 3 21"
+          fill="none"
+          stroke={color}
+          strokeWidth="2.5"
+          strokeLinecap="round"
+        />
       </g>
     </svg>
   );
@@ -33,7 +45,9 @@ export function DiscFace({ disc, size }: { disc: PartyDisc; size?: number }) {
   const style = {
     "--c": disc.color,
     "--ink-on": disc.ink,
-    ...(size ? { width: size, height: size, fontSize: Math.round(size * 0.4) } : {}),
+    ...(size
+      ? { width: size, height: size, fontSize: Math.round(size * 0.4) }
+      : {}),
   } as CSSProperties;
   return (
     <span className="sahne-disc-face" style={style} aria-hidden="true">
@@ -78,18 +92,25 @@ export function SahnePartyStack({ party }: { party: SahneParty }) {
   // Where each disc's own box stands on screen, without the animations on it.
   const lefts = useRef(new Map<string, number>());
   // How each newcomer enters, numbered so the effect starts each entry once.
-  const [entries, setEntries] = useState<ReadonlyMap<string, { kind: "fly" | "grow"; gen: number }>>(new Map());
+  const [entries, setEntries] = useState<
+    ReadonlyMap<string, { kind: "fly" | "grow"; gen: number }>
+  >(new Map());
   const started = useRef(new Map<string, number>());
 
   // Who is drawn, in order, including the ones on their way out.
   const ids = party.discs.map((disc) => disc.id).join("|");
-  const [seen, setSeen] = useState({ ids: "", connection: party.connection, gen: 0 });
+  const [seen, setSeen] = useState({
+    ids: "",
+    connection: party.connection,
+    gen: 0,
+  });
   const [order, setOrder] = useState<string[]>([]);
   const [leaving, setLeaving] = useState<Map<string, PartyDisc>>(new Map());
   const [known, setKnown] = useState<Map<string, PartyDisc>>(new Map());
   if (seen.ids !== ids || seen.connection !== party.connection) {
     const current = new Set(party.discs.map((disc) => disc.id));
-    const wasLive = seen.connection === "live" || seen.connection === "reconnecting";
+    const wasLive =
+      seen.connection === "live" || seen.connection === "reconnecting";
     const growing = seen.connection === "joining" || seen.ids === "";
     const nextLeaving = new Map(leaving);
     for (const id of order) {
@@ -99,11 +120,17 @@ export function SahnePartyStack({ party }: { party: SahneParty }) {
       }
     }
     const kept = order.filter((id) => current.has(id) || nextLeaving.has(id));
-    const added = party.discs.map((disc) => disc.id).filter((id) => !kept.includes(id));
+    const added = party.discs
+      .map((disc) => disc.id)
+      .filter((id) => !kept.includes(id));
     if (added.length > 0) {
       const nextEntries = new Map(entries);
       const gen = seen.gen + 1;
-      for (const id of added) nextEntries.set(id, { kind: wasLive && !growing ? "fly" : "grow", gen });
+      for (const id of added)
+        nextEntries.set(id, {
+          kind: wasLive && !growing ? "fly" : "grow",
+          gen,
+        });
       setEntries(nextEntries);
     }
     const nextKnown = new Map(known);
@@ -140,26 +167,47 @@ export function SahnePartyStack({ party }: { party: SahneParty }) {
           const b = button.getBoundingClientRect();
           const dx = b.left + b.width / 2 - (now.left + now.width / 2);
           const dy = b.top + b.height / 2 - (now.top + now.height / 2);
-          const flight = node.animate(arcFrames(dx, dy, 34, 0.4), { duration: 620, easing: "linear" });
+          const flight = node.animate(arcFrames(dx, dy, 34, 0.4), {
+            duration: 620,
+            easing: "linear",
+          });
           flight.finished
             .then(() =>
               node.animate(
-                [{ transform: "scale(1, 1)" }, { transform: "scale(1.08, .92)", offset: 0.4 }, { transform: "scale(1, 1)" }],
+                [
+                  { transform: "scale(1, 1)" },
+                  { transform: "scale(1.08, .92)", offset: 0.4 },
+                  { transform: "scale(1, 1)" },
+                ],
                 { duration: 280, easing: SINE },
               ),
             )
             .catch(() => {});
         } else {
           node.animate(
-            [{ transform: "scale(.28)", opacity: 0.6 }, { transform: "scale(1)", opacity: 1 }],
-            { duration: 420, delay: growIndex * 90, easing: SINE_OUT, fill: "backwards" },
+            [
+              { transform: "scale(.28)", opacity: 0.6 },
+              { transform: "scale(1)", opacity: 1 },
+            ],
+            {
+              duration: 420,
+              delay: growIndex * 90,
+              easing: SINE_OUT,
+              fill: "backwards",
+            },
           );
           growIndex += 1;
         }
       } else if (before !== undefined && !leaving.has(disc.id)) {
         const dx = before - left;
         if (Math.abs(dx) > 0.5) {
-          node.animate([{ transform: `translateX(${dx}px)` }, { transform: "translateX(0)" }], { duration: 460, easing: SINE });
+          node.animate(
+            [
+              { transform: `translateX(${dx}px)` },
+              { transform: "translateX(0)" },
+            ],
+            { duration: 460, easing: SINE },
+          );
         }
       }
       lefts.current.set(disc.id, left);
@@ -170,7 +218,10 @@ export function SahnePartyStack({ party }: { party: SahneParty }) {
       if (!node || node.dataset.leaving) return;
       node.dataset.leaving = "true";
       const exit = node.animate(
-        [{ transform: "scale(1)", opacity: 1 }, { transform: "scale(.5)", opacity: 0 }],
+        [
+          { transform: "scale(1)", opacity: 1 },
+          { transform: "scale(.5)", opacity: 0 },
+        ],
         { duration: 340, delay: index * 90, easing: SINE_IN, fill: "forwards" },
       );
       exit.finished
@@ -188,7 +239,11 @@ export function SahnePartyStack({ party }: { party: SahneParty }) {
   });
 
   // The line under the stack: a lost connection, then a wait, then news.
-  const [note, setNote] = useState<{ id: number; text: string; actor: PartyDisc | null } | null>(null);
+  const [note, setNote] = useState<{
+    id: number;
+    text: string;
+    actor: PartyDisc | null;
+  } | null>(null);
   const [noticeId, setNoticeId] = useState<number | null>(null);
   const notice = party.notice;
   if (notice && notice.id !== noticeId) {
@@ -205,24 +260,48 @@ export function SahnePartyStack({ party }: { party: SahneParty }) {
     return () => window.clearTimeout(timer);
   }, [note]);
 
-  let caption: { kind: "caps" | "note"; key: string; text: string; actor: PartyDisc | null } | null = null;
+  let caption: {
+    kind: "caps" | "note";
+    key: string;
+    text: string;
+    actor: PartyDisc | null;
+  } | null = null;
   if (party.connection === "reconnecting") {
-    caption = { kind: "caps", key: "reconnecting", text: t("party.status.reconnecting"), actor: null };
+    caption = {
+      kind: "caps",
+      key: "reconnecting",
+      text: t("party.status.reconnecting"),
+      actor: null,
+    };
   } else if (waiting.size > 0) {
-    const names = drawn.filter((disc) => waiting.has(disc.id)).map((disc) => disc.name);
+    const names = drawn
+      .filter((disc) => waiting.has(disc.id))
+      .map((disc) => disc.name);
     caption = {
       kind: "caps",
       key: `waiting:${names.join(",")}`,
       text:
         names.length === 1
           ? formatTemplate(t("party.status.waitingFor"), { name: names[0] })
-          : formatTemplate(t("party.status.waitingForMany"), { count: String(waiting.size) }),
+          : formatTemplate(t("party.status.waitingForMany"), {
+              count: String(waiting.size),
+            }),
       actor: null,
     };
   } else if (note) {
-    caption = { kind: "note", key: `note:${note.id}`, text: note.text, actor: note.actor };
+    caption = {
+      kind: "note",
+      key: `note:${note.id}`,
+      text: note.text,
+      actor: note.actor,
+    };
   } else if (party.commandFailed) {
-    caption = { kind: "note", key: "failed", text: t("party.status.commandFailed"), actor: null };
+    caption = {
+      kind: "note",
+      key: "failed",
+      text: t("party.status.commandFailed"),
+      actor: null,
+    };
   }
 
   if (party.connection === null && drawn.length === 0) return null;
@@ -238,9 +317,15 @@ export function SahnePartyStack({ party }: { party: SahneParty }) {
       aria-label={t("party.title")}
     >
       {party.connection === "joining" ? (
-        <span className="sahne-party-dots" aria-label={t("party.status.joining")}>
+        <span
+          className="sahne-party-dots"
+          aria-label={t("party.status.joining")}
+        >
           {PARTY_COLOURS.slice(0, 3).map((colour) => (
-            <i key={colour.color} style={{ "--c": colour.color } as CSSProperties} />
+            <i
+              key={colour.color}
+              style={{ "--c": colour.color } as CSSProperties}
+            />
           ))}
         </span>
       ) : null}
@@ -263,7 +348,11 @@ export function SahnePartyStack({ party }: { party: SahneParty }) {
         </span>
       ))}
       {caption ? (
-        <div key={caption.key} className={`sahne-party-caption sahne-party-caption--${caption.kind}`} role="status">
+        <div
+          key={caption.key}
+          className={`sahne-party-caption sahne-party-caption--${caption.kind}`}
+          role="status"
+        >
           {caption.actor ? <DiscFace disc={caption.actor} /> : null}
           <span>{caption.text}</span>
         </div>
