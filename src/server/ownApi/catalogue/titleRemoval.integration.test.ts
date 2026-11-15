@@ -23,6 +23,7 @@ import { createLibraryAdminRepository, loadTitleDetail } from "./libraryAdmin";
 import { createAcquisitionRepository } from "../acquisition/acquisitionRepository";
 import { missingEpisodePlan } from "../acquisition/missingEpisodes";
 import { createTitleRemoval, TitleRemovalError } from "./titleRemoval";
+import type { DriveFolders } from "./driveFolders";
 import type { TmdbClient } from "../metadata/tmdbClient";
 
 const databaseUrl = process.env.SEYIRLIK_TEST_DATABASE_URL;
@@ -543,6 +544,120 @@ const databaseUrl = process.env.SEYIRLIK_TEST_DATABASE_URL;
       });
       await service.settled(film);
       expect(await exists("Movies/Twice (2013)")).toBe(false);
+    });
+
+    /**
+     * Drive as the removal sees it: the media root is the mount, and the
+     * folder moves and trashes are Drive's own. `mountLags` leaves the mount
+     * showing a moved folder, as it does until its next change poll.
+     */
+    function drive(options: { mountLags?: boolean } = {}) {
+      const calls: string[] = [];
+      const absolute = (remote: string) =>
+        path.join(mediaRoot, ...remote.split("/"));
+      const folders: DriveFolders = {
+        async locate(target) {
+          const relative = path.relative(mediaRoot, target);
+          if (!relative || relative.startsWith("..")) return null;
+          return relative.split(path.sep).join("/");
+        },
+        async exists(remote) {
+          return stat(absolute(remote)).then(
+            () => true,
+            () => false,
+          );
+        },
+        async move(from, to) {
+          calls.push(`move ${from} -> ${to}`);
+          if (!options.mountLags)
+            await import("node:fs/promises").then(({ rename }) =>
+              rename(absolute(from), absolute(to)),
+            );
+        },
+        async trash(remote) {
+          calls.push(`trash ${remote}`);
+          await rm(absolute(remote), { recursive: true, force: true });
+        },
+      };
+      return { calls, folders };
+    }
+
+    it("moves and trashes a title folder on Drive, not through the mount", async () => {
+      const show = await item({
+        kind: "series",
+        title: "Sponge",
+        library: series,
+        sourceKey: "series:series/sponge",
+      });
+      const episode = await item({
+        kind: "episode",
+        title: "E1",
+        library: series,
+        sourceKey: "episode:series/sponge/s01e01",
+        seriesId: show,
+        season: 1,
+        episode: 1,
+      });
+      await file(episode, "Series/Sponge/Season 01/Sponge S01E01.mkv");
+      const { calls, folders } = drive();
+      const service = createTitleRemoval({
+        pool,
+        mediaRoot,
+        renditionRoot: path.join(mediaRoot, ".seyirlik", "renditions"),
+        stateRoot: path.join(mediaRoot, ".seyirlik", "state"),
+        driveFolders: folders,
+      });
+      await service.remove(show, "Sponge");
+      expect(await service.settled(show)).toMatchObject({
+        state: "done",
+        filesRemoved: 1,
+        leftovers: [],
+      });
+      const staged = `Series/.seyirlik-removing-${show}`;
+      expect(calls).toEqual([
+        `trash ${staged}`,
+        `move Series/Sponge -> ${staged}`,
+        `trash ${staged}`,
+      ]);
+      expect(await exists("Series/Sponge")).toBe(false);
+      expect(await exists(staged)).toBe(false);
+      expect(
+        (await pool.query("SELECT 1 FROM items WHERE id = $1", [show])).rows,
+      ).toHaveLength(0);
+    });
+
+    it("moves the folder back and keeps the title when the mount never lets go", async () => {
+      const film = await item({
+        kind: "movie",
+        title: "Sticky",
+        library: movies,
+        sourceKey: "movie:movies/sticky (2015)",
+      });
+      await file(film, "Movies/Sticky (2015)/Sticky.mkv");
+      const { calls, folders } = drive({ mountLags: true });
+      const service = createTitleRemoval({
+        pool,
+        mediaRoot,
+        renditionRoot: path.join(mediaRoot, ".seyirlik", "renditions"),
+        stateRoot: path.join(mediaRoot, ".seyirlik", "state"),
+        driveFolders: folders,
+        mountSettle: { timeoutMs: 50, intervalMs: 10 },
+      });
+      await service.remove(film, "Sticky");
+      expect(await service.settled(film)).toMatchObject({
+        state: "failed",
+        failure: "error",
+      });
+      const staged = `Movies/.seyirlik-removing-${film}`;
+      expect(calls).toEqual([
+        `trash ${staged}`,
+        `move Movies/Sticky (2015) -> ${staged}`,
+        `move ${staged} -> Movies/Sticky (2015)`,
+      ]);
+      expect(await exists("Movies/Sticky (2015)/Sticky.mkv")).toBe(true);
+      expect(
+        (await pool.query("SELECT 1 FROM items WHERE id = $1", [film])).rows,
+      ).toHaveLength(1);
     });
 
     afterAll(async () => {

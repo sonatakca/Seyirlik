@@ -41,6 +41,18 @@ switched on by hand does that instead. Both workers claim from the same queue:
 - With `SEYIRLIK_CATALOGUE_DELETE_MISSING=false` a missing title is hidden,
   never deleted, however long it stays missing. Its watch history and
   metadata are kept for when it comes back.
+- `SEYIRLIK_DRIVE_REMOTE` (server, in `secrets.env`) lets **Remove title**
+  work on Drive itself. It names the rclone daemon and its login, where the
+  remote is mounted, and what is mounted there:
+
+  ```
+  SEYIRLIK_DRIVE_REMOTE={"url":"http://127.0.0.1:5572","user":"…","pass":"…","mountRoot":"D:\\","remote":"gdrive:Seyirlik-rescue-2026-10-12"}
+  ```
+
+  The title folder is then moved and sent to Drive's bin with one request
+  each. Without it the removal renames and deletes through the mount, which
+  WinFsp refuses while any file is open, and which deletes a large show file
+  by file for hours.
 
 Both are supervised by NSSM, which is invoked from a machine-wide copy. Node is
 executed **directly**: running it through `npm` puts a shell between the

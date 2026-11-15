@@ -216,6 +216,10 @@ import {
 import { createLibraryAdminRoutes } from "./catalogue/libraryAdminRoutes";
 import { createDatabaseRenditionRegistryStore } from "./processing/renditionRegistryStore";
 import { createTitleRemoval } from "./catalogue/titleRemoval";
+import {
+  createDriveFolders,
+  driveFoldersConfigFromEnvironment,
+} from "./catalogue/driveFolders";
 import { createMonitoringRoutes } from "./releases/monitoringRoutes";
 import { parseSabnzbdConfig } from "./acquisition/acquisitionConfig";
 import { createSabnzbdClient } from "./acquisition/sabnzbd";
@@ -2085,6 +2089,9 @@ export async function createNativeRuntime({
     }
   };
 
+  // Where the media volume is a Google Drive mount, title folders are moved
+  // and deleted on Drive's side rather than file by file through the mount.
+  const driveFoldersConfig = driveFoldersConfigFromEnvironment(environment);
   const titleRemoval = createTitleRemoval({
     pool,
     mediaRoot,
@@ -2092,6 +2099,9 @@ export async function createNativeRuntime({
     stateRoot: renditionStateRoot,
     registry: renditionRegistry,
     removeImage: (storageKey) => imageStorage.remove(storageKey),
+    ...(driveFoldersConfig
+      ? { driveFolders: createDriveFolders(driveFoldersConfig) }
+      : {}),
     ...(acquisition
       ? {
           cancelAcquisition: (acquisitionId: string) =>

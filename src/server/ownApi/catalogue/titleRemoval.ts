@@ -9,9 +9,12 @@
  *  1. The folder is **renamed** out of the library first — one atomic,
  *     same-volume step that either happens or does not. A title in use
  *     (Windows refuses to rename a folder with an open handle) is refused here,
- *     before anything is lost.
+ *     before anything is lost. On the Google Drive mount the move is Drive's
+ *     own (see `driveFolders.ts`), and the rows wait until the mount no longer
+ *     shows the folder, so a scan in between cannot bring the title back.
  *  2. The catalogue rows are deleted in one transaction.
- *  3. Only then are the staged bytes deleted.
+ *  3. Only then are the staged bytes deleted — on Drive, sent to its bin in
+ *     one request rather than file by file through the mount.
  *
  * `remove` answers once the request has been checked; 1–3 run on after it,
  * because on the Drive mount they can take minutes, and `status` follows them.
@@ -33,6 +36,7 @@ import {
   createFileRenditionRegistryStore,
   type RenditionRegistryStore,
 } from "../../../renditions/registry";
+import type { DriveFolders } from "./driveFolders";
 
 export const REMOVAL_STAGING_PREFIX = ".seyirlik-removing-";
 
@@ -79,7 +83,14 @@ export interface TitleRemovalDependencies {
   cancelAcquisition?: (acquisitionId: string) => Promise<void>;
   /** Removes cached artwork that does not live in the title's own folder. */
   removeImage?: (storageKey: string) => Promise<void>;
+  /** Drive's own folder moves and deletes, where the media volume is its mount. */
+  driveFolders?: DriveFolders;
+  /** How long the mount may take to stop showing a folder Drive has moved. */
+  mountSettle?: { timeoutMs: number; intervalMs: number };
 }
+
+/** The mount learns of Drive's changes by polling every minute. */
+const MOUNT_SETTLE = { timeoutMs: 5 * 60_000, intervalMs: 2_000 };
 
 const ACTIVE_ACQUISITION = `a.state NOT IN ('downloaded', 'cancelled', 'superseded', 'failed')`;
 
@@ -126,6 +137,42 @@ export function createTitleRemoval(dependencies: TitleRemovalDependencies) {
     return isPathInsideRoot(mediaRoot, absolute) ? absolute : undefined;
   }
 
+  /** The folder's path on Drive when it is on the mount; null otherwise. */
+  async function onDrive(absolute: string): Promise<string | null> {
+    return (await dependencies.driveFolders?.locate(absolute)) ?? null;
+  }
+
+  /**
+   * Deletes a folder and everything in it: to Drive's bin in one request
+   * when it is on the mount, through the filesystem otherwise.
+   */
+  async function deleteFolder(absolute: string): Promise<boolean> {
+    try {
+      const remote = await onDrive(absolute);
+      if (!remote) return await removeTree(absolute);
+      await dependencies.driveFolders!.trash(remote);
+      return true;
+    } catch (error) {
+      console.error("title.removal.delete_folder_failed", { absolute, error });
+      return false;
+    }
+  }
+
+  /** Waits until the mount stops showing a folder Drive has moved away. */
+  async function mountLetGo(absolute: string): Promise<boolean> {
+    const { timeoutMs, intervalMs } = dependencies.mountSettle ?? MOUNT_SETTLE;
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      try {
+        await lstat(absolute);
+      } catch (error) {
+        if (errno(error) === "ENOENT") return true;
+      }
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+
   /**
    * Staged folders whose title no longer exists. Left behind only by a crash
    * between the commit and the delete, so this is usually a no-op readdir.
@@ -153,7 +200,7 @@ export function createTitleRemoval(dependencies: TitleRemovalDependencies) {
         );
         if (exists.rows.length) continue;
         const staged = path.join(directory, name);
-        if (!(await removeTree(staged)))
+        if (!(await deleteFolder(staged)))
           leftovers.push(path.relative(mediaRoot, staged));
       }
     }
@@ -402,6 +449,8 @@ export function createTitleRemoval(dependencies: TitleRemovalDependencies) {
       /* ---- 1. stage: take the folder out of the library, atomically. ---- */
       let staged: string | undefined;
       let moved = false;
+      /** Set when Drive moved the folder, to move it back the same way. */
+      let movedOnDrive: { from: string; to: string } | undefined;
       const looseFiles: string[] = [];
       if (folder) {
         const absolute = contained(folder);
@@ -434,7 +483,25 @@ export function createTitleRemoval(dependencies: TitleRemovalDependencies) {
           path.dirname(absolute),
           `${REMOVAL_STAGING_PREFIX}${item.id}`,
         );
-        if (present) {
+        const remote = present ? await onDrive(absolute) : null;
+        if (remote) {
+          const stagedRemote = path.posix.join(
+            path.posix.dirname(remote),
+            path.basename(staged),
+          );
+          const drive = dependencies.driveFolders!;
+          // As below: an interrupted removal's staged folder was on its way out.
+          await drive.trash(stagedRemote);
+          await drive.move(remote, stagedRemote);
+          moved = true;
+          movedOnDrive = { from: remote, to: stagedRemote };
+          if (!(await mountLetGo(absolute))) {
+            await drive.move(stagedRemote, remote).catch(() => undefined);
+            throw new Error(
+              "Drive moved the title folder, but the mount kept showing it; it was moved back.",
+            );
+          }
+        } else if (present) {
           // An earlier, interrupted removal of this same title may have
           // staged its folder already; those bytes were already on their way out.
           await removeTree(staged);
@@ -503,7 +570,11 @@ export function createTitleRemoval(dependencies: TitleRemovalDependencies) {
       } catch (error) {
         // The rows are still there, so put the folder back where they point:
         // "nothing was deleted" has to stay true, not merely recoverable.
-        if (moved && staged && folder)
+        if (movedOnDrive)
+          await dependencies
+            .driveFolders!.move(movedOnDrive.to, movedOnDrive.from)
+            .catch(() => undefined);
+        else if (moved && staged && folder)
           await rename(staged, contained(folder)!).catch(() => undefined);
         throw error;
       }
@@ -548,7 +619,7 @@ export function createTitleRemoval(dependencies: TitleRemovalDependencies) {
           for (const key of cachedImages)
             await dependencies.removeImage?.(key).catch(() => undefined);
           if (staged) {
-            if (await removeTree(staged))
+            if (await deleteFolder(staged))
               report.filesRemoved += filePaths.length;
             else report.leftovers.push(path.relative(mediaRoot, staged));
           }
@@ -558,7 +629,7 @@ export function createTitleRemoval(dependencies: TitleRemovalDependencies) {
             for (const id of await pruneRegistry(folder, filePaths)) {
               if (!/^[0-9a-f-]{36}$/i.test(id)) continue;
               const legacy = path.join(dependencies.renditionRoot, id);
-              if (!(await removeTree(legacy))) report.leftovers.push(legacy);
+              if (!(await deleteFolder(legacy))) report.leftovers.push(legacy);
             }
           } catch {
             report.leftovers.push("rendition registry");
