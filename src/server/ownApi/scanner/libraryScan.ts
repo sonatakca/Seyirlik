@@ -123,6 +123,17 @@ export interface ScannedItem {
    * scanner reports the directory it actually looked in.
    */
   packageDirectory?: string;
+  /**
+   * Every subtitle file in a package-only movie folder, matched or not.
+   *
+   * `subtitles` holds the ones named after the folder, which is all the disk
+   * can say once the source is gone. A sidecar installed or added beside the
+   * source is named after the source file instead, and only the catalogue
+   * still knows that name, so reconciliation matches these against it. Without
+   * this a subtitle added after the source was removed is attached, then
+   * dropped by the next scan, and never offered.
+   */
+  packageSubtitleFiles?: DirectoryFile[];
 }
 
 export interface ScanSkip {
@@ -459,7 +470,7 @@ async function toScannedFile(
  * the `src/` bucket the bytes were moved to. Keeping both is what lets a
  * source folder be introduced without changing a single title's identity.
  */
-interface DirectoryFile {
+export interface DirectoryFile {
   name: string;
   relativePath: string;
 }
@@ -557,7 +568,7 @@ async function readDirectoryContents(
   return contents;
 }
 
-function matchSubtitles(
+export function matchSubtitles(
   subtitleFiles: DirectoryFile[],
   videoStem: string,
 ): ScannedSubtitle[] {
@@ -762,6 +773,7 @@ async function scanMovieDirectory(
       ),
       renditionBacked: true,
       packageDirectory: directory,
+      packageSubtitleFiles: contents.subtitleFiles,
     });
   }
 

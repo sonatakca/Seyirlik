@@ -5,10 +5,12 @@ import {
 } from "../../../renditions/adaptive/titleRoot";
 import {
   episodeSourceKey,
+  matchSubtitles,
   type ScanResult,
   type ScannedItem,
   type ScannedSubtitle,
 } from "./libraryScan";
+import { splitExtension } from "./nameParser";
 
 /**
  * Reconciliation turns a scan snapshot into durable catalogue state.
@@ -205,6 +207,36 @@ function packageIdentityFiles(
   return owners.length > 0 ? owners : files;
 }
 
+/**
+ * A package-only movie's sidecars: those named after its folder, plus those
+ * still named after the source file the package was built from.
+ *
+ * Subtitles are installed beside the source and take its name, and a movie's
+ * source is usually named for its release, not its folder. Once the source is
+ * gone the scan can only match the folder's name, so the rest come from the
+ * identity rows, which still hold the source's path.
+ */
+function packagedMovieSubtitles(
+  scanned: ScannedItem,
+  identity: ExistingFileRow[],
+): ScannedSubtitle[] {
+  const candidates = scanned.packageSubtitleFiles ?? [];
+  const subtitles = [...scanned.subtitles];
+  const seen = new Set(subtitles.map((subtitle) => subtitle.relativePath));
+  for (const file of identity) {
+    const fileName = file.relativePath.split("/").pop() ?? "";
+    for (const subtitle of matchSubtitles(
+      candidates,
+      splitExtension(fileName).stem,
+    )) {
+      if (seen.has(subtitle.relativePath)) continue;
+      seen.add(subtitle.relativePath);
+      subtitles.push(subtitle);
+    }
+  }
+  return subtitles;
+}
+
 export async function reconcileLibraryScan({
   store,
   libraryId,
@@ -288,12 +320,14 @@ export async function reconcileLibraryScan({
     if (existing) summary.itemsUpdated += 1;
     else summary.itemsCreated += 1;
 
+    let subtitles = scanned.subtitles;
     if (scanned.renditionBacked) {
       // Playback and adaptive-asset authorization resolve through the original
       // media file row. Keep that row active after the source bytes are removed;
       // the scanner has already proven the replacement package is complete.
       const identity = packageIdentityFiles(scanned, existingIdentityFiles);
       seenFileIds.push(...identity.map((file) => file.id));
+      subtitles = packagedMovieSubtitles(scanned, identity);
       // And say why the file is not there, or the prober finds nothing, marks
       // it failed, and availability drops a fully playable title.
       await store.markPackaged(identity.map((file) => file.id));
@@ -377,7 +411,7 @@ export async function reconcileLibraryScan({
       scanned.subtitles.length > 0 ||
       scanned.renditionBacked
     ) {
-      await store.replaceExternalSubtitles(itemId, scanned.subtitles);
+      await store.replaceExternalSubtitles(itemId, subtitles);
     }
   }
 

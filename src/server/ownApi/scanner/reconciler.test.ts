@@ -5,7 +5,7 @@ import {
   type ExistingFileRow,
   type ExistingItemRow,
 } from "./reconciler";
-import type { ScanResult, ScannedItem } from "./libraryScan";
+import type { ScanResult, ScannedItem, ScannedSubtitle } from "./libraryScan";
 
 interface StoredFile extends ExistingFileRow {
   isPrimary: boolean;
@@ -17,6 +17,7 @@ function createStore(): CatalogueScanStore & {
   probeQueue: string[];
   packaged: string[];
   parts: Map<string, string[]>;
+  externalSubtitles: Map<string, ScannedSubtitle[]>;
 } {
   const items = new Map<
     string,
@@ -26,6 +27,7 @@ function createStore(): CatalogueScanStore & {
   const probeQueue: string[] = [];
   const packaged: string[] = [];
   const parts = new Map<string, string[]>();
+  const externalSubtitles = new Map<string, ScannedSubtitle[]>();
   let nextId = 1;
 
   return {
@@ -34,6 +36,7 @@ function createStore(): CatalogueScanStore & {
     probeQueue,
     packaged,
     parts,
+    externalSubtitles,
     listItems: async (libraryId) =>
       [...items.values()]
         .filter((item) => item.libraryId === libraryId)
@@ -94,7 +97,9 @@ function createStore(): CatalogueScanStore & {
       });
       return { id, changed: true };
     },
-    replaceExternalSubtitles: async () => undefined,
+    replaceExternalSubtitles: async (itemId, subtitles) => {
+      externalSubtitles.set(itemId, subtitles);
+    },
     markItemsSeen: async (ids) => {
       for (const id of ids) {
         const item = items.get(id);
@@ -350,6 +355,83 @@ describe("reconcileLibraryScan", () => {
     expect(byPath.get(encoded)?.missingSince).toBeNull();
     expect(byPath.get(oldCopy)?.missingSince).toEqual(start);
     expect(store.packaged).toEqual([byPath.get(encoded)?.id]);
+  });
+
+  /**
+   * Pirates 2: a Turkish subtitle installed after the source was removed is
+   * named after that source, `Pirates of the Caribbean- Dead Man's Chest`, not
+   * the folder. The scan matched only the folder's name, so every scan erased
+   * the track the installer had just attached.
+   */
+  it("keeps a package-only movie's sidecars named after its removed source", async () => {
+    const store = createStore();
+    const start = new Date("2026-11-18T00:00:00Z");
+    const folder = "Movies/Pirates of the Caribbean - Dead Man's Chest (2006)";
+    const sourceKey =
+      "movie:movies/pirates of the caribbean - dead man's chest (2006)";
+    const sidecar = (name: string) => ({
+      name,
+      relativePath: `${folder}/${name}`,
+    });
+    const folderNamed: ScannedSubtitle = {
+      relativePath: `${folder}/Pirates of the Caribbean - Dead Man's Chest (2006).en.srt`,
+      codec: "subrip",
+      isText: true,
+      language: "en",
+      isForced: false,
+      isDefault: false,
+    };
+
+    await reconcileLibraryScan({
+      store,
+      libraryId: LIBRARY,
+      scan: scan([
+        movie(
+          sourceKey,
+          "Dead Man's Chest",
+          `${folder}/Pirates of the Caribbean- Dead Man's Chest (2006).mkv`,
+        ),
+      ]),
+      now: () => start,
+    });
+    await reconcileLibraryScan({
+      store,
+      libraryId: LIBRARY,
+      scan: scan([
+        {
+          ...renditionBackedMovie(sourceKey, "Dead Man's Chest"),
+          packageDirectory: folder,
+          subtitles: [folderNamed],
+          packageSubtitleFiles: [
+            sidecar(
+              "Pirates of the Caribbean - Dead Man's Chest (2006).en.srt",
+            ),
+            sidecar(
+              "Pirates of the Caribbean- Dead Man's Chest (2006).tur.srt",
+            ),
+            sidecar(
+              "Pirates of the Caribbean- Dead Man's Chest (2006) Extended.tr.srt",
+            ),
+          ],
+        },
+      ]),
+      now: () => start,
+    });
+
+    const item = [...store.items.values()].find(
+      (row) => row.sourceKey === sourceKey,
+    );
+    expect(store.externalSubtitles.get(item!.id)).toEqual([
+      folderNamed,
+      {
+        relativePath: `${folder}/Pirates of the Caribbean- Dead Man's Chest (2006).tur.srt`,
+        codec: "subrip",
+        isText: true,
+        language: "tur",
+        isForced: false,
+        isDefault: false,
+      },
+    ]);
   });
 
   it("does not create an unplayable item from a package with no catalogue identity", async () => {
@@ -805,10 +887,7 @@ describe("reconcileLibraryScan", () => {
 
       // The file is renamed to a single episode; its parts stay recorded, and
       // a scan long past the grace period still finds 2 and 3 inside it.
-      const renamed = scan([
-        ...seriesAndSeason(),
-        episode(1, RANGED),
-      ]);
+      const renamed = scan([...seriesAndSeason(), episode(1, RANGED)]);
       for (const days of [1, 30]) {
         const summary = await reconcileLibraryScan({
           store,

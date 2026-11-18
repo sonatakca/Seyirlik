@@ -148,6 +148,41 @@ describe("scanLibraryTree — movies", () => {
     ]);
   });
 
+  it("hands reconciliation every subtitle file of a package-only movie folder", async () => {
+    const folder = "Movies/Ford v Ferrari (2019)";
+    const fixture = titlePackageFixture(folder);
+    fixture.tree[folder]!.push(
+      "Ford v Ferrari (2019).en.srt",
+      "Ford.v.Ferrari.2019.2160p.UHD.BluRay.x265-LAMA.tur.srt",
+    );
+    const result = await scanLibraryTree({
+      fileSystem: createFileSystem(
+        fixture.tree,
+        fixture.sizes,
+        fixture.contents,
+      ),
+      rootPath: "Movies",
+      kind: "movies",
+    });
+
+    const [movie] = byKind(result.items, "movie");
+    // The folder's name is all the disk can match once the source is gone…
+    expect(movie?.subtitles.map((subtitle) => subtitle.relativePath)).toEqual([
+      `${folder}/Ford v Ferrari (2019).en.srt`,
+    ]);
+    // …so the source-named one is passed on for the catalogue to match.
+    expect(movie?.packageSubtitleFiles).toEqual([
+      {
+        name: "Ford v Ferrari (2019).en.srt",
+        relativePath: `${folder}/Ford v Ferrari (2019).en.srt`,
+      },
+      {
+        name: "Ford.v.Ferrari.2019.2160p.UHD.BluRay.x265-LAMA.tur.srt",
+        relativePath: `${folder}/Ford.v.Ferrari.2019.2160p.UHD.BluRay.x265-LAMA.tur.srt`,
+      },
+    ]);
+  });
+
   it("does not recognize a rendition package with a missing published asset", async () => {
     const fixture = titlePackageFixture("Movies/Ford v Ferrari (2019)");
     delete fixture.sizes["Movies/Ford v Ferrari (2019)/audio/English.m4a"];
