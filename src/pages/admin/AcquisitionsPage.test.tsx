@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AcquisitionsPage } from "./AcquisitionsPage";
@@ -504,14 +510,24 @@ describe("the acquisitions page", () => {
       api.getDownloadProgress.mockResolvedValue({
         reachable: true,
         paused: false,
-        progress: [{ acquisitionId: "a1", stage: "failed", statusText: "Failed" }],
+        progress: [
+          { acquisitionId: "a1", stage: "failed", statusText: "Failed" },
+        ],
       });
       renderPage();
-      const heading = await screen.findByText("admin.acquisitions.bucket.needsAttention");
+      const heading = await screen.findByText(
+        "admin.acquisitions.bucket.needsAttention",
+      );
       const section = heading.closest("section")!;
-      expect(within(section).getByText("admin.acquisitions.state.failed")).toBeTruthy();
-      expect(screen.queryByText(`admin.acquisitions.state.${state}`)).toBeNull();
-      expect(screen.queryByText("admin.acquisitions.unpacking.heading")).toBeNull();
+      expect(
+        within(section).getByText("admin.acquisitions.state.failed"),
+      ).toBeTruthy();
+      expect(
+        screen.queryByText(`admin.acquisitions.state.${state}`),
+      ).toBeNull();
+      expect(
+        screen.queryByText("admin.acquisitions.unpacking.heading"),
+      ).toBeNull();
       expect(screen.queryByText("admin.acquisitions.queue.heading")).toBeNull();
       expect(screen.queryByRole("progressbar")).toBeNull();
     },
